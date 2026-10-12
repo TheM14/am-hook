@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.4.3 (2026-10-12)
 
 ### New
 - ✨ Songs without a master m3u8 (wrapper-lite `/m3u8` only gives an `.m4p`, e.g. `1569279827`) can be played and downloaded: as in apple-music-downloader, they use the AAC-LC 256 stream from `/webplayback` (Widevine)

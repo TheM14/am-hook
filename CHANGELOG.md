@@ -1,6 +1,6 @@
 # 更新日志
 
-## 未发布
+## v0.4.3 (2026-10-12)
 
 ### 新功能
 - ✨ 没有 master m3u8 的歌曲（wrapper-lite `/m3u8` 只给出 `.m4p`，例如 `1569279827`）可以播放和下载了：与参考实现 apple-music-downloader 相同，改用 `/webplayback` 的 AAC-LC 256（Widevine）
