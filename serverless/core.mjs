@@ -374,13 +374,15 @@ async function mvLicense(wrapper, request) {
   const adamId = text(body?.adamId);
   const challenge = text(body?.challenge);
   const uri = text(body?.uri);
-  if (!validMvId(adamId) || body?.['drm-type'] !== 'pr' || !challenge || challenge.length > 256 * 1024
+  // drm-type 为 pr（MV 的 PlayReady）或省略（Widevine，没有 master 的 AAC-LC 歌曲）
+  const drmType = body?.['drm-type'];
+  if (!validMvId(adamId) || (drmType !== undefined && drmType !== 'pr') || !challenge || challenge.length > 256 * 1024
     || !uri.startsWith('data:') || uri.length > 64 * 1024) {
-    return fail(400, 'Invalid PlayReady license request');
+    return fail(400, 'Invalid license request');
   }
   return forward(wrapper, '/license', {
     method: 'POST',
-    body: JSON.stringify({ adamId, challenge, uri, 'drm-type': 'pr' }),
+    body: JSON.stringify(drmType ? { adamId, challenge, uri, 'drm-type': drmType } : { adamId, challenge, uri }),
   });
 }
 

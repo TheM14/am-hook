@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## Unreleased
+
+### New
+- ✨ Songs without a master m3u8 (wrapper-lite `/m3u8` only gives an `.m4p`, e.g. `1569279827`) can be played and downloaded: as in apple-music-downloader, they use the AAC-LC 256 stream from `/webplayback` (Widevine)
+  - The song page lists the single "AAC · 256 kbps" variant tagged "AAC-LC only"; batch downloads take it whatever the quality settings (marked as a fallback when another quality was preferred)
+  - The Widevine license request is built in the media Worker (new `widevine` module in `am-media`, a port of the reference CDM and its built-in device, sharing `media_challenge` / `media_license` with the MV PlayReady path); PlayReady is tried if Widevine fails
+  - Fragments are CENC-decrypted in place (same length) by the existing Worker pool, so playback, seeking, downloads and tags follow the song pipeline
+
+### Changed
+- `/mv/license` (and the serverless one) also accepts Widevine requests without `drm-type`
+- `media_challenge` takes a new first argument selecting the DRM (0 PlayReady, 1 Widevine)
+
 ## v0.4.2 (2026-10-12)
 
 ### New

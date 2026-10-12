@@ -12,11 +12,13 @@
  *   save(next)               保存设置（auth 规范化，非法时抛出错误）并通知 onChange
  *   onChange(fn)             设置变化后回调
  *   status()                 { regions }，不可用时抛出错误
- *   songMaster(id, signal)   { masterUrl, variants }：master m3u8 从 Apple CDN 直接获取并在这里解析
+ *   songMaster(id, signal)   { masterUrl, variants }：master m3u8 从 Apple CDN 直接获取并在这里解析；
+ *                            没有 master 的歌曲退回 /webplayback 的 AAC-LC（Widevine）
+ *   webplayback(id, signal)  /webplayback 的 m3u8 地址，没有时为 null
  *   key(id, uri)             轨道解密模板（/key 的 data，JSON 文本）
  *   lyrics(id, lang, signal) TTML 原文，没有歌词时为 null
  *   mvMaster(id, signal)     { masterUrl, masterBody }：MV master 总是由 am-hook 以 User-Agent: AM 获取（否则可能没有 4K）
- *   license(body, signal)    MV PlayReady license（/license 的 data）
+ *   license(body, signal)    /license 的 data：MV 的 PlayReady license、AAC-LC 歌曲的 Widevine（或 PlayReady）license
  */
 (function (global) {
   'use strict';
@@ -192,6 +194,27 @@
     return variants;
   }
 
+  /**
+   * /webplayback 的 AAC-LC 256 media m3u8 当作变体，字段与 master 的变体相同（GROUP-ID 同 master 的 AAC 256）。
+   * 地址带上 #adamId=，文件名里取不到 adamId 时 decrypt.js 用它请求 license
+   */
+  function webplaybackVariant(adamId, url) {
+    const target = new URL(url);
+    target.hash = `adamId=${adamId}`;
+    return {
+      uri: target.pathname.split('/').pop(),
+      url: target.href,
+      group_id: 'audio-stereo-256',
+      audio: '',
+      codecs: 'mp4a.40.2',
+      bandwidth: 256000,
+      channels: '2',
+      sample_rate: null,
+      bit_depth: null,
+      widevine: true,
+    };
+  }
+
   /* ---------- 对外接口 ---------- */
 
   const AmWrapper = {
@@ -227,16 +250,44 @@
       return { regions: ((data && data.regions) || []).map(String) };
     },
 
+    /**
+     * 有些歌曲没有 master m3u8（/m3u8 给出的是整首 .m4p 或者报错），只有 AAC-LC 256：与参考实现相同，
+     * 改用 /webplayback 的 media m3u8（Widevine，见 decrypt.js），作为唯一的变体（widevine: true）返回，masterUrl 为 null
+     */
     async songMaster(adamId, signal) {
-      const m3u8 = settings.local
-        ? (await localJson(`/m3u8?${query({ adamId })}`, { signal }))?.m3u8
-        : (await serverJson(`/parse/song/${encodeURIComponent(adamId)}`, { signal })).data?.masterUrl;
-      if (!m3u8) throw new Error(t('wrapper.noMaster'));
-      // Apple CDN（aod.itunes.apple.com）允许跨源请求，master 与 media m3u8 都直接获取
-      const res = await fetch(m3u8, { signal });
-      if (!res.ok) throw new Error(`master m3u8 HTTP ${res.status}`);
-      const masterUrl = res.url || m3u8;
-      return { masterUrl, variants: parseSongMaster(await res.text(), masterUrl) };
+      let m3u8 = null, missing = new Error(t('wrapper.noMaster'));
+      try {
+        m3u8 = settings.local
+          ? (await localJson(`/m3u8?${query({ adamId })}`, { signal }))?.m3u8
+          : (await serverJson(`/parse/song/${encodeURIComponent(adamId)}`, { signal })).data?.masterUrl;
+      } catch (error) {
+        if (error && error.name === 'AbortError') throw error;
+        missing = error;
+      }
+      // .m4p 等不是 master（也不要去下载它）
+      let master = null;
+      try { master = m3u8 && /\.m3u8$/i.test(new URL(m3u8).pathname) ? m3u8 : null; } catch {}
+      if (master) {
+        // Apple CDN（aod.itunes.apple.com）允许跨源请求，master 与 media m3u8 都直接获取
+        const res = await fetch(master, { signal });
+        if (!res.ok) throw new Error(`master m3u8 HTTP ${res.status}`);
+        const masterUrl = res.url || master;
+        return { masterUrl, variants: parseSongMaster(await res.text(), masterUrl) };
+      }
+      const url = await AmWrapper.webplayback(adamId, signal).catch((error) => {
+        if (error && error.name === 'AbortError') throw error;
+        return null;
+      });
+      if (!url) throw missing;
+      return { masterUrl: null, variants: [webplaybackVariant(adamId, url)] };
+    },
+
+    /** /webplayback 的 m3u8 地址（歌曲为 AAC-LC 256 的 media m3u8，MV 为 master），没有时为 null */
+    async webplayback(adamId, signal) {
+      const data = settings.local
+        ? await localJson(`/webplayback?${query({ adamId })}`, { signal })
+        : (await serverJson(`/mv/webplayback/${encodeURIComponent(adamId)}`, { signal })).data;
+      return (data && data.m3u8) || null;
     },
 
     async key(adamId, uri) {

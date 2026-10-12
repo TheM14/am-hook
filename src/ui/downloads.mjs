@@ -83,8 +83,12 @@ const FALLBACK = {
   'aac-he': ['aac-he', 'aac', 'alac'],
 };
 
-/** 按首选音质（及上限）选变体；fallback 时依次降级。返回 { variant, fallback } 或 null */
+/**
+ * 按首选音质（及上限）选变体；fallback 时依次降级。返回 { variant, fallback } 或 null。
+ * 没有 master 的歌曲只有 /webplayback 的 AAC-LC（wrapper.js），与参考实现一样不论设置都下载它
+ */
 export function pickVariant(variants, { codec, alacMax, atmosMax, fallback }) {
+  if (variants.length === 1 && variants[0].widevine) return { variant: variants[0], fallback: codec !== 'aac' };
   const order = fallback ? FALLBACK[codec] || [codec] : [codec];
   for (const kind of order) {
     const list = variants.map((v) => ({ v, c: classify(v) })).filter(({ v, c }) => c.kind === kind

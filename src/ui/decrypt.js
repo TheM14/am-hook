@@ -8,6 +8,11 @@
  *     大文件也不会占用大量内存；不支持 OPFS 时退回内存 Blob。
  * 解密不改变字节长度；
  * 下载最后再像参考实现 rip.go 那样用 DefragmentMP4 解碎片为普通 MP4（ftyp, moov, mdat）。
+ *
+ * 没有 master m3u8 的歌曲（只有 AAC-LC 256，见 wrapper.js 的 songMaster）的 media m3u8 来自 /webplayback，
+ * 用 CENC 加密、EXT-X-KEY 为 data: URI（KID）。与参考实现 widevine-rip 相同：在媒体 Worker 中生成 Widevine
+ * license 请求（与 MV 的 PlayReady 共用 media_challenge / media_license，Widevine 失败时再试 PlayReady），
+ * 经 wrapper-lite /license 取得内容密钥，分片同样在 Worker 池中由 hook.wasm 原地解密（长度不变）。
  */
 (function (global) {
   'use strict';
@@ -119,15 +124,82 @@
     return templates.get(cacheKey);
   }
 
+  /* ---------- 内容密钥（CENC 歌曲） ---------- */
+
+  /** 生成 license 请求、解析 license 的媒体 Worker（会话保存在其 wasm 实例中），按需创建、一直保留 */
+  let mediaCore = null;
+  function mediaCall(method, ...args) {
+    if (!mediaCore) {
+      const worker = new Worker(MEDIA_WORKER_URL);
+      const pending = new Map();
+      let seq = 0;
+      const failAll = (error) => { for (const p of pending.values()) p.reject(error); pending.clear(); mediaCore = null; worker.terminate(); };
+      worker.onmessage = ({ data }) => {
+        const p = pending.get(data.id);
+        if (!p) return;
+        pending.delete(data.id);
+        if (data.error) p.reject(new Error(data.error)); else p.resolve(data.result);
+      };
+      worker.onerror = (e) => failAll(new Error(e.message || t('err.worker')));
+      mediaCore = (m, a) => new Promise((resolve, reject) => {
+        const id = ++seq;
+        pending.set(id, { resolve, reject });
+        worker.postMessage({ id, method: m, args: a });
+      });
+    }
+    return mediaCore(method, args);
+  }
+
+  /** license 的 DRM：先 Widevine（参考实现的做法），失败再试 PlayReady（同一 KID 的 license 也能取得同一密钥） */
+  const LICENSE_SYSTEMS = [{ drm: 'widevine', body: {} }, { drm: 'playready', body: { 'drm-type': 'pr' } }];
+
+  async function acquireKey(adamId, uri) {
+    const errors = [];
+    for (const { drm, body } of LICENSE_SYSTEMS) {
+      let challenge;
+      try {
+        challenge = await mediaCall('challenge', uri, drm);
+        const data = await global.AmWrapper.license({ adamId, uri: challenge.uri, challenge: challenge.challenge, ...body });
+        if (!data || !data.license) throw new Error(t('err.noLicense'));
+        const key = await mediaCall('license', challenge.session, data.license);
+        challenge = null;
+        return key;
+      } catch (error) {
+        errors.push(`${drm}: ${error.message}`);
+      } finally {
+        if (challenge) mediaCall('closeSession', challenge.session).catch(() => {});
+      }
+    }
+    throw new Error(t('err.license', { msg: errors.join('; ') }));
+  }
+
+  const contentKeys = new Map();
+
+  /** CENC 内容密钥（Uint8Array(16)），同一 key 只请求一次 */
+  function fetchContentKey(adamId, uri) {
+    const cacheKey = `${adamId} ${uri}`;
+    if (!contentKeys.has(cacheKey)) {
+      const p = acquireKey(adamId, uri);
+      p.catch(() => contentKeys.delete(cacheKey));
+      contentKeys.set(cacheKey, p);
+    }
+    return contentKeys.get(cacheKey);
+  }
+
   /* ---------- media m3u8 ---------- */
+
+  /** Widevine 的 KEYFORMAT；/webplayback 的歌曲 m3u8 不写 KEYFORMAT */
+  const WIDEVINE_KEYFORMAT = 'urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed';
 
   /**
    * 解析 Apple 原始 media m3u8（含 EXT-X-KEY），返回 init 段与各 segment 的字节 / 时间范围。
-   * 每个 segment 记录其适用的 key：fixed（内嵌固定模板）、track（轨道模板）或 null（未加密）。
+   * 每个 segment 记录其适用的 key：fixed（内嵌固定模板）、track（轨道模板或 CENC 内容密钥）或 null（未加密）。
+   * cenc 为 true 时 keyUri 是 data: URI（Widevine KID），否则是 FairPlay 的 skd:// URI。
+   * adamId 取自文件名（…_A<adamId>_… 或 …_A<adamId>.…），也可以由地址的 #adamId= 给出。
    */
-  function parseMediaPlaylist(text, playlistUrl) {
+  function parseMediaPlaylist(text, playlistUrl, adamIdHint) {
     const fileName = new URL(playlistUrl).pathname.split('/').pop();
-    const adamId = (/_A(\d+)_/.exec(fileName) || [])[1] || '';
+    const adamId = adamIdHint || (/_A(\d+)[._]/.exec(fileName) || [])[1] || '';
     let init = null;
     let keyUri = null;
     let currentKey = null;
@@ -145,6 +217,9 @@
       if (line.startsWith('#EXT-X-KEY:')) {
         const method = (/METHOD=([^,]+)/.exec(line) || [])[1];
         const uri = (/URI="([^"]+)"/.exec(line) || [])[1];
+        const format = (/KEYFORMAT="([^"]*)"/.exec(line) || [])[1];
+        // 同时列出多个 DRM 的 key 时只取 Widevine 的
+        if (uri && uri.startsWith('data:') && format && format.toLowerCase() !== WIDEVINE_KEYFORMAT) continue;
         currentKey = method === 'NONE' || !uri ? null : uri;
         if (currentKey && currentKey !== FIXED_KEY_URI && !keyUri) keyUri = currentKey;
       } else if (line.startsWith('#EXT-X-MAP:')) {
@@ -167,7 +242,8 @@
     }
     if (!init || segments.length === 0) throw new Error(t('err.m3u8Empty'));
     if (segments.some((s) => s.key === 'track') && (!keyUri || !adamId)) throw new Error(t('err.m3u8Key'));
-    return { url: init.url, adamId, keyUri, init, segments, duration, size: segments[segments.length - 1].end + 1 };
+    const cenc = !!keyUri && keyUri.startsWith('data:');
+    return { url: init.url, adamId, keyUri, cenc, init, segments, duration, size: segments[segments.length - 1].end + 1 };
   }
 
   /* ---------- 轨道 ---------- */
@@ -182,11 +258,12 @@
   const isAbort = (err) => err && err.name === 'AbortError';
 
   class Track {
-    /** 从 CDN 获取并解析 media m3u8，同时预取轨道模板 */
+    /** 从 CDN 获取并解析 media m3u8，同时预取轨道模板（CENC 时为内容密钥） */
     static async open(m3u8Url, signal) {
       const res = await fetch(m3u8Url, { signal });
       if (!res.ok) throw new Error(t('err.m3u8Http', { status: res.status }));
-      const track = new Track(parseMediaPlaylist(await res.text(), res.url || m3u8Url));
+      const hint = new URLSearchParams(new URL(m3u8Url, global.location && global.location.href).hash.slice(1)).get('adamId');
+      const track = new Track(parseMediaPlaylist(await res.text(), res.url || m3u8Url, hint));
       track.template().catch(() => {});
       return track;
     }
@@ -195,8 +272,10 @@
       Object.assign(this, playlist);
     }
 
+    /** FairPlay 轨道模板（JSON 文本），CENC 时为内容密钥 */
     template() {
-      return this.keyUri ? fetchTemplate(this.adamId, this.keyUri) : Promise.resolve(null);
+      if (!this.keyUri) return Promise.resolve(null);
+      return this.cenc ? fetchContentKey(this.adamId, this.keyUri) : fetchTemplate(this.adamId, this.keyUri);
     }
 
     /** Range 请求一个分段的原始字节，网络错误最多重试 3 次 */
@@ -220,8 +299,13 @@
 
     /** 解密一个分段（init 段只做 box 改写），返回长度不变的 ArrayBuffer；buf 会被转移给 Worker */
     async decryptPiece(piece, buf) {
-      if (piece.init) return pool.run({ kind: 'init', buf });
+      if (piece.init) {
+        // CENC 分片按原始 init 中的 tenc 解密，改写前留一份
+        if (this.cenc) this.rawInit = buf.slice(0);
+        return pool.run({ kind: 'init', buf });
+      }
       const init = await this.initData();
+      if (this.cenc && piece.key === 'track') return pool.run({ kind: 'frag', cenc: { key: await this.template(), init: this.rawInit }, init, buf });
       if (piece.key === 'fixed') return pool.run({ kind: 'frag', key: 'fixed', init, buf });
       if (piece.key === 'track') return pool.run({ kind: 'frag', key: this.keyUri, template: await this.template(), init, buf });
       return pool.run({ kind: 'frag', init, buf });

@@ -1,5 +1,17 @@
 # 更新日志
 
+## 未发布
+
+### 新功能
+- ✨ 没有 master m3u8 的歌曲（wrapper-lite `/m3u8` 只给出 `.m4p`，例如 `1569279827`）可以播放和下载了：与参考实现 apple-music-downloader 相同，改用 `/webplayback` 的 AAC-LC 256（Widevine）
+  - 歌曲页列出唯一的「AAC · 256 kbps」变体并标注「仅 AAC-LC」；批量下载不论音质设置都下载它（首选其他音质时标记为已降级）
+  - Widevine license 请求在媒体 Worker 中生成（`am-media` 新增 `widevine`，移植自参考实现的 CDM 与内置设备，与 MV 的 PlayReady 共用 `media_challenge` / `media_license`），Widevine 失败时再试 PlayReady
+  - 分片在原有 Worker 池中按 CENC 原地解密（长度不变），播放、跳转、下载、标签都沿用歌曲的流程
+
+### 变更
+- `/mv/license`（以及 serverless 的同名接口）也接受不带 `drm-type` 的 Widevine 请求
+- `media_challenge` 多了第一个参数选择 DRM（0 PlayReady、1 Widevine）
+
 ## v0.4.2 (2026-10-12)
 
 ### 新功能

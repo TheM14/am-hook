@@ -6,6 +6,13 @@ The Rust server does not link it.
 
 - `playready`: builds PlayReady license challenges and extracts the content key
   from XMR licenses, with the bundled default device.
+- `widevine`: builds Widevine license requests (SignedLicenseRequest) and
+  extracts content keys from SignedLicense responses, with the reference
+  downloader's built-in device (`default_widevine_device.b64`, a pywidevine
+  `.wvd` v2 file). Used for songs that only have the AAC-LC web playback stream.
+- `cenc::decrypt_fragment_in_place`: length-preserving CENC/CBCS decryption for
+  byte-range songs (encryption boxes become `free` boxes of the same size);
+  linked into `hook.wasm` (`crates/am-wasm`) as `hook_decrypt_cenc`.
 - `cenc`, `mv`: decrypt CENC/CBCS fragments, normalize decode timestamps, map
   track IDs and merge the video and audio initialization segments for muxing.
 - `c608`: rewrites malformed closed-caption samples in place (Apple starts the
@@ -44,6 +51,10 @@ repair, muxing, both defragment layouts) and the song layout with the upstream
   device), itself a focused Go port of pyplayready's `Device`, `PSSH` and `Cdm`.
   Its README attributes the implementation to pyplayready and describes upstream
   licensing; the repository does not supply a separate license file.
+- `widevine` is a port of `internal/widevine-rip/cdm`, `key` and `pssh.go` of
+  apple-music-downloader (commit `487f705cdb693b194fe8dfedafd1064ea6570d05`),
+  including its built-in device, without privacy mode. Protobuf messages are
+  encoded and decoded by hand (field numbers from its `wv_proto2.pb.go`).
 - Decryption and box handling reproduce the behaviour of
   `github.com/itouakirai/mp4ff` (`DecryptInit`, `DecryptFragment`,
   `Fragment.Encode`), which the Go core used (MIT, a fork of Eyevinn/mp4ff).
@@ -61,7 +72,8 @@ repair, muxing, both defragment layouts) and the song layout with the upstream
 
 `cargo test -p am-media` covers box round trips, CENC and CBCS decryption of
 synthetic fragments, caption repair, both defragment layouts, read-ahead, AES-CMAC
-(RFC 4493) and XMR license decryption. `node tests/mv_hls.cjs` and
+(RFC 4493), XMR license decryption, the Widevine license round trip (request
+signature, session key, key unwrapping) and in-place CENC/CBCS decryption. `node tests/mv_hls.cjs` and
 `cargo test --test mv_api` are further offline checks.
 `tests/mv_live.cjs` is an opt-in real browser test and writes a downloaded MP4
 under `target/`. It checks playback, seeking, cancellation, OPFS cleanup and

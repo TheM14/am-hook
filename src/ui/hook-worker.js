@@ -2,7 +2,8 @@
  * am-hook 浏览器端 Worker（由 decrypt.js 管理），消息格式 { id, op, ... } -> { id, ok, result | error }
  *
  *   decrypt     用 hook.wasm 原地处理一段数据并以 transfer 方式交回：
- *               kind=init 改写 init segment；kind=frag 用固定模板（key=fixed）或轨道模板解密 fragment
+ *               kind=init 改写 init segment；kind=frag 用固定模板（key=fixed）或轨道模板解密 fragment，
+ *               带 cenc（{ key, init }：内容密钥与原始 init）时按 CENC/CBCS 解密
  *   file-open   在 OPFS 中创建下载文件并取得同步访问句柄（createSyncAccessHandle 只能在 Worker 中使用）
  *   file-write  把解密后的数据写到文件的指定偏移
  *   file-close  刷盘并释放句柄
@@ -84,12 +85,17 @@ function templateHandle(w, key, json) {
   return handle;
 }
 
-async function decrypt({ kind, key, template, init, buf }) {
+async function decrypt({ kind, key, template, cenc, init, buf }) {
   const w = await loadWasm();
   const bytes = new Uint8Array(buf);
   try {
     if (kind === 'init') {
       inWasm(w, bytes, (ptr, len) => w.hook_patch_init(ptr, len));
+    } else if (cenc) {
+      // CENC：内容密钥 + 未改写的 init（从中读取 tenc）
+      inWasm(w, new Uint8Array(cenc.init), (initPtr, initLen) => inWasm(w, new Uint8Array(cenc.key), (keyPtr) => inWasm(w, bytes, (ptr, len) => {
+        if (!w.hook_decrypt_cenc(initPtr, initLen, keyPtr, ptr, len)) throw new Error(msg('decrypt', lastError(w)));
+      })));
     } else {
       const handle = key ? templateHandle(w, key, template) : 0;
       inWasm(w, bytes, (ptr, len) => {

@@ -309,6 +309,34 @@ mod tests {
         roundtrip(b"cenc");
     }
 
+    /// Byte-range songs: same size, clear samples, encryption boxes freed.
+    #[test]
+    fn decrypts_in_place_keeping_offsets() {
+        for scheme in [b"cenc", b"cbcs"] {
+            let info = cenc::init_info(&init(&[TrackSpec { id: 1, timescale: 44100, entry: encrypted_entry(scheme) }])).unwrap();
+            let clear: Vec<Vec<u8>> = (0..4).map(|i| sample_data(1, i)).collect();
+            let enc: Vec<Vec<u8>> = clear.iter().enumerate().map(|(i, s)| encrypt(scheme, i, s)).collect();
+            let samples = enc.iter().map(|s| (1024, 0, s.clone())).collect();
+            let raw = fragment(1, &[Run { track: 1, start_time: 0, samples }], &|_| senc(scheme, &enc));
+            let mut out = raw.clone();
+            cenc::decrypt_fragment_in_place(&mut out, &info, &KEY).unwrap();
+            assert_eq!(out.len(), raw.len());
+            let atoms = bmff::parse(&out).unwrap();
+            assert_eq!(atoms[1].bytes(), clear.concat());
+            let traf = atoms[0].child(b"traf").unwrap();
+            let kinds: Vec<_> = traf.children().iter().map(|c| c.kind).collect();
+            assert_eq!(kinds, [*b"tfhd", *b"tfdt", *b"trun", *b"free", *b"free", *b"free"]);
+            assert_eq!(traf.child(b"trun"), bmff::parse(&raw).unwrap()[0].child(b"traf").unwrap().child(b"trun"));
+        }
+        let info = cenc::init_info(&init(&[TrackSpec { id: 1, timescale: 1000, entry: encrypted_entry(b"cenc") }])).unwrap();
+        // A fragment without senc is clear and passes through.
+        let clear = fragment(1, &[Run { track: 1, start_time: 0, samples: vec![(10, 0, vec![1, 2, 3])] }], &|_| Vec::new());
+        let mut out = clear.clone();
+        cenc::decrypt_fragment_in_place(&mut out, &info, &KEY).unwrap();
+        assert_eq!(out, clear);
+        assert!(cenc::decrypt_fragment_in_place(&mut leaf(b"mdat", &[1]), &info, &KEY).is_err());
+    }
+
     #[test]
     fn decrypts_cbcs_with_pattern_and_constant_iv() {
         roundtrip(b"cbcs");

@@ -17,6 +17,11 @@ async fn forwards_mv_requests_without_fetching_media() {
     let mock = Router::new()
         .route("/webplayback", get(|| async { Json(json!({"code":0,"data":{"m3u8":"https://unreachable.invalid/master.m3u8"}})) }))
         .route("/license", post(|Json(v): Json<serde_json::Value>| async move {
+            if v["adamId"] == "1569279827" {
+                // Widevine (AAC-LC songs): no drm-type, as wrapper-lite expects
+                assert_eq!(v, json!({"adamId":"1569279827","challenge":"Yw==","uri":"data:;base64,Yg=="}));
+                return (StatusCode::OK, Json(json!({"code":0,"data":{"license":"bA=="}})));
+            }
             assert_eq!(v, json!({"adamId":"1794822079","challenge":"YQ==","uri":"data:;base64,Yg==","drm-type":"pr"}));
             (StatusCode::FORBIDDEN, Json(json!({"code":403,"msg":"license denied"})))
         }));
@@ -36,6 +41,9 @@ async fn forwards_mv_requests_without_fetching_media() {
     .unwrap();
     let response = ui::mv_license_handler(State(state.clone()), Json(request)).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    let request = serde_json::from_value(json!({"adamId":"1569279827","challenge":"Yw==","uri":"data:;base64,Yg=="})).unwrap();
+    let response = ui::mv_license_handler(State(state.clone()), Json(request)).await;
+    assert_eq!(response.status(), StatusCode::OK);
     let response = ui::mv_webplayback_handler(State(state.clone()), Path("not-an-id".into())).await;
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     let request = serde_json::from_value(

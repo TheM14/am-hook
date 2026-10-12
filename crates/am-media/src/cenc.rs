@@ -1,7 +1,7 @@
 //! CENC (AES-CTR) and CBCS (pattern AES-CBC) decryption of fragmented MP4,
 //! following mp4ff's `DecryptInit` / `DecryptFragment`.
 
-use crate::bmff::{be32, fourcc, Atom, FourCC, Reader};
+use crate::bmff::{self, be32, fourcc, Atom, FourCC, Reader};
 use crate::crypto::Aes;
 use crate::frag::{traf_tfhd, Trex, Trun};
 use crate::{bail, Error, Result};
@@ -120,6 +120,15 @@ pub fn decrypt_init(moov: &mut Atom) -> Result<DecryptInfo> {
     Ok(info)
 }
 
+/// What [`decrypt_fragment_in_place`] needs, read from a raw (still protected) init segment.
+pub fn init_info(raw: &[u8]) -> Result<DecryptInfo> {
+    let mut moov = bmff::parse(raw)?
+        .into_iter()
+        .find(|a| &a.kind == b"moov")
+        .ok_or_else(|| Error::new("init segment has no moov"))?;
+    decrypt_init(&mut moov)
+}
+
 #[derive(Debug, PartialEq, Eq)]
 pub enum FragmentOutcome {
     /// Bytes removed from the moof.
@@ -229,9 +238,77 @@ pub fn decrypt_fragment(
     info: &DecryptInfo,
     key: &[u8; 16],
 ) -> Result<FragmentOutcome> {
-    let cipher = Aes::new(key);
+    if !decrypt_samples(moof, moof_start, mdat, mdat_payload_start, info, &Aes::new(key))? {
+        return Ok(FragmentOutcome::NoSenc);
+    }
     let mut removed = 0u64;
     for traf in moof.children_mut().iter_mut().filter(|c| &c.kind == b"traf") {
+        let before: u64 = traf.children().iter().map(Atom::size).sum();
+        traf.children_mut().retain(|c| !is_encryption_box(c));
+        removed += before - traf.children().iter().map(Atom::size).sum::<u64>();
+    }
+    let before: u64 = moof.children().iter().map(Atom::size).sum();
+    moof.children_mut().retain(|c| &c.kind != b"pssh");
+    removed += before - moof.children().iter().map(Atom::size).sum::<u64>();
+    if removed > 0 {
+        for traf in moof.children_mut().iter_mut().filter(|c| &c.kind == b"traf") {
+            for trun in traf.children_mut().iter_mut().filter(|c| &c.kind == b"trun") {
+                if let Some(off) = Trun::data_offset(trun) {
+                    Trun::set_data_offset(trun, off.wrapping_sub(removed as i32));
+                }
+            }
+        }
+    }
+    Ok(FragmentOutcome::Decrypted(removed))
+}
+
+/// Length-preserving variant of [`decrypt_fragment`] for media addressed by
+/// byte ranges (songs): every moof + mdat pair of `raw` is decrypted in place
+/// and its encryption boxes (senc, saiz, saio, seig/seam groups, pssh) become
+/// `free` boxes of the same size, so trun offsets and Range offsets stay valid.
+/// A fragment whose encrypted track has no senc is clear and left untouched.
+pub fn decrypt_fragment_in_place(raw: &mut [u8], info: &DecryptInfo, key: &[u8; 16]) -> Result<()> {
+    let cipher = Aes::new(key);
+    let top = bmff::spans(raw, 0, raw.len())?;
+    let mut found = false;
+    for (i, span) in top.iter().enumerate().filter(|(_, s)| &s.kind == b"moof") {
+        let Some(mdat) = top.get(i + 1).filter(|s| &s.kind == b"mdat") else { bail!("moof without a following mdat") };
+        found = true;
+        let moof = Atom::from_span(raw, span)?;
+        let payload = mdat.payload();
+        if !decrypt_samples(&moof, span.start as u64, &mut raw[payload.clone()], payload.start as u64, info, &cipher)? {
+            continue;
+        }
+        let mut freed = Vec::new();
+        let moof_payload = span.payload();
+        for child in bmff::spans(raw, moof_payload.start, moof_payload.end)? {
+            match &child.kind {
+                b"pssh" => freed.push(child.start),
+                b"traf" => {
+                    let body = child.payload();
+                    for b in bmff::spans(raw, body.start, body.end)? {
+                        if is_encryption_box(&Atom::data(&b.kind, raw[b.payload()].to_vec())) {
+                            freed.push(b.start);
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for at in freed {
+            raw[at + 4..at + 8].copy_from_slice(b"free");
+        }
+    }
+    if !found {
+        bail!("no moof box in fragment");
+    }
+    Ok(())
+}
+
+/// Decrypts the samples of every encrypted traf of `moof` in place in `mdat`.
+/// Returns false, like mp4ff, when an encrypted track's traf has no senc.
+fn decrypt_samples(moof: &Atom, moof_start: u64, mdat: &mut [u8], mdat_payload_start: u64, info: &DecryptInfo, cipher: &Aes) -> Result<bool> {
+    for traf in moof.children().iter().filter(|c| &c.kind == b"traf") {
         let tfhd = traf_tfhd(traf)?;
         let Some(ti) = info.find(tfhd.track_id) else { continue };
         let Some(prot) = &ti.protection else { continue };
@@ -240,7 +317,7 @@ pub fn decrypt_fragment(
         } else if let Some(u) = traf.children().iter().find(|c| is_piff_senc(c)) {
             u.bytes()[16..].to_vec()
         } else {
-            return Ok(FragmentOutcome::NoSenc);
+            return Ok(false);
         };
         let hint = seig_iv_size(traf)?.unwrap_or(prot.tenc.iv_size);
         let senc = parse_senc(&senc_payload, hint).map_err(|e| e.context("parseReadSenc"))?;
@@ -283,28 +360,12 @@ pub fn decrypt_fragment(
                 iv[..n].copy_from_slice(&v[..n]);
             }
             match &prot.scheme {
-                b"cenc" => ctr(&cipher, sample, &iv, subs),
-                _ => cbcs(&cipher, sample, &iv, subs, &prot.tenc)?,
-            }
-        }
-
-        let before: u64 = traf.children().iter().map(Atom::size).sum();
-        traf.children_mut().retain(|c| !is_encryption_box(c));
-        removed += before - traf.children().iter().map(Atom::size).sum::<u64>();
-    }
-    let before: u64 = moof.children().iter().map(Atom::size).sum();
-    moof.children_mut().retain(|c| &c.kind != b"pssh");
-    removed += before - moof.children().iter().map(Atom::size).sum::<u64>();
-    if removed > 0 {
-        for traf in moof.children_mut().iter_mut().filter(|c| &c.kind == b"traf") {
-            for trun in traf.children_mut().iter_mut().filter(|c| &c.kind == b"trun") {
-                if let Some(off) = Trun::data_offset(trun) {
-                    Trun::set_data_offset(trun, off.wrapping_sub(removed as i32));
-                }
+                b"cenc" => ctr(cipher, sample, &iv, subs),
+                _ => cbcs(cipher, sample, &iv, subs, &prot.tenc)?,
             }
         }
     }
-    Ok(FragmentOutcome::Decrypted(removed))
+    Ok(true)
 }
 
 /// saiz, saio, senc (plain or PIFF) and seig/seam sample groups. The grouping

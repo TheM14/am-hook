@@ -14,6 +14,7 @@ use am_media::defrag::{defragment, Options};
 use am_media::mv::{mux_init, Stream};
 use am_media::playready::{parse_pssh, Cdm, Device, Entropy};
 use am_media::readahead::{Sink, Source};
+use am_media::widevine;
 use am_media::{Error, Result};
 
 #[cfg(target_arch = "wasm32")]
@@ -45,13 +46,14 @@ unsafe fn file_write(_: u32, _: *const u8, _: usize, _: f64) -> i32 {
 
 struct State {
     cdm: Option<Cdm>,
+    widevine: Option<widevine::Cdm>,
     streams: HashMap<String, Stream>,
     result: Vec<u8>,
     error: String,
 }
 
 thread_local! {
-    static STATE: RefCell<State> = RefCell::new(State { cdm: None, streams: HashMap::new(), result: Vec::new(), error: String::new() });
+    static STATE: RefCell<State> = RefCell::new(State { cdm: None, widevine: None, streams: HashMap::new(), result: Vec::new(), error: String::new() });
 }
 
 fn fill(buf: &mut [u8]) {
@@ -142,17 +144,37 @@ fn json_string(s: &str) -> String {
     out
 }
 
-/// Opens a CDM session and builds a license challenge for an HLS PlayReady key
-/// URI (`data:...;base64,<PSSH or 16-byte KID>`). `now` is the Unix time in
-/// seconds. Result: JSON `{"session","uri","challenge"}`; `uri` is what the
-/// license server expects and `challenge` the base64 SOAP request.
+/// Opens a CDM session and builds a license challenge for an HLS key URI
+/// (`data:...;base64,<payload>`). `now` is the Unix time in seconds.
+/// - `drm` 0, PlayReady: the payload is a PSSH or 16-byte KID; the challenge is the SOAP request.
+/// - `drm` 1, Widevine: the payload is a KID or Widevine pssh box; the challenge
+///   is a SignedLicenseRequest.
+///
+/// Result: JSON `{"session","uri","challenge"}`; `uri` is what the license
+/// server expects and `challenge` the base64 request.
 ///
 /// # Safety
 /// Pointers must reference readable memory of the given lengths.
 #[no_mangle]
-pub unsafe extern "C" fn media_challenge(uri: *const u8, uri_len: usize, now: f64) -> i32 {
+pub unsafe extern "C" fn media_challenge(drm: u32, uri: *const u8, uri_len: usize, now: f64) -> i32 {
     run(|s| {
         let mut uri = text(uri, uri_len)?.to_owned();
+        let mut f = fill;
+        if drm == 1 {
+            let (_, payload) = uri.split_once(',').ok_or_else(|| Error::new("invalid Widevine URI"))?;
+            let payload = am_media::crypto::base64_decode(payload).ok_or_else(|| Error::new("invalid Widevine KID"))?;
+            let header = widevine::cenc_header(&payload)?;
+            if s.widevine.is_none() {
+                s.widevine = Some(widevine::Cdm::new(widevine::Device::default_device()?));
+            }
+            let cdm = s.widevine.as_mut().unwrap();
+            let session = cdm.open(&mut Entropy(&mut f));
+            let challenge = cdm.license_challenge(&session, &header, now as u64, &mut Entropy(&mut f));
+            return challenge_json(&session, &uri, challenge.inspect_err(|_| cdm.close(&session))?);
+        }
+        if drm != 0 {
+            return Err(Error::new("unknown DRM system"));
+        }
         if s.cdm.is_none() {
             s.cdm = Some(Cdm::new(Device::default_device()?));
         }
@@ -176,28 +198,25 @@ pub unsafe extern "C" fn media_challenge(uri: *const u8, uri_len: usize, now: f6
                 )
             }
         };
-        let mut f = fill;
         let session = cdm.open(&mut Entropy(&mut f));
-        let challenge = match cdm.license_challenge(&session, &header, now as u64, &mut Entropy(&mut f)) {
-            Ok(c) => c,
-            Err(e) => {
-                cdm.close(&session);
-                return Err(e);
-            }
-        };
-        let challenge = am_media::crypto::base64_encode(challenge.as_bytes());
-        Ok(format!(
-            r#"{{"session":{},"uri":{},"challenge":{}}}"#,
-            json_string(&session),
-            json_string(&uri),
-            json_string(&challenge)
-        )
-        .into_bytes())
+        let challenge = cdm.license_challenge(&session, &header, now as u64, &mut Entropy(&mut f));
+        challenge_json(&session, &uri, challenge.inspect_err(|_| cdm.close(&session))?.into_bytes())
     })
 }
 
+fn challenge_json(session: &str, uri: &str, challenge: Vec<u8>) -> Result<Vec<u8>> {
+    Ok(format!(
+        r#"{{"session":{},"uri":{},"challenge":{}}}"#,
+        json_string(session),
+        json_string(uri),
+        json_string(&am_media::crypto::base64_encode(&challenge))
+    )
+    .into_bytes())
+}
+
 /// Parses a base64 license response for a session and closes it. Result: the
-/// 128-bit content key.
+/// 128-bit content key (for Widevine the last content key, as the reference
+/// downloader does; Apple licenses carry one).
 ///
 /// # Safety
 /// Pointers must reference readable memory of the given lengths.
@@ -205,6 +224,16 @@ pub unsafe extern "C" fn media_challenge(uri: *const u8, uri_len: usize, now: f6
 pub unsafe extern "C" fn media_license(session: *const u8, session_len: usize, license: *const u8, license_len: usize) -> i32 {
     run(|s| {
         let session = text(session, session_len)?;
+        if let Some(cdm) = s.widevine.as_mut().filter(|c| c.has(session)) {
+            let result = (|| {
+                let license = am_media::crypto::base64_decode(text(license, license_len)?.trim())
+                    .ok_or_else(|| Error::new("illegal base64 data in license"))?;
+                let keys = cdm.parse_license(session, &license)?;
+                keys.last().map(|(_, key)| key.to_vec()).ok_or_else(|| Error::new("license contains no content key"))
+            })();
+            cdm.close(session);
+            return result;
+        }
         let cdm = s.cdm.as_mut().ok_or_else(|| Error::new("invalid CDM session"))?;
         let result = (|| {
             let xml = am_media::crypto::base64_decode(text(license, license_len)?.trim())
@@ -225,8 +254,12 @@ pub unsafe extern "C" fn media_license(session: *const u8, session_len: usize, l
 #[no_mangle]
 pub unsafe extern "C" fn media_close_session(session: *const u8, session_len: usize) {
     run(|s| {
+        let session = text(session, session_len)?;
         if let Some(cdm) = s.cdm.as_mut() {
-            cdm.close(text(session, session_len)?);
+            cdm.close(session);
+        }
+        if let Some(cdm) = s.widevine.as_mut() {
+            cdm.close(session);
         }
         Ok(Vec::new())
     });

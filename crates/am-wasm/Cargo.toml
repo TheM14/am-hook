@@ -10,3 +10,5 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 am-mp4 = { path = "../am-mp4" }
+# 内容密钥解密（Widevine 歌曲的 CENC）
+am-media = { path = "../am-media" }

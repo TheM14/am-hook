@@ -76,6 +76,7 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     if (g.includes('binaural')) tags.push(t('q.binaural'));
     if (g.includes('downmix')) tags.push(t('q.downmix'));
     const variantRank = tags.length ? 1 : 0;
+    if (v.widevine) tags.push(t('q.webOnly'));
     if (g.includes('alac')) {
       const spec = [v.bit_depth && `${v.bit_depth}-bit`, v.sample_rate && `${(v.sample_rate / 1000).toFixed(1).replace(/\.0$/, '')} kHz`].filter(Boolean).join(' / ');
       return { group: t('q.lossless'), rank: 0, kbps: 0, name: `ALAC${spec ? ' · ' + spec : ''}`, tags, sub: variantRank };
@@ -336,7 +337,8 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
         m3u8Url: v.url,
       })).sort((a, b) => a.info.rank - b.info.rank || b.info.kbps - a.info.kbps || a.info.sub - b.info.sub || (b.bandwidth || 0) - (a.bandwidth || 0));
       renderVariants();
-      showAlert('', '');
+      if (variants.some((v) => v.widevine)) showAlert('info', () => t('q.webOnlyTitle'));
+      else showAlert('', '');
     } catch (err) {
       showAlert('error', err.message || t('song.parseFailed'));
     } finally {

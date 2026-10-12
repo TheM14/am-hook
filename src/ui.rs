@@ -139,10 +139,13 @@ pub struct MvLicenseRequest {
     adam_id: String,
     challenge: String,
     uri: String,
-    #[serde(rename = "drm-type")]
-    drm_type: String,
+    /// `pr` for PlayReady; absent for Widevine (wrapper-lite's default, used by AAC-LC songs)
+    #[serde(rename = "drm-type", default, skip_serializing_if = "Option::is_none")]
+    drm_type: Option<String>,
 }
 
+/// Relays a PlayReady (MV, `drm-type: pr`) or Widevine (AAC-LC songs without a master, no `drm-type`)
+/// license request to wrapper-lite `/license`.
 pub async fn mv_license_handler(
     State(state): State<Arc<AppState>>,
     axum::Json(body): axum::Json<MvLicenseRequest>,
@@ -150,13 +153,13 @@ pub async fn mv_license_handler(
     if body.adam_id.is_empty()
         || body.adam_id.len() > 20
         || !body.adam_id.bytes().all(|b| b.is_ascii_digit())
-        || body.drm_type != "pr"
+        || body.drm_type.as_deref().is_some_and(|t| t != "pr")
         || body.challenge.is_empty()
         || body.challenge.len() > 256 * 1024
         || !body.uri.starts_with("data:")
         || body.uri.len() > 64 * 1024
     {
-        return bad_request("Invalid PlayReady license request");
+        return bad_request("Invalid license request");
     }
     mv_forward(&state, state.wrapper.post("/license").json(&body)).await
 }

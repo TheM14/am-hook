@@ -103,6 +103,25 @@ pub unsafe extern "C" fn hook_decrypt_fragment(tmpl: *const Template, ptr: *mut 
     }
 }
 
+/// 用 16 字节内容密钥原地解密 CENC/CBCS fragment（Widevine 的 AAC-LC 歌曲），长度不变：
+/// 加密相关 box 改为等长 free。`init` 为未改写的原始 init segment（从中读取 tenc），成功返回 1。
+///
+/// # Safety
+/// `init` 指向 `init_len` 字节、`key` 指向 16 字节的可读内存，`ptr` 指向 `len` 字节的可写内存，互不重叠。
+#[no_mangle]
+pub unsafe extern "C" fn hook_decrypt_cenc(init: *const u8, init_len: usize, key: *const u8, ptr: *mut u8, len: usize) -> u32 {
+    let key: &[u8; 16] = &*(key as *const [u8; 16]);
+    let result = am_media::cenc::init_info(std::slice::from_raw_parts(init, init_len))
+        .and_then(|info| am_media::cenc::decrypt_fragment_in_place(std::slice::from_raw_parts_mut(ptr, len), &info, key));
+    match result {
+        Ok(()) => 1,
+        Err(e) => {
+            set_error(e.to_string());
+            0
+        }
+    }
+}
+
 /// Repair an already decrypted fragment using its own track's init segment.
 /// No instance-global codec state: worker pools can interleave different tracks.
 /// # Safety

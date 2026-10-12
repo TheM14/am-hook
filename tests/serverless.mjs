@@ -240,6 +240,9 @@ test('with AM_HOOK_WRAPPER_URL the wrapper-lite endpoints are relayed', async ()
   const license = await post({ adamId: '7', challenge: 'Y2hhbGxlbmdl', uri: 'data:text/plain;base64,AAAA', 'drm-type': 'pr', extra: 1 });
   assert.deepEqual(await license.json(), { code: 0, data: { license: 'bGljZW5zZQ==' } });
   assert.deepEqual(JSON.parse(calls.at(-1).body), { adamId: '7', challenge: 'Y2hhbGxlbmdl', uri: 'data:text/plain;base64,AAAA', 'drm-type': 'pr' });
+  // Widevine (AAC-LC songs) leaves drm-type out
+  assert.equal((await post({ adamId: '8', challenge: 'd3Y=', uri: 'data:;base64,AAAA' })).status, 200);
+  assert.deepEqual(JSON.parse(calls.at(-1).body), { adamId: '8', challenge: 'd3Y=', uri: 'data:;base64,AAAA' });
   assert.equal((await post({ adamId: '7', challenge: 'x', uri: 'https://x', 'drm-type': 'pr' })).status, 400);
   assert.equal((await post({ adamId: '7', challenge: 'x', uri: 'data:x', 'drm-type': 'wv' })).status, 400);
   assert.equal((await handle(new Request('https://site.test/mv/license', { method: 'POST', body: 'not json' }), env)).status, 400);

@@ -172,10 +172,18 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
 
 box 处理：FairPlay 元数据 box（`sinf`、`senc`、`saiz`、`saio`、`pssh`，以及分组类型为 `seig`/`seam` 的 `sgpd`、`sbgp`）替换为等长的 `free` box，字节长度和 Range 偏移保持不变。init 段中的 `enca` box 改写为原始编码（`ec-3`、`mp4a`、`alac` 等）。
 
+### 没有 master m3u8 的歌曲（只有 AAC-LC，Widevine）
+
+有些歌曲（例如 `1569279827`）没有 master m3u8：wrapper-lite `/m3u8` 返回整首的 `.m4p` 文件（或报错）。与参考实现（`internal/widevine-rip`）相同，这类歌曲改用网页播放的 256 kbps AAC-LC 播放和下载：
+
+1. `songMaster`（`src/ui/wrapper.js`）发现地址不是 `.m3u8`（不会去下载它），改向 `/webplayback`（服务端模式为 `/mv/webplayback/<adamId>`）取得 media m3u8，作为唯一的变体（`AAC · 256 kbps`，标注「仅 AAC-LC」）。与参考实现一样，下载时不论音质设置都下载它；首选其他音质时标记为已降级。
+2. 它的 `EXT-X-KEY` 是带 KID 的 `data:` URI，分片为 CENC（AES-CTR）。媒体 Worker 生成 Widevine license 请求（`crates/am-media/src/widevine.rs`，移植自参考实现的 CDM 与内置设备；与 MV 的 PlayReady 共用 `media_challenge` / `media_license`），不带 `drm-type` 发给 wrapper-lite `/license`。Widevine 失败时再用同一 KID 试 PlayReady。
+3. 分片由同一个 Worker 池用内容密钥原地解密（`hook_decrypt_cenc`、`cenc::decrypt_fragment_in_place`），字节长度不变，因此播放、跳转与下载都与上面相同。
+
 ### MV
 
 - `/parse/mv/<adamId>` 从 wrapper-lite `/webplayback` 获取 master 地址，再以 `User-Agent: AM` 获取内容，返回播放列表文本和最终 CDN 地址。浏览器的 User-Agent 无法修改，用其他 User-Agent 获取可能拿不到 4K，所以使用本地 wrapper-lite 时 master 也交给服务端（`/parse/mv-master`）获取。
-- `/mv/webplayback/<adamId>` 和 `/mv/license` 分别转发到 wrapper-lite `/webplayback` 和 `/license`（只使用 PlayReady；许可证失败会显示错误，不切换其他 DRM）。
+- `/mv/webplayback/<adamId>` 和 `/mv/license` 分别转发到 wrapper-lite `/webplayback` 和 `/license`（MV 只使用 PlayReady；许可证失败会显示错误，不切换其他 DRM）。只有 AAC-LC 的歌曲也经这两个接口，发送 Widevine 请求（不带 `drm-type`）。
 - 音视频轨道 m3u8 和分片均由浏览器直连 Apple 获取。
 - challenge 构建、license 解析、CENC/CBCS 解密、字幕修复、fragmented MP4 合并以及转为 progressive MP4 在 Worker 中由 `media.wasm` 完成（Rust 实现，见 [crates/am-media](crates/am-media/README.md)）。
 - 暂不支持直播、discontinuity 或中途更换初始化段的清单。
@@ -214,7 +222,7 @@ box 处理：FairPlay 元数据 box（`sinf`、`senc`、`saiz`、`saio`、`pssh`
 | `GET /amp/v1/catalog/<path>?<query>` | 代理 Apple Music 目录接口（`amp-api-edge.music.apple.com/v1/catalog/...`，首页搜索使用），自动附带 music.apple.com 网页版 developer token，查询参数原样转发。使用启动时预热的专用 HTTP/2 连接，缓存成功响应，合并相同的并发请求，并通过 `Server-Timing` 标明缓存命中（`cache;desc=hit/miss/shared`）与上游耗时 |
 | `GET /amp/v1/editorial/<path>?<query>` | 代理编辑内容接口（`amp-api-edge.music.apple.com/v1/editorial/...`：groupings、rooms、multirooms，新发现与编辑页使用），方式与 `/amp/v1/catalog` 相同，共用连接与缓存 |
 | `GET /amp/v1/storefronts` | amp-api 全部地区信息（查询参数原样转发，以便跟随分页 `next`）；页面只拉取一次并保存在 localStorage（超过 30 天后在后台刷新），用于主地区列表与曲库语言的可选项（各地区的 `supportedLanguageTags`）（地区不支持的 `l` 会被静默回退到默认语言，如 `cn` 只支持 `zh-Hans-CN` / `en-GB`） |
-| `GET /mv/webplayback/<adamId>`、`POST /mv/license` | MV 转发到 wrapper-lite `/webplayback` 与 `/license` |
+| `GET /mv/webplayback/<adamId>`、`POST /mv/license` | 转发到 wrapper-lite `/webplayback` 与 `/license`：MV（PlayReady，`drm-type: pr`）与没有 master m3u8 的歌曲（AAC-LC 的 media m3u8，Widevine，不带 `drm-type`） |
 | `/assets/...` | 内嵌在二进制中的前端路由、页面视图（`/assets/views/`）、脚本、样式与按需加载的 WASM（`no-cache` + ETag）。`/assets/host.js` 告诉页面服务端能否转发 wrapper-lite（serverless 部署由函数生成） |
 
 ## 命令行参数
@@ -252,7 +260,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings   # CI 也会运行；workspace 现为零警告
 ```
 
-单元测试覆盖浏览器媒体核心（PlayReady license 解密、CENC/CBCS、字幕修复、defrag）、URL 解析、m3u8 解析、MP4 box 修补（含 wasm 原地解密路径与并行路径结果一致）、缓存去重和 MV 接口。离线集成测试还检查 Apple CDN 地址不会被代理。
+单元测试覆盖浏览器媒体核心（PlayReady 与 Widevine license 解密、CENC/CBCS（含长度不变的原地解密）、字幕修复、defrag）、URL 解析、m3u8 解析、MP4 box 修补（含 wasm 原地解密路径与并行路径结果一致）、缓存去重和 MV 接口。离线集成测试还检查 Apple CDN 地址不会被代理。
 
 需要真实 Apple CDN 或 wrapper-lite 的测试默认忽略，不在 GitHub Actions 中运行。请在本地能访问 Apple CDN 且 wrapper-lite 已启动时运行（默认 `http://127.0.0.1:12340`，可用环境变量 `AM_HOOK_WRAPPER` 覆盖）：
 
@@ -268,7 +276,7 @@ cargo test --test e2e_test -- --ignored
 |---|---|
 | 离线，仅需 Node | `node --test tests/player_*.cjs`、`node tests/mv_hls.cjs`、`node tests/mv_captions.cjs`、`node --test tests/serverless.mjs`（serverless 后端与 `dist/` 的生成，CI 也会运行）、`node --test tests/download_core.mjs`（ZIP / ZIP64、iTunes 标签、文件名模板） |
 | 离线，Playwright + Chrome 与本地 fixture | `node tests/ui_layout.cjs <playwright>`、`node tests/lyrics_ui.cjs <playwright>`、`node tests/mv_ui.cjs <playwright>`、`node tests/library_ui.cjs <playwright>`（资料库与歌单：添加、歌单、排序、刷新后保留、导出 / 导入与文件校验、喜爱、文件夹与拖放、数据库升级） |
-| 在线（需运行 am-hook、wrapper-lite 并能访问 Apple CDN） | `node tests/mv_live.cjs <playwright> [base]`、`node tests/mv_captions_live.cjs <playwright> [base]`、`node tests/alac_recovery.cjs <playwright>`、`node tests/alac_source_recovery.cjs <playwright>`、`node tests/search_ui.cjs <playwright> [base]`、`node tests/album_ui.cjs <playwright> [base]`、`node tests/playlist_ui.cjs <playwright> [base]`、`node tests/artist_ui.cjs <playwright> [base]`、`node tests/browse_ui.cjs <playwright> [base]`（需能访问 music.apple.com）、`node tests/app_ui.cjs <playwright> [base]`（单页应用：跳转后继续播放、队列、前进 / 后退、歌词）、`node tests/download_ui.cjs <playwright> [base]`（批量下载：设置中心、专辑 ZIP 的标签 / 封面 / 歌词、文件夹模式、歌单与 .m3u8、MV、取消 / 重试；需要 cn 地区的 wrapper-lite） |
+| 在线（需运行 am-hook、wrapper-lite 并能访问 Apple CDN） | `node tests/mv_live.cjs <playwright> [base]`、`node tests/mv_captions_live.cjs <playwright> [base]`、`node tests/alac_recovery.cjs <playwright>`、`node tests/alac_source_recovery.cjs <playwright>`、`node tests/aac_lc_live.cjs <playwright> [base]`（没有 master 的歌曲：AAC-LC 变体、Widevine license、服务端与本地模式下的播放与跳转、下载到 `target/`）、`node tests/search_ui.cjs <playwright> [base]`、`node tests/album_ui.cjs <playwright> [base]`、`node tests/playlist_ui.cjs <playwright> [base]`、`node tests/artist_ui.cjs <playwright> [base]`、`node tests/browse_ui.cjs <playwright> [base]`（需能访问 music.apple.com）、`node tests/app_ui.cjs <playwright> [base]`（单页应用：跳转后继续播放、队列、前进 / 后退、歌词）、`node tests/download_ui.cjs <playwright> [base]`（批量下载：设置中心、专辑 ZIP 的标签 / 封面 / 歌词、文件夹模式、歌单与 .m3u8、MV、取消 / 重试；需要 cn 地区的 wrapper-lite） |
 
 `<playwright>` 为 Playwright 包路径；在线测试的 `[base]` 省略时：MV 测试默认 `http://127.0.0.1:18888`，其余测试默认 `AM_HOOK_URL` 或 `http://127.0.0.1:8888`（ALAC 测试只读 `AM_HOOK_URL`）。
 
@@ -312,7 +320,7 @@ crates/
   am-alac/             保守的 ALAC 包尾修复
   am-wasm/             am-mp4 的浏览器端 C ABI 导出（wasm32-unknown-unknown）
   am-flac-wasm/        浏览器端 ALAC 解码与 FLAC frame 写入
-  am-media/            浏览器媒体核心：PlayReady、CENC/CBCS、字幕修复、MP4 合并与 defrag
+  am-media/            浏览器媒体核心：PlayReady、Widevine、CENC/CBCS、字幕修复、MP4 合并与 defrag
   am-media-wasm/       am-media 的浏览器端 C ABI 导出
   temari/              内置的 Temari FairPlay 解密库
 browser/

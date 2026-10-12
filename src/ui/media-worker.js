@@ -1,4 +1,4 @@
-/* PlayReady, MP4 decryption, muxing and defragmentation (media.wasm, crates/am-media) run here, away from the UI thread.
+/* PlayReady and Widevine licenses, MP4 decryption, muxing and defragmentation (media.wasm, crates/am-media) run here, away from the UI thread.
  * Messages: { id, method, args } -> { id, result } | { id, error }. */
 'use strict';
 
@@ -101,7 +101,8 @@ async function defragBlob(blob, tags) {
 }
 
 const methods = {
-  challenge: uri => JSON.parse(decoder.decode(invoke('media_challenge', uri, Math.floor(Date.now() / 1000)))),
+  // challenge(uri, drm?) -> { session, uri, challenge }: drm 'widevine' (CENC songs) or PlayReady by default (MVs).
+  challenge: (uri, drm) => JSON.parse(decoder.decode(invoke('media_challenge', drm === 'widevine' ? 1 : 0, uri, Math.floor(Date.now() / 1000)))),
   license: (session, license) => invoke('media_license', session, license),
   closeSession: session => { invoke('media_close_session', session); },
   init: (name, raw, base) => invoke('media_init', name, raw, base),

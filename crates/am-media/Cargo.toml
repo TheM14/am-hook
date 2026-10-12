@@ -2,10 +2,12 @@
 name = "am-media"
 version = "0.1.0"
 edition = "2021"
-description = "Browser MV/song media core: PlayReady license handling, CENC/CBCS fMP4 decryption, caption repair, muxing and defragmentation"
+description = "Browser MV/song media core: PlayReady and Widevine license handling, CENC/CBCS fMP4 decryption, caption repair, muxing and defragmentation"
 
 [dependencies]
 aes = "0.8"
 p256 = { version = "0.13", default-features = false, features = ["arithmetic", "ecdsa"] }
 sha2 = { version = "0.10", default-features = false }
 rand_core = { version = "0.6", default-features = false }
+rsa = { version = "0.9", default-features = false, features = ["u64_digit"] }
+sha1 = { version = "0.10", default-features = false }

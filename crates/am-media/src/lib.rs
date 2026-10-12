@@ -1,6 +1,7 @@
 //! Browser media core for am-hook, compiled to `src/ui/media.wasm` by `crates/am-media-wasm`.
 //!
 //! - [`playready`]: PlayReady license challenges and XMR content-key extraction;
+//! - [`widevine`]: Widevine license challenges and content-key extraction;
 //! - [`cenc`]: CENC/CBCS decryption of fragmented MP4;
 //! - [`mv`]: per-stream MV fragment processing and init muxing;
 //! - [`c608`]: repair of malformed closed-caption samples;
@@ -17,6 +18,7 @@ pub mod frag;
 pub mod mv;
 pub mod playready;
 pub mod readahead;
+pub mod widevine;
 #[cfg(test)]
 mod testutil;
 
