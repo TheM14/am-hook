@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.4.0 (2026-10-12)
 
 ### New
 - ✨ Settings (`/settings`, below Top Charts in the sidebar and the phone menu): general and download settings (quality, performance, save mode, file name templates, tags, cover art, lyrics), stored in the browser
