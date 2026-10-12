@@ -248,7 +248,7 @@ cargo build --release
 
 | 产物 | 源码 | 重新生成 |
 |---|---|---|
-| `hook.wasm`、`flac.wasm`、`media.wasm` | `crates/am-wasm`、`crates/am-flac-wasm`、`crates/am-media-wasm`（及 `am-mp4`、`am-alac`、`temari`、`am-media`） | `rustup target add wasm32-unknown-unknown` 后运行 `scripts/build-wasm.sh` |
+| `hook.wasm`、`flac.wasm`、`media.wasm` | `crates/am-wasm`、`crates/am-flac-wasm`、`crates/am-media-wasm`（及 `am-mp4`、`am-alac`、`temari`、`am-media`） | `rustup target add wasm32-unknown-unknown`，并安装 [binaryen](https://github.com/WebAssembly/binaryen) 的 `wasm-opt`（或 `WASM_OPT="npx -y -p binaryen@123.0.0 wasm-opt"`），然后运行 `scripts/build-wasm.sh`。`hook.wasm` 与 `media.wasm` 使用 `Cargo.toml` 中的 `wasm` profile（按体积优化，解密热点 temari 与 AES 保持 `opt-level` 3） |
 | `mv-cea608.mjs` | `browser/cea608` | `node scripts/build-cea608.cjs <typescript 包路径>` |
 | `lyrics/amll-core.mjs`、`lyrics/amll.css` | `@applemusic-like-lyrics/core`，见 [browser/amll](browser/amll/README.md) | `node scripts/build-amll.cjs <node_modules 路径>` |
 | `ec3.wasm`、`ec3-runtime.mjs` | `@mediabunny/ac3` 1.59.1 | `node scripts/extract-ec3.mjs`，见 [EC3-SOURCE.md](src/ui/EC3-SOURCE.md) |

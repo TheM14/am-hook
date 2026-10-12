@@ -11,6 +11,10 @@
 ### 变更
 - `/mv/license`（以及 serverless 的同名接口）也接受不带 `drm-type` 的 Widevine 请求
 - `media_challenge` 多了第一个参数选择 DRM（0 PlayReady、1 Widevine）
+- wasm 体积：`media.wasm` 465 → 306 KB、`hook.wasm` 242 → 213 KB、`flac.wasm` 45 → 33 KB
+  - `hook.wasm` 与 `media.wasm` 改用新的 `wasm` profile（按体积优化，解密热点 temari 与 AES 保持 opt-level 3）：FairPlay / CENC 解密速度不变，`media.wasm` 的 MV 解密约慢 8%
+  - `hook.wasm` 内嵌的固定解密模板改为二进制（`fixed_template.bin`，由 `fixed_template.json` 生成，测试保证一致），不再嵌入 56 KB 的 base64 JSON
+  - `flac.wasm` 也经过 wasm-opt；`scripts/build-wasm.sh` 可用 `WASM_OPT` 指定 wasm-opt，找不到时给出警告
 
 ## v0.4.2 (2026-10-12)
 

@@ -248,7 +248,7 @@ The binary is written to `target/release/am-hook` (`am-hook.exe` on Windows). Al
 
 | Asset | Source | Rebuild |
 |---|---|---|
-| `hook.wasm`, `flac.wasm`, `media.wasm` | `crates/am-wasm`, `crates/am-flac-wasm`, `crates/am-media-wasm` (and `am-mp4`, `am-alac`, `temari`, `am-media`) | `rustup target add wasm32-unknown-unknown`, then `scripts/build-wasm.sh` |
+| `hook.wasm`, `flac.wasm`, `media.wasm` | `crates/am-wasm`, `crates/am-flac-wasm`, `crates/am-media-wasm` (and `am-mp4`, `am-alac`, `temari`, `am-media`) | `rustup target add wasm32-unknown-unknown` and [binaryen](https://github.com/WebAssembly/binaryen)'s `wasm-opt` (or `WASM_OPT="npx -y -p binaryen@123.0.0 wasm-opt"`), then `scripts/build-wasm.sh`. `hook.wasm` and `media.wasm` use the `wasm` profile in `Cargo.toml` (size-optimized, with the decryption hot spots temari and AES kept at `opt-level` 3) |
 | `mv-cea608.mjs` | `browser/cea608` | `node scripts/build-cea608.cjs <path-to-typescript-package>` |
 | `lyrics/amll-core.mjs`, `lyrics/amll.css` | `@applemusic-like-lyrics/core`, see [browser/amll](browser/amll/README.md) | `node scripts/build-amll.cjs <node_modules>` |
 | `ec3.wasm`, `ec3-runtime.mjs` | `@mediabunny/ac3` 1.59.1 | `node scripts/extract-ec3.mjs`, see [EC3-SOURCE.md](src/ui/EC3-SOURCE.md) |

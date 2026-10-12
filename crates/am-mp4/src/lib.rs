@@ -9,16 +9,28 @@ pub use alac::{alac_track, repair_alac_fragment, AlacTrack};
 
 pub use temari::rounds::Template;
 pub use temari::template::template_from_json;
-use temari::rounds::{decrypt_ranges_in_place, decrypt_ranges_par};
+use temari::rounds::{decrypt_ranges_in_place, decrypt_ranges_par, R1Entry, CTX_SIZE, ST_SIZE};
 
 /// 每条轨道第一个 fragment 使用的固定 key
 pub const FIXED_KEY_URI: &str = "skd://itunes.apple.com/P000000000/s1/e1";
-pub const FIXED_TEMPLATE_JSON: &str = include_str!("fixed_template.json");
+
+/// 固定模板的二进制形式（比 base64 JSON 小约 15 KB，wasm 也随之变小）：
+/// ctx[CTX_SIZE] | st_init[ST_SIZE] u32 LE | rdx rcx rax r9 rbp u32 LE。
+/// 由 `fixed_template.json`（wrapper-lite /key 的原始格式）生成，测试保证两者一致。
+const FIXED_TEMPLATE_BIN: &[u8; CTX_SIZE + ST_SIZE * 4 + 20] = include_bytes!("fixed_template.bin");
 
 /// 内嵌的固定 key 解密模板（首次调用时解析）
 pub fn fixed_template() -> &'static Template {
     static FIXED: OnceLock<Template> = OnceLock::new();
-    FIXED.get_or_init(|| template_from_json(FIXED_TEMPLATE_JSON).expect("embedded fixed template must parse"))
+    FIXED.get_or_init(|| {
+        let (ctx, rest) = FIXED_TEMPLATE_BIN.split_at(CTX_SIZE);
+        let (st, entry) = rest.split_at(ST_SIZE * 4);
+        let word = |b: &[u8], i: usize| u32::from_le_bytes(b[i * 4..i * 4 + 4].try_into().unwrap());
+        let mut st_init = [0u32; ST_SIZE];
+        st_init.iter_mut().enumerate().for_each(|(i, v)| *v = word(st, i));
+        let r1_entry = R1Entry { rdx: word(entry, 0), rcx: word(entry, 1), rax: word(entry, 2), r9: word(entry, 3), rbp: word(entry, 4) };
+        Template::new(ctx.to_vec(), st_init, r1_entry)
+    })
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -378,5 +390,22 @@ mod tests {
     #[test]
     fn test_fixed_template_loads() {
         assert_eq!(fixed_template().ctx.len(), temari::rounds::CTX_SIZE);
+    }
+
+    /// fixed_template.bin 必须与 fixed_template.json 解析出的模板一致。
+    /// 更新 JSON 后用 `AM_UPDATE_FIXED_TEMPLATE=1 cargo test -p am-mp4 fixed_template_bin` 重新生成。
+    #[test]
+    fn test_fixed_template_bin_matches_json() {
+        let t = template_from_json(include_str!("fixed_template.json")).unwrap();
+        let mut bin = t.ctx.clone();
+        bin.extend(t.st_init.iter().flat_map(|v| v.to_le_bytes()));
+        let e = &t.r1_entry;
+        bin.extend([e.rdx, e.rcx, e.rax, e.r9, e.rbp].iter().flat_map(|v| v.to_le_bytes()));
+        if std::env::var_os("AM_UPDATE_FIXED_TEMPLATE").is_some() {
+            std::fs::write(concat!(env!("CARGO_MANIFEST_DIR"), "/src/fixed_template.bin"), &bin).unwrap();
+        }
+        assert!(bin[..] == FIXED_TEMPLATE_BIN[..], "fixed_template.bin is stale");
+        let f = fixed_template();
+        assert_eq!((f.ctx.as_slice(), &f.st_init[..]), (t.ctx.as_slice(), &t.st_init[..]));
     }
 }

@@ -11,6 +11,10 @@
 ### Changed
 - `/mv/license` (and the serverless one) also accepts Widevine requests without `drm-type`
 - `media_challenge` takes a new first argument selecting the DRM (0 PlayReady, 1 Widevine)
+- Smaller wasm: `media.wasm` 465 → 306 KB, `hook.wasm` 242 → 213 KB, `flac.wasm` 45 → 33 KB
+  - `hook.wasm` and `media.wasm` use a new `wasm` profile (size-optimized, with the decryption hot spots temari and AES kept at opt-level 3): FairPlay / CENC decryption speed is unchanged, MV decryption in `media.wasm` is about 8% slower
+  - The fixed decryption template embedded in `hook.wasm` is binary (`fixed_template.bin`, generated from `fixed_template.json` and checked by a test) instead of 56 KB of base64 JSON
+  - `flac.wasm` now goes through wasm-opt too; `scripts/build-wasm.sh` takes the wasm-opt command from `WASM_OPT` and warns when it is missing
 
 ## v0.4.2 (2026-10-12)
 

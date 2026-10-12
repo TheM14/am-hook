@@ -42,3 +42,15 @@ opt-level = 3
 opt-level = 3
 lto = true
 codegen-units = 1
+
+# 浏览器 wasm（hook.wasm、media.wasm，见 scripts/build-wasm.sh）：按体积优化，
+# 只有解密热点（FairPlay 的 temari、AES）保持 opt-level 3，速度与全部 3 时相当
+[profile.wasm]
+inherits = "release"
+opt-level = "z"
+
+[profile.wasm.package.temari]
+opt-level = 3
+
+[profile.wasm.package.aes]
+opt-level = 3
