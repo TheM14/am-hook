@@ -665,5 +665,9 @@ document.addEventListener('click', (event) => {
   else navigate('/');
 });
 
+// Vercel 会把路径中连续的 `/` 合并（308 跳转到 /https:/music.apple.com/...），这里补回再路由
+if (/^\/https:\/(?!\/)/.test(location.pathname)) {
+  history.replaceState(history.state, '', location.pathname.replace(/^\/https:\//, '/https://') + location.search + location.hash);
+}
 entryKey();
 render(new URL(location.href), { initial: true });
