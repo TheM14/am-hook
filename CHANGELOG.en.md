@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.4.2 (2026-10-12)
 
 ### New
 - ✨ Music videos in albums and playlists can be downloaded with them: the download dialog lists them (checked by default, with a one-click "Skip music videos"), single music videos can be downloaded from their More menu, and progress shows in the download center
