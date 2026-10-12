@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.4.1 (2026-10-12)
 
 ### Changed
 - Album, playlist, artist and library playlist headers keep only Shuffle, Play and More: download, favorite, add to library, edit playlist, artist info and the rest moved into the More menu
