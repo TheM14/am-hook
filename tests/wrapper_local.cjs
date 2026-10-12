@@ -8,6 +8,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require(process.argv[2] || 'playwright');
 const root = path.join(__dirname, '../src/ui');
+// Public asset path -> file under src/ui, from the one asset table (as scripts/build-static.mjs reads it).
+const assetFiles = new Map([...fs.readFileSync(path.join(__dirname, '../src/assets.rs'), 'utf8')
+  .matchAll(/asset!\(\s*"(\/[\w./-]*)"\s*,\s*\w+\s*,\s*"([\w./-]+)"\s*\)/g)].map(([, url, file]) => [url, file]));
 
 const WRAPPER = 'http://wrapper.test:12340';
 const master = `#EXTM3U
@@ -60,9 +63,7 @@ const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers
       if (url.pathname.startsWith('/amp/') || url.pathname.startsWith('/lyrics/') || url.pathname.startsWith('/parse/')) {
         return route.fulfill({ status: 404, json: { code: 1, msg: 'server endpoint must not be used' } });
       }
-      const file = url.pathname.startsWith('/assets/lyrics/') ? path.join('lyrics', path.basename(url.pathname))
-        : url.pathname.startsWith('/assets/views/') ? path.join('views', path.basename(url.pathname))
-        : url.pathname.startsWith('/assets/') ? path.basename(url.pathname) : 'app.html';
+      const file = assetFiles.get(url.pathname) || 'app.html';
       const type = file.endsWith('.css') ? 'text/css' : /\.m?js$/.test(file) ? 'text/javascript' : 'text/html';
       return route.fulfill({ body: fs.readFileSync(path.join(root, file)), contentType: type });
     });
