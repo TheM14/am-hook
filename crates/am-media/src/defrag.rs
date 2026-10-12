@@ -7,8 +7,8 @@
 //!
 //! - [`Options::song`] reproduces the reference `DefragmentMP4`: the
 //!   tag-compatible ftyp, one chunk per source trun, tracks one after another.
-//! - [`Options::mv`] uses the given ftyp and cuts chunks to at most one second,
-//!   written in decode-time order so tracks are interleaved.
+//! - [`Options::mv`] reproduces the reference mv.Mux output
+//!   (`DefragmentMP4WithFtyp`): the same layout with an `isom` ftyp.
 
 use std::collections::HashMap;
 
@@ -18,8 +18,6 @@ use crate::frag::{sgpd_grouping_type, traf_tfhd, Sample, Sbgp, Tfhd, Trex, Trun,
 use crate::readahead::{Reader, Sink, Source};
 use crate::{bail, Error, Result};
 
-/// Chunk duration bound in seconds when interleaving.
-pub const MAX_CHUNK_DURATION: u64 = 1;
 const MDAT_HEADER: u64 = 8;
 /// Keeps every output mdat within int32, the widest box size go-mp4tag parses.
 const MAX_MDAT_PAYLOAD: u64 = (1 << 31) - 1 - MDAT_HEADER;
@@ -31,7 +29,6 @@ pub struct Options {
     pub major_brand: FourCC,
     pub minor_version: u32,
     pub compatible_brands: Vec<FourCC>,
-    pub interleave: bool,
     /// iTunes metadata items (the payload of moov.udta.meta.ilst). When not
     /// empty it replaces any ilst of the source, so tags and cover art are part
     /// of moov before chunk offsets are computed: no second pass rewrites the file.
@@ -45,14 +42,13 @@ impl Options {
             major_brand: *b"M4A ",
             minor_version: 1,
             compatible_brands: vec![*b"M4A ", *b"mp42", *b"isom", *b"iso5"],
-            interleave: false,
             tags: Vec::new(),
         }
     }
 
-    /// MV downloads: same brands as the reference mv.Mux output, interleaved chunks.
+    /// MV downloads: the reference mv.Mux output, same layout as songs.
     pub fn mv() -> Options {
-        Options { major_brand: *b"isom", minor_version: 0x200, compatible_brands: vec![*b"isom", *b"iso4"], interleave: true, tags: Vec::new() }
+        Options { major_brand: *b"isom", minor_version: 0x200, compatible_brands: vec![*b"isom", *b"iso4"], tags: Vec::new() }
     }
 
     /// Writes `ilst` (concatenated item boxes) into moov.udta.meta.ilst.
@@ -88,8 +84,6 @@ struct Chunk {
     size: u64,
     samples: u32,
     description: u32,
-    /// Decode time of the first sample in the track's timescale.
-    time: u64,
 }
 
 struct GroupRun {
@@ -107,7 +101,6 @@ struct Track {
     chunks: Vec<Chunk>,
     groups: Vec<GroupRun>,
     duration: u64,
-    timescale: u32,
 }
 
 struct Fragment {
@@ -200,7 +193,7 @@ pub fn defragment<S: Source, W: Sink>(input: S, output: &mut W, options: &Option
         bail!("fragmented MP4 has no mvex");
     }
 
-    let tracks = collect_tracks(&moov, &parsed.fragments, &parsed.mdats, options.interleave)
+    let tracks = collect_tracks(&moov, &parsed.fragments, &parsed.mdats)
         .map_err(|e| e.context("collect fragmented samples"))?;
     validate_source_ranges(&tracks).map_err(|e| e.context("validate source ranges"))?;
     build_progressive_moov(&mut moov, &tracks).map_err(|e| e.context("build progressive moov"))?;
@@ -208,7 +201,7 @@ pub fn defragment<S: Source, W: Sink>(input: S, output: &mut W, options: &Option
     let ftyp = options.ftyp();
     ensure_tag_metadata(&mut moov, &options.tags).map_err(|e| e.context("write tags"))?;
 
-    let order = write_order(&tracks, options.interleave);
+    let order = write_order(&tracks);
     let mdat_sizes = plan_mdats(&tracks, &order).map_err(|e| e.context("plan output mdat boxes"))?;
     install_chunk_offsets(ftyp.size(), &mut moov, &tracks, &order).map_err(|e| e.context("calculate output chunk offsets"))?;
     write_progressive(&mut r, output, &ftyp, &moov, &tracks, &parsed.mdats, &order, &mdat_sizes)
@@ -225,7 +218,7 @@ fn trak_timescale(trak: &Atom) -> Result<u32> {
     Ok(be32(b, at))
 }
 
-fn collect_tracks(moov: &Atom, fragments: &[Fragment], mdats: &[Mdat], interleave: bool) -> Result<Vec<Track>> {
+fn collect_tracks(moov: &Atom, fragments: &[Fragment], mdats: &[Mdat]) -> Result<Vec<Track>> {
     let mut by_id: HashMap<u32, Track> = HashMap::new();
     let mut order = Vec::new();
     for trak in moov.all(b"trak") {
@@ -242,11 +235,10 @@ fn collect_tracks(moov: &Atom, fragments: &[Fragment], mdats: &[Mdat], interleav
         if stsd.children().iter().any(|e| &e.kind == b"encv" || &e.kind == b"enca") {
             bail!("track {id} is encrypted; encrypted fMP4 is not supported");
         }
-        let timescale = trak_timescale(trak)?;
-        if timescale == 0 {
+        if trak_timescale(trak)? == 0 {
             bail!("track {id} has zero media timescale");
         }
-        by_id.insert(id, Track { id, samples: Vec::with_capacity(4096), chunks: Vec::new(), groups: Vec::new(), duration: 0, timescale });
+        by_id.insert(id, Track { id, samples: Vec::with_capacity(4096), chunks: Vec::new(), groups: Vec::new(), duration: 0 });
         order.push(id);
     }
     let mut trexs: HashMap<u32, Trex> = HashMap::new();
@@ -263,7 +255,7 @@ fn collect_tracks(moov: &Atom, fragments: &[Fragment], mdats: &[Mdat], interleav
         }
     }
     for (i, frag) in fragments.iter().enumerate() {
-        collect_fragment(frag, &mdats[frag.mdat], frag.mdat, &trexs, &mut by_id, interleave)
+        collect_fragment(frag, &mdats[frag.mdat], frag.mdat, &trexs, &mut by_id)
             .map_err(|e| e.context(&format!("segment 0 fragment {i}")))?;
     }
     order
@@ -284,7 +276,6 @@ fn collect_fragment(
     mdat_index: usize,
     trexs: &HashMap<u32, Trex>,
     tracks: &mut HashMap<u32, Track>,
-    interleave: bool,
 ) -> Result<()> {
     for traf in frag.moof.all(b"traf") {
         let tfhd = traf_tfhd(traf)?;
@@ -311,21 +302,11 @@ fn collect_fragment(
                 size += s.size as u64;
             }
             validate_mdat_range(mdat, offset, size).map_err(|e| e.context(&format!("track {id} trun {trun_index}")))?;
-            // When interleaving, split the trun into chunks of at most
-            // MAX_CHUNK_DURATION; otherwise the whole trun is one chunk. Every
-            // chunk holds at least one sample.
-            let limit = if interleave { td.timescale as u64 * MAX_CHUNK_DURATION } else { u64::MAX };
-            let mut chunk = Chunk { mdat: mdat_index, offset, size: 0, samples: 0, description, time: td.duration };
-            let last = trun.samples.len() - 1;
-            for (i, s) in trun.samples.iter().enumerate() {
-                chunk.size += s.size as u64;
-                chunk.samples += 1;
+            // Each source trun becomes one chunk.
+            td.chunks.push(Chunk { mdat: mdat_index, offset, size, samples: trun.samples.len() as u32, description });
+            for s in &trun.samples {
                 td.samples.push(*s);
                 td.duration += s.duration as u64;
-                if i == last || td.duration - chunk.time >= limit {
-                    td.chunks.push(chunk);
-                    chunk = Chunk { mdat: mdat_index, offset: chunk.offset + chunk.size, size: 0, samples: 0, description, time: td.duration };
-                }
             }
         }
         // Like mp4ff's traf.Sbgp, only the last sbgp of a traf counts.
@@ -780,20 +761,9 @@ struct ChunkRef {
     chunk: usize,
 }
 
-/// Output chunk order: by decode time in seconds, then track order, or, when
-/// not interleaving, track after track. Each track's chunks keep their order.
-fn write_order(tracks: &[Track], interleave: bool) -> Vec<ChunkRef> {
-    let mut order: Vec<ChunkRef> =
-        tracks.iter().enumerate().flat_map(|(t, tr)| (0..tr.chunks.len()).map(move |c| ChunkRef { track: t, chunk: c })).collect();
-    if interleave {
-        order.sort_by(|a, b| {
-            let (ta, tb) = (&tracks[a.track], &tracks[b.track]);
-            let x = ta.chunks[a.chunk].time as u128 * tb.timescale as u128;
-            let y = tb.chunks[b.chunk].time as u128 * ta.timescale as u128;
-            x.cmp(&y).then(a.track.cmp(&b.track))
-        });
-    }
-    order
+/// Output chunk order: track after track, each track's chunks in order.
+fn write_order(tracks: &[Track]) -> Vec<ChunkRef> {
+    tracks.iter().enumerate().flat_map(|(t, tr)| (0..tr.chunks.len()).map(move |c| ChunkRef { track: t, chunk: c })).collect()
 }
 
 /// Groups chunks, in write order, into consecutive mdat boxes and returns each
@@ -1041,30 +1011,42 @@ mod tests {
         starts
     }
 
+    /// The reference mv.Mux output: isom ftyp, one chunk per source trun,
+    /// tracks one after another even when the source alternates them.
     #[test]
-    fn mv_layout_interleaves_tracks_by_time() {
+    fn mv_layout_writes_tracks_one_after_another() {
         let specs = [
-            // 0.25 s samples in 6 s fragments.
             Spec { id: 1, timescale: 48000, duration: 12000, samples: 80, per_fragment: 24 },
-            // ~0.1 s samples in 4 s fragments, another timescale.
             Spec { id: 2, timescale: 44100, duration: 4410, samples: 200, per_fragment: 40 },
         ];
-        let mut out = Vec::new();
-        defragment(&fragmented(&specs)[..], &mut out, &Options::mv()).unwrap();
-        let atoms = bmff::parse(&out).unwrap();
-        assert!(atoms.iter().all(|a| &a.kind != b"moof"));
-        assert_eq!(&atoms[0].bytes()[..4], b"isom");
-        let mut all = Vec::new();
-        for (trak, spec) in atoms[1].all(b"trak").zip(&specs) {
-            all.extend(check_samples(&out, trak, spec));
-            for (_, _, count) in chunks(trak) {
-                let seconds = count as f64 * spec.duration as f64 / spec.timescale as f64;
-                assert!(seconds <= MAX_CHUNK_DURATION as f64 + spec.duration as f64 / spec.timescale as f64);
+        // Source fragments alternate between the tracks, as the MV downloader writes them.
+        let tracks: Vec<TrackSpec> = specs.iter().map(|s| TrackSpec { id: s.id, timescale: s.timescale, entry: entry(b"mp4a") }).collect();
+        let mut source = init(&tracks);
+        let mut seq = 1;
+        for f in 0..5 {
+            for s in &specs {
+                let first = f * s.per_fragment;
+                if first >= s.samples {
+                    continue;
+                }
+                let samples = (first..(first + s.per_fragment).min(s.samples)).map(|i| (s.duration, 0, sample_data(s.id, i))).collect();
+                source.extend(fragment(seq, &[Run { track: s.id, start_time: first as u64 * s.duration as u64, samples }], &|_| Vec::new()));
+                seq += 1;
             }
         }
-        // In file order, chunk start times never go back.
-        all.sort_by_key(|c| c.0);
-        assert!(all.windows(2).all(|w| w[1].1 >= w[0].1));
+        let mut out = Vec::new();
+        defragment(&source[..], &mut out, &Options::mv()).unwrap();
+        let atoms = bmff::parse(&out).unwrap();
+        assert!(atoms.iter().all(|a| &a.kind != b"moof"));
+        assert_eq!(&atoms[0].bytes()[..8], b"isom\0\0\x02\0");
+        let mut last = 0;
+        for (trak, spec) in atoms[1].all(b"trak").zip(&specs) {
+            let c = chunks(trak);
+            assert_eq!(c.len(), spec.samples.div_ceil(spec.per_fragment), "one chunk per trun");
+            assert!(c.iter().all(|x| x.0 >= last), "tracks one after another");
+            last = c.last().unwrap().0;
+            check_samples(&out, trak, spec);
+        }
     }
 
     /// The reference song layout: tag-compatible ftyp, one chunk per source
@@ -1118,22 +1100,6 @@ mod tests {
 
         let bad = Options::song().with_tags(vec![0, 0, 0, 99, b'x']);
         assert!(defragment(&fragmented(&specs)[..], &mut Vec::new(), &bad).unwrap_err().to_string().contains("invalid ilst items"));
-    }
-
-    #[test]
-    fn write_order_compares_across_timescales() {
-        let chunk = |time| Chunk { mdat: 0, offset: 0, size: 1, samples: 1, description: 1, time };
-        let track = |timescale, times: &[u64]| Track {
-            id: 0,
-            samples: Vec::new(),
-            chunks: times.iter().map(|&t| chunk(t)).collect(),
-            groups: Vec::new(),
-            duration: 0,
-            timescale,
-        };
-        let tracks = [track(1000, &[0, 1000, 2000]), track(3, &[0, 2, 3, 7])];
-        let got: Vec<(usize, usize)> = write_order(&tracks, true).iter().map(|r| (r.track, r.chunk)).collect();
-        assert_eq!(got, vec![(0, 0), (1, 0), (1, 1), (0, 1), (1, 2), (0, 2), (1, 3)]);
     }
 
     #[test]

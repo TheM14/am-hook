@@ -72,7 +72,7 @@ function crcWriter(target) {
 }
 
 // Synchronous OPFS handles are worker-only; the core streams through them without buffering the file.
-async function defrag(song, input, output, dir, tags) {
+async function defrag(song, input, output, dir, tags, crc = !!song) {
   let folder = await navigator.storage.getDirectory();
   if (dir) folder = await folder.getDirectoryHandle(dir);
   const source = await (await folder.getFileHandle(input)).createSyncAccessHandle();
@@ -80,11 +80,11 @@ async function defrag(song, input, output, dir, tags) {
   try {
     target = await (await folder.getFileHandle(output, { create: true })).createSyncAccessHandle();
     target.truncate(0);
-    // MV files are large and never zipped: no CRC
-    const writer = song ? crcWriter(target) : target;
+    // MV files skip the CRC unless they go into a ZIP
+    const writer = crc ? crcWriter(target) : target;
     const length = size(withFiles(source, writer, (i, o) => invoke('media_defrag', i, o, song, tags || new Uint8Array(0))));
     target.flush();
-    return song ? { size: length, crc: writer.crc() } : length;
+    return { size: length, crc: crc ? writer.crc() : null };
   } finally { source.close(); target?.close(); }
 }
 // Without OPFS (e.g. plain HTTP), the same code reads a Blob's bytes and returns a Blob.
@@ -108,7 +108,8 @@ const methods = {
   fragment: (name, raw, key, mux, sequence) => invoke('media_fragment', name, raw, key, mux ? 1 : 0, sequence),
   muxInit: (video, audio, duration) => invoke('media_mux_init', video, audio, duration),
   release: name => { invoke('media_release', name); },
-  defrag: (input, output) => defrag(0, input, output),
+  // defrag(input, output, tags?, crc?) -> { size, crc }: the MV layout; crc is null unless asked for.
+  defrag: (input, output, tags, crc) => defrag(0, input, output, undefined, tags, !!crc),
   // defragSong(blob, tags) -> { blob, size, crc } or defragSong(input, output, dir, tags) -> { size, crc }:
   // the reference song layout; tags (Uint8Array, may be omitted) are the ilst items (see mp4-tags.mjs).
   defragSong: (...args) => args[0] instanceof Blob ? defragBlob(args[0], args[1]) : defrag(1, ...args),

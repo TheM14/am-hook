@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## Unreleased
+
+### New
+- ✨ Music videos in albums and playlists can be downloaded with them: the download dialog lists them (checked by default, with a one-click "Skip music videos"), single music videos can be downloaded from their More menu, and progress shows in the download center
+  - As in apple-music-downloader, the video (max resolution, 2160p by default) and audio (Atmos → AC-3 → AAC / AC-3 → AAC / AAC only) are picked by the new Music videos group in Settings; files use the album / playlist track templates with an `.mp4` extension
+  - Tags follow the reference `writeMVMP4Tags`: title, artist, album (from the album or playlist), disc / track numbers, release date, ISRC, UPC, copyright, label, rating, `PERFORMER` and `RELEASETIME`, with the MV thumbnail as cover art; the media type is Music Video (`stik` 6)
+- ✨ The MV page's own download is tagged the same way
+
+### Changed
+- MV downloads are no longer time-interleaved: the video track is downloaded before the audio track, and defrag lays the file out like the reference `mv.Mux`, one chunk per trun with tracks one after another (`defrag::Options::mv` only changes the ftyp)
+- MV downloads keep 4 segment requests in flight (decryption and writing stay in order) instead of waiting for each segment
+- MVs packed into a ZIP get their CRC-32 while defrag writes them, so the file is not read a second time
+
 ## v0.4.1 (2026-10-12)
 
 ### Changed

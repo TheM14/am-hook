@@ -24,6 +24,9 @@ export const OPTIONS = {
     saveMode: ['zip', 'folder', 'files'],
     coverFormat: ['jpg', 'png', 'original'],
     lyricsFormat: ['lrc', 'ttml'],
+    // MV：最高分辨率（高度）与音轨（同参考实现的 mv-max / mv-audio-type）
+    mvMax: [2160, 1440, 1080, 720, 480],
+    mvAudio: ['atmos', 'ac3', 'aac'],
   },
 };
 
@@ -34,6 +37,11 @@ export const DEFAULTS = {
     atmosMax: 2768,
     // 首选音质不存在时改用次一级（否则跳过该曲目）
     fallback: true,
+    // 专辑 / 歌单中的 MV 一起下载（下载对话框中默认勾选）
+    mv: true,
+    mvMax: 2160,
+    // atmos：全景声 → AC-3 → AAC；ac3：AC-3 → AAC；aac：只用 AAC
+    mvAudio: 'atmos',
     // 同时下载的曲目数；每首歌内部另有 4 路分段并发
     concurrency: 2,
     // 失败后自动重试的次数
@@ -94,6 +102,9 @@ function clean(section, raw) {
     alacMax: oneOf(Number(r.alacMax), o.alacMax, d.alacMax),
     atmosMax: oneOf(Number(r.atmosMax), o.atmosMax, d.atmosMax),
     fallback: bool(r.fallback, d.fallback),
+    mv: bool(r.mv, d.mv),
+    mvMax: oneOf(Number(r.mvMax), o.mvMax, d.mvMax),
+    mvAudio: oneOf(r.mvAudio, o.mvAudio, d.mvAudio),
     concurrency: int(r.concurrency, 1, 6, d.concurrency),
     retries: int(r.retries, 0, 5, d.retries),
     opfs: bool(r.opfs, d.opfs),

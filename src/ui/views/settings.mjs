@@ -1,5 +1,5 @@
 // 设置中心（/settings），由 app.mjs 挂载。通用设置（主地区、曲库语言、界面语言、wrapper-lite）沿用导航底部的选择面板；
-// 下载设置（音质、保存方式、文件名、标签、封面、歌词）保存在 prefs.mjs，修改立即生效（进行中的下载沿用开始时的设置）。
+// 下载设置（音质、MV、保存方式、文件名、标签、封面、歌词）保存在 prefs.mjs，修改立即生效（进行中的下载沿用开始时的设置）。
 import { prefs, OPTIONS, TAG_FIELDS, DEFAULTS } from '../prefs.mjs';
 import { formatPath, TEMPLATE_VARS } from '../naming.mjs';
 import { downloads } from '../downloads.mjs';
@@ -133,6 +133,12 @@ export function mount({ root, signal, onLangChange, toast }) {
       row(t('set.atmosMax'), t('set.atmosMaxDesc'), select('atmosMax', o.atmosMax.map((n) => [n, `${n} (${n % 1000} kbps)`]))),
       row(t('set.fallback'), t('set.fallbackDesc'), toggle('fallback', t('set.fallback'))));
 
+    // MV（专辑、歌单中的，以及「更多」菜单里单独下载的）：同参考实现的 mv-max 与 mv-audio-type
+    const mv = section('mv', 'set.mvSection',
+      row(t('set.mv'), opfs ? t('set.mvDesc') : t('set.mvNoOpfs'), toggle('mv', t('set.mv'))),
+      row(t('set.mvMax'), t('set.mvMaxDesc'), select('mvMax', o.mvMax.map((n) => [n, { 2160: '2160p (4K)', 1440: '1440p (2K)' }[n] || `${n}p`]))),
+      row(t('set.mvAudio'), t('set.mvAudioDesc'), select('mvAudio', o.mvAudio.map((a) => [a, t(`set.mvAudio.${a}`)]))));
+
     const performance = section('performance', 'set.performance',
       row(t('set.concurrency'), t('set.concurrencyDesc'), number('concurrency', 1, 6, t('set.concurrency'))),
       row(t('set.retries'), t('set.retriesDesc'), number('retries', 0, 5, t('set.retries'))),
@@ -255,10 +261,10 @@ export function mount({ root, signal, onLangChange, toast }) {
     host.replaceChildren(
       el('h2', { className: 'set-part-title', textContent: t('set.download') }),
       el('p', { className: 'set-part-desc', textContent: t('set.downloadDesc') }),
-      quality, performance, save, naming, tags, cover, lyrics, footer);
+      quality, mv, performance, save, naming, tags, cover, lyrics, footer);
 
     // 目录
-    const groups = [['general', 'set.general'], ['quality', 'set.quality'], ['save', 'set.save'], ['naming', 'set.naming'], ['tags', 'set.tags'], ['cover', 'set.cover'], ['lyrics', 'set.lyrics']];
+    const groups = [['general', 'set.general'], ['quality', 'set.quality'], ['mv', 'set.mvSection'], ['save', 'set.save'], ['naming', 'set.naming'], ['tags', 'set.tags'], ['cover', 'set.cover'], ['lyrics', 'set.lyrics']];
     root.querySelector('#toc').replaceChildren(...groups.map(([id, key]) => {
       const a = el('a', { href: `#${id}`, className: 'set-toc-link', textContent: t(key) });
       a.addEventListener('click', (e) => { e.preventDefault(); root.querySelector(`#${id}`).scrollIntoView({ behavior: 'smooth', block: 'start' }); });

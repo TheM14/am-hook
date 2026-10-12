@@ -35,7 +35,7 @@ const HEADER_MENU = [
   ['copySite', 'copyApple'],
 ];
 
-/** 「更多」菜单里的下载（downloads.mjs，使用设置中心的下载设置）：歌曲、专辑与 Apple Music 歌单；不能下载时为 null */
+/** 「更多」菜单里的下载（downloads.mjs，使用设置中心的下载设置）：歌曲、MV、专辑与 Apple Music 歌单；不能下载时为 null */
 function downloadSpec(target) {
   const r = target.resource;
   if (target.kind === 'song') {
@@ -43,6 +43,7 @@ function downloadSpec(target) {
     if (!id || (r && !playable(r))) return null;
     return { kind: 'song', id, country: target.country, tracks: r && r.attributes ? [r] : null };
   }
+  if (target.kind === 'music-video' && r && r.id && playable(r)) return { kind: 'music-video', id: r.id, country: target.country };
   if ((target.kind === 'album' || target.kind === 'playlist') && r && r.id) {
     const c = target.collection;
     return { kind: target.kind, id: r.id, country: target.country, resource: c ? c.resource : null, tracks: c ? c.tracks : null };

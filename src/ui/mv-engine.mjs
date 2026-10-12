@@ -54,10 +54,11 @@ async function preparePair(core, id, video, audio, signal) {
   // Sequential initialization avoids duplicate work after a failed license.
   return [await prepare(core, id, video, 'video', signal), await prepare(core, id, audio, 'audio', signal)];
 }
-async function fragment(core, stream, segment, signal, mux = false, sequence = 0) {
-  if (segment === stream.segments[0] && !mux) return stream.firstClear;
-  const raw = segment === stream.segments[0] ? stream.firstRaw : await fetchResource(segment, signal);
-  return core.call('fragment', stream.name, raw, stream.keys.get(segment.key) || new Uint8Array(16), mux, sequence);
+// Playback: one decrypted fragment for MSE (downloads fetch ahead and mux their own, see downloadMV).
+async function fragment(core, stream, segment, signal) {
+  if (segment === stream.segments[0]) return stream.firstClear;
+  const raw = await fetchResource(segment, signal);
+  return core.call('fragment', stream.name, raw, stream.keys.get(segment.key) || new Uint8Array(16), false, 0);
 }
 function delay(ms, signal) {
   return new Promise((resolve, reject) => {
@@ -206,7 +207,11 @@ export async function collectGarbage() {
     for (const name of garbage) await root.removeEntry(name).catch(() => {});
   } catch { /* best effort */ }
 }
-export async function downloadMV(id, video, audio, { signal, onProgress, onDefrag }) {
+// Segment requests kept in flight while earlier segments are decrypted and written in order.
+const PREFETCH = 4;
+// tags: optional async () => Uint8Array of ilst items (mp4-tags.mjs), awaited before defragmenting;
+// crc: also compute the output's CRC-32 (for ZIP packaging). Returns { file, crc, dispose }.
+export async function downloadMV(id, video, audio, { signal, onProgress, onDefrag, tags, crc = false }) {
   if (!navigator.storage?.getDirectory) throw new Error('OPFS requires HTTPS or localhost and a supported browser');
   await collectGarbage();
   const root = await navigator.storage.getDirectory();
@@ -227,22 +232,36 @@ export async function downloadMV(id, video, audio, { signal, onProgress, onDefra
     if (quota && estimate && quota - (usage || 0) < estimate * 2.1) throw new Error('Not enough OPFS storage quota for this download');
     const init = await core.call('muxInit', 'video', 'audio', duration);
     await writer.write(init);
-    const queue = streams.flatMap(s => s.segments.map(segment => ({ stream: s, segment })))
-      .sort((a, b) => a.segment.start - b.segment.start || (a.stream.name === 'video' ? -1 : 1));
-    let sequence = 1, bytes = init.length, done = 0;
-    for (const { stream, segment } of queue) {
+    // The whole video track, then the whole audio track (as the reference writes them): defrag keeps
+    // tracks one after another, so it then reads the fragmented file front to back.
+    const queue = streams.flatMap(s => s.segments.map(segment => ({ stream: s, segment })));
+    const pending = new Map();
+    let ahead = 0;
+    const fetchNext = () => {
+      const { stream, segment } = queue[ahead];
+      const raw = segment === stream.segments[0] ? Promise.resolve(stream.firstRaw) : fetchResource(segment, signal);
+      raw.catch(() => {}); // awaited below; an abort must not surface as an unhandled rejection
+      pending.set(ahead++, raw);
+    };
+    let sequence = 1, bytes = init.length;
+    for (let i = 0; i < queue.length; i++) {
+      while (ahead < queue.length && ahead < i + PREFETCH) fetchNext();
+      const raw = await pending.get(i); pending.delete(i);
       signal.throwIfAborted();
-      const data = await fragment(core, stream, segment, signal, true, sequence);
+      const { stream, segment } = queue[i];
+      const data = await core.call('fragment', stream.name, raw, stream.keys.get(segment.key) || new Uint8Array(16), true, sequence);
       sequence += moofCount(data); await writer.write(data); bytes += data.length;
-      onProgress(++done / queue.length, bytes);
+      onProgress((i + 1) / queue.length, bytes);
     }
     signal.throwIfAborted(); await writer.close(); writer = null;
-    // Rewrite the interleaved fragments as a progressive MP4 (ftyp, moov, mdat).
+    const ilst = tags ? await tags() : null;
+    signal.throwIfAborted();
+    // Rewrite the fragments as a progressive MP4 (ftyp, moov with the tags, mdat).
     onDefrag?.();
-    await core.call('defrag', fragmented, name);
+    const out = await core.call('defrag', fragmented, name, ilst || undefined, crc);
     signal.throwIfAborted();
     const file = await (await root.getFileHandle(name)).getFile(); complete = true;
-    return { file, dispose: () => remove(root, name).finally(unlock) };
+    return { file, crc: out?.crc ?? null, dispose: () => remove(root, name).finally(unlock) };
   } finally {
     signal.removeEventListener('abort', abort); core.close();
     if (writer) await writer.abort().catch(() => {});

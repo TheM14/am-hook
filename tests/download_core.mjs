@@ -1,10 +1,11 @@
-// 批量下载的纯函数部分：ZIP（含 ZIP64）、iTunes 标签（ilst）、文件名模板与音质选择。离线，只需 Node：
+// 批量下载的纯函数部分：ZIP（含 ZIP64）、iTunes 标签（ilst）、文件名模板、音质选择与 MV 的选轨。离线，只需 Node：
 //   node --test tests/download_core.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildZip, zipParts, crc32, crc32Blob } from '../src/ui/zip.mjs';
 import { buildIlst } from '../src/ui/mp4-tags.mjs';
 import { formatPath, formatName, sanitize } from '../src/ui/naming.mjs';
+import { pickMvVideo, pickMvAudio, mvQualityVars } from '../src/ui/mv-hls.mjs';
 
 const enc = new TextEncoder();
 
@@ -133,7 +134,36 @@ test('ilst items use iTunes atoms and data types', () => {
   assert.equal(map.get('----:LABEL')[0], 'JVR');
   assert.equal(Buffer.from(map.get('sonm')[0]).toString(), '晴天');
   assert.ok(!map.has('soar'));
-  assert.ok(map.has('stik'));
+  assert.deepEqual([...map.get('stik')[0]], [1]);
+});
+
+test('music video ilst: stik 6 and the reference PERFORMER / RELEASETIME fields', () => {
+  const map = new Map(items(buildIlst({ title: 'MV', mediaType: 6, custom: { PERFORMER: 'A', RELEASETIME: '2020-01-01', EMPTY: '' } })).map(([k, ...v]) => [k, v]));
+  assert.deepEqual([...map.get('stik')[0]], [6]);
+  assert.equal(map.get('----:PERFORMER')[0], 'A');
+  assert.equal(map.get('----:RELEASETIME')[0], '2020-01-01');
+  assert.ok(!map.has('----:EMPTY'));
+});
+
+test('music video tracks follow the reference mv-max and mv-audio-type', () => {
+  const video = (res, bw, codecs = 'hvc1.2.4.L150.90,mp4a.40.2', range = 'SDR') => ({ RESOLUTION: res, 'AVERAGE-BANDWIDTH': String(bw), CODECS: codecs, 'VIDEO-RANGE': range });
+  const videos = [video('1920x1080', 8e6), video('3840x2160', 20e6, 'dvh1.05.06,ec-3', 'PQ'), video('3840x2160', 18e6), video('1280x720', 4e6)];
+  assert.equal(pickMvVideo(videos, 2160), videos[1]);
+  assert.equal(pickMvVideo(videos, 1080), videos[0]);
+  assert.equal(pickMvVideo(videos, 480), videos[3], 'lowest when all are taller');
+
+  const audio = (group, uri, codec) => ({ 'GROUP-ID': group, URI: uri, codec });
+  const audios = [audio('audio-stereo-256', 'a_gr1_.m3u8', 'mp4a.40.2'), audio('audio-stereo-256', 'b_gr3_.m3u8', 'mp4a.40.2'),
+    audio('audio-HE-stereo-64', 'c.m3u8', 'mp4a.40.5'), audio('audio-ac3', 'd.m3u8', 'ac-3'), audio('audio-atmos', 'e.m3u8', 'ec-3'), audio('audio-x', 'f.m3u8', '')];
+  assert.equal(pickMvAudio(audios, 'atmos'), audios[4]);
+  assert.equal(pickMvAudio(audios, 'ac3'), audios[3]);
+  assert.equal(pickMvAudio(audios, 'aac'), audios[1], 'the larger _gr{n}_ wins a tie');
+  assert.equal(pickMvAudio(audios.slice(0, 3), 'atmos'), audios[1], 'falls back to AAC');
+  assert.equal(pickMvAudio([audios[5]], 'atmos'), null);
+
+  assert.equal(mvQualityVars(videos[1], audios[4]).quality, '2160p HEVC Dolby Vision · Dolby Atmos');
+  assert.equal(mvQualityVars(video('1920x1080', 1, 'avc1.640028', 'PQ'), audios[2]).quality, '1080p H.264 HDR10 · HE-AAC 64kbps');
+  assert.equal(mvQualityVars(videos[0], audios[3]).codec, 'HEVC');
 });
 
 test('file name templates: padding, subfolders, sanitizing', () => {

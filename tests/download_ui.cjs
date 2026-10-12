@@ -2,6 +2,7 @@
 // Live: needs a running am-hook, wrapper-lite with the cn region and access to the Apple CDN (default http://127.0.0.1:8888).
 // Covers batch downloads: settings page, album download dialog → ZIP with iTunes tags / cover / lyrics, folder mode
 // (the directory picker is replaced by an OPFS directory), playlist numbering and .m3u8, the song page, the More menu,
+// music videos in an album (tagged .mp4, tracks one after another), the More menu on a music video,
 // cancel / retry and cleanup of temporary files.
 const assert = require('node:assert/strict');
 const { chromium } = require(process.argv[2] || 'playwright');
@@ -10,6 +11,8 @@ const { openPage } = require('./app.cjs');
 const base = (process.argv[3] || process.env.AM_HOOK_URL || 'http://127.0.0.1:8888').replace(/\/$/, '');
 const ALBUM = '/https://music.apple.com/cn/album/1989-taylors-version-deluxe/1713845538';
 const PLAYLIST = '/https://music.apple.com/cn/playlist/x/pl.d467987f72384448b2bebe52c0b212d6';
+// 第 23 首是 MV（96 秒）
+const MV_ALBUM = '/https://music.apple.com/cn/album/speak-now-taylors-version/1690839749';
 
 /** ZIP central directory → { name: Buffer } */
 function unzip(buf) {
@@ -101,7 +104,7 @@ async function pickTracks(page, indexes) {
       const { page, errors } = await newPage(browser);
       await openPage(page, `${base}/settings`);
       assert.equal(await page.locator('.nav-link[data-nav="settings"]').getAttribute('aria-current'), 'page');
-      for (const id of ['general', 'quality', 'save', 'naming', 'tags', 'cover', 'lyrics']) assert.ok(await page.locator(`#${id}`).count(), id);
+      for (const id of ['general', 'quality', 'mv', 'save', 'naming', 'tags', 'cover', 'lyrics']) assert.ok(await page.locator(`#${id}`).count(), id);
       await page.selectOption('#quality select >> nth=0', 'aac');
       assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('am-hook:settings')).download.codec), 'aac');
       await page.fill('.set-template >> nth=1', '{tracknum:02d}. {title}');
@@ -140,6 +143,73 @@ async function pickTracks(page, indexes) {
       assert.match(entries["1-02 Blank Space (Taylor's Version).lrc"].toString(), /^\[00:0\d\.\d\d\]Nice to meet you/);
       await page.click('.dlc-bar-main');
       assert.match(await page.locator('.dl-job-status').textContent(), /已保存/);
+      assert.deepEqual(errors, []);
+      await page.context().close();
+    }
+
+    // 专辑中的 MV：对话框中默认勾选，ZIP 中为带标签的 .mp4（stik 为音乐视频，封面为缩略图），各轨道依次写入（不交错）
+    {
+      const { page, errors } = await newPage(browser, { codec: 'aac', coverSize: 600, mvMax: 480, mvAudio: 'aac' });
+      await openPage(page, base + MV_ALBUM);
+      await page.waitForSelector('.detail-extra .detail-circle-btn:not([disabled])', { timeout: 30000 });
+      await page.click('.detail-extra .detail-circle-btn');
+      await page.locator('.menu .menu-label').filter({ hasText: /^下载专辑$/ }).click();
+      await page.waitForSelector('.dl-dialog[open]');
+      const mvItem = page.locator('.dl-dialog-item').filter({ has: page.locator('.dl-dialog-mv') });
+      assert.equal(await mvItem.count(), 1);
+      assert.ok(await mvItem.locator('input').isChecked(), 'MVs are checked by default');
+      // 「不含 MV」取消勾选，再点一次恢复
+      const toggle = page.locator('.dl-dialog-tools button').filter({ hasText: /MV/ });
+      await toggle.click();
+      assert.ok(!(await mvItem.locator('input').isChecked()));
+      await page.click('.dl-dialog-tools button:nth-of-type(2)');
+      await mvItem.locator('input').check();
+      const download = nextDownload(page);
+      await page.click('.dl-dialog-start');
+      const file = await download;
+      const entries = unzip(require('node:fs').readFileSync(await file.path()));
+      const name = "1-23 Surprise Announcement (Taylor's Version).mp4";
+      assert.deepEqual(Object.keys(entries).sort(), [name, 'cover.jpg']);
+      const buf = entries[name];
+      const { topLevel, tags } = mp4(buf);
+      assert.deepEqual(topLevel, ['ftyp', 'moov', 'mdat']);
+      assert.equal(buf.toString('latin1', 8, 12), 'isom');
+      assert.equal(tags['\xa9nam'], "Surprise Announcement (Taylor's Version)");
+      assert.equal(tags['\xa9alb'], "Speak Now (Taylor's Version)");
+      assert.deepEqual([...tags.stik], [6]);
+      assert.deepEqual([...tags.trkn.subarray(2, 6)], [0, 23, 0, 23]);
+      assert.equal(tags['----:PERFORMER'], 'Taylor Swift');
+      assert.equal(tags['----:UPC'], '00602455918284');
+      assert.equal(tags.cnID.readUInt32BE(0), 1690841286);
+      assert.ok(tags.covr.length > 5000, 'thumbnail embedded');
+      // 每个 trak 的 chunk 偏移：视频的全部在音频之前
+      const ranges = [];
+      for (let p = buf.indexOf('stco'); p > 0; p = buf.indexOf('stco', p + 4)) {
+        const n = buf.readUInt32BE(p + 8);
+        ranges.push([buf.readUInt32BE(p + 12), buf.readUInt32BE(p + 8 + 4 * n)]);
+      }
+      assert.ok(ranges.length >= 2);
+      for (let i = 1; i < ranges.length; i++) assert.ok(ranges[i][0] > ranges[i - 1][1], 'tracks one after another');
+      assert.match(await page.evaluate(() => window.AmDownloads.jobs[0].tasks[0].quality), /^MV · \d+p H\.264 · AAC 256kbps$/);
+      assert.deepEqual(errors, []);
+      await page.context().close();
+    }
+
+    // MV 的「更多」菜单：单独下载 MV
+    {
+      const { page, errors } = await newPage(browser, { mvMax: 480, mvAudio: 'aac' });
+      await openPage(page, base + MV_ALBUM);
+      await page.waitForSelector('.track .track-more');
+      // 菜单在页面滚动时关闭：先滚到 MV 这一行并等滚动结束
+      const more = page.locator('.track').filter({ hasText: 'Surprise Announcement' }).locator('.track-more');
+      await more.scrollIntoViewIfNeeded();
+      await page.waitForTimeout(800);
+      await more.click();
+      const download = nextDownload(page);
+      await page.locator('.menu .menu-label').filter({ hasText: /^下载 MV$/ }).click();
+      const file = await download;
+      assert.equal(file.suggestedFilename(), "Taylor Swift - Surprise Announcement (Taylor's Version).mp4");
+      assert.deepEqual([...mp4(require('node:fs').readFileSync(await file.path())).tags.stik], [6]);
       assert.deepEqual(errors, []);
       await page.context().close();
     }
@@ -239,7 +309,7 @@ async function pickTracks(page, indexes) {
       assert.deepEqual(errors, []);
       await page.context().close();
     }
-    console.log('Passed downloads: settings center, album ZIP with tags / cover / lyrics, folder mode with skip, playlist + m3u8, song page, More menu, cancel / retry, cleanup.');
+    console.log('Passed downloads: settings center, album ZIP with tags / cover / lyrics, folder mode with skip, playlist + m3u8, song page, More menu, music videos in an album and from the More menu, cancel / retry, cleanup.');
   } finally {
     await browser.close();
   }

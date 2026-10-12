@@ -329,7 +329,7 @@ impl Sink for HostFile {
 
 /// Converts the fragmented MP4 of host file `input` into a progressive MP4
 /// written to the empty host file `output`. `song` selects the reference song
-/// layout, otherwise the interleaved MV layout. `tags` (may be empty) are the
+/// ftyp, otherwise the MV ftyp; both write tracks one after another. `tags` (may be empty) are the
 /// iTunes items written into moov.udta.meta.ilst. Result: the output size as
 /// a big-endian u64.
 ///

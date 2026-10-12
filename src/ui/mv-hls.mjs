@@ -45,6 +45,42 @@ export function recommendedAudio(video, audios) {
   return audios.find(a => a['GROUP-ID'] === video.AUDIO && a.DEFAULT === 'YES')
     || audios.find(a => a['GROUP-ID'] === video.AUDIO) || audios[0];
 }
+// Track selection of the reference downloader (extractVideoVariant / extractMvAudio), used by batch
+// downloads and as the MV page's default: settings mvMax (height) and mvAudio (atmos / ac3 / aac).
+const height = v => Number(String(v.RESOLUTION || '').split('x')[1]) || 0;
+const bandwidth = v => Number(v['AVERAGE-BANDWIDTH'] || v.BANDWIDTH || 0);
+// Highest average bandwidth within max height; the lowest video when every one is taller.
+export function pickMvVideo(videos, max) {
+  const list = [...videos].sort((a, b) => bandwidth(b) - bandwidth(a));
+  return list.find(v => height(v) <= max) || list.sort((a, b) => height(a) - height(b))[0] || null;
+}
+// Higher is better; -1 means the group is not allowed for the audio type.
+function audioScore(group, type) {
+  const kbps = prefix => Number(group.slice(prefix.length)) || 0;
+  if (group === 'audio-atmos') return type === 'atmos' ? 10000 : -1;
+  if (group === 'audio-ac3') return type === 'aac' ? -1 : type === 'ac3' ? 10000 : 9000;
+  if (group.startsWith('audio-stereo-')) return 8000 + kbps('audio-stereo-');
+  if (group.startsWith('audio-HE-stereo-')) return 7000 + kbps('audio-HE-stereo-');
+  if (group.startsWith('audio-HE2-stereo-')) return 6000 + kbps('audio-HE2-stereo-');
+  return -1;
+}
+// Ties go to the larger _gr{n}_ in the URI.
+export function pickMvAudio(audios, type) {
+  const rank = a => Number((a.URI || a.url || '').match(/_gr(\d+)_/)?.[1]) || 0;
+  const list = audios.map(a => ({ a, score: audioScore(a['GROUP-ID'] || '', type) })).filter(x => x.score >= 0);
+  list.sort((x, y) => y.score - x.score || rank(y.a) - rank(x.a));
+  return list[0]?.a || null;
+}
+// File name variables codec / quality, e.g. "2160p HEVC Dolby Vision · Dolby Atmos".
+export function mvQualityVars(video, audio) {
+  const vc = (video.CODECS || '').split(',').find(c => /^(avc|hvc|hev|dvh|av01)/.test(c)) || '';
+  const codec = /^(hvc|hev|dvh)/.test(vc) ? 'HEVC' : /^av01/.test(vc) ? 'AV1' : 'H.264';
+  const range = /^dvh/.test(vc) ? 'Dolby Vision' : { PQ: 'HDR10', HLG: 'HLG' }[video['VIDEO-RANGE']] || '';
+  const group = audio['GROUP-ID'] || '', kbps = group.match(/-(\d+)$/)?.[1];
+  const sound = group === 'audio-atmos' ? 'Dolby Atmos' : /^ec-3/.test(audio.codec || '') ? 'E-AC-3'
+    : /^ac-3/.test(audio.codec || '') || group === 'audio-ac3' ? 'AC-3' : `${/HE2?-/.test(group) ? 'HE-AAC' : 'AAC'}${kbps ? ` ${kbps}kbps` : ''}`;
+  return { codec, quality: `${height(video)}p ${codec}${range ? ` ${range}` : ''} · ${sound}`, bit_depth: '', sample_rate: '', sample_rate_kHz: '' };
+}
 export function parseMedia(text, url) {
   if (!text.trimStart().startsWith('#EXTM3U')) throw new Error('Invalid HLS media playlist');
   const segments = []; let init, key, duration, range, time = 0, previous;

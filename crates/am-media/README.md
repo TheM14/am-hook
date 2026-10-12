@@ -15,9 +15,8 @@ The Rust server does not link it.
   `mdat`). Only sample tables are held in memory; sample data is copied from
   the input through `readahead`, which serves the parser's small reads from a
   read-ahead window and passes chunk copies through at their exact size.
-  - MV layout (`Options::mv`, MV downloads): `isom` brands, every track cut
-    into chunks of at most one second written in decode-time order, so video,
-    audio and captions for the same moment sit close together.
+  - MV layout (`Options::mv`, MV downloads): the reference `mv.Mux` output,
+    `isom` brands (`isom`, 0x200, `isom iso4`) with the song layout below.
   - Song layout (`Options::song`, song downloads): the reference
     `DefragmentMP4` of `internal/app/rip.go`, with the tag-compatible ftyp
     (`M4A `, 1, `M4A  mp42 isom iso5`), one chunk per source `trun` and

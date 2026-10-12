@@ -3,6 +3,7 @@
 // 与官网相同，assetTokens 中的各个未加密 MP4 由 <video> 直接播放，下载时原样保存，没有音频轨道可选
 import { parseMaster, recommendedAudio } from '/assets/mv/hls.mjs';
 import { fetchMaster, Playback, DirectPlayback, downloadMV, downloadDirect, mime, collectGarbage } from '/assets/mv/engine.mjs';
+import { mvTags } from '/assets/downloads.mjs';
 const { t } = AmI18n;
 
 export const bodyClass = 'mv-body';
@@ -16,7 +17,7 @@ export function mount({ root, url, signal, player: music, onLangChange }) {
   const postMatch = url.pathname.match(/^\/https:\/\/music\.apple\.com\/([a-z]{2})\/post\/(?:[^/]+\/)?(\d+)\/?$/);
   const post = !!postMatch;
   const [, country = 'us', id] = postMatch || url.pathname.match(/^\/https:\/\/music\.apple\.com\/([a-z]{2})\/music-video\/[^/]+\/(\d+)\/?$/) || [];
-  let master, selectedVideo, selectedAudio, playback, downloadController, result, resultUrl;
+  let master, selectedVideo, selectedAudio, playback, downloadController, result, resultUrl, resource;
   let statusKey = 'mv.loading', statusVars, title = `MV ${id || ''}`, artist = '', busy = false;
   // 状态点颜色：进行中闪烁，完成为绿色，失败为红色
   const STATES = { 'mv.loading': 'loading', 'mv.license': 'busy', 'mv.buffering': 'busy', 'mv.downloading': 'busy', 'mv.defrag': 'busy',
@@ -178,16 +179,17 @@ export function mount({ root, url, signal, player: music, onLangChange }) {
     try {
       // 经服务端 /amp 代理请求 amp-api 的 music-videos / uploaded-videos 资源，名称按曲库语言返回（l 见 AmI18n.catalogLang）
       const url = new URL(`/amp/v1/catalog/${country}/${post ? 'uploaded-videos' : 'music-videos'}/${id}`, location.origin);
-      if (!post) url.searchParams.set('include', 'artists');
+      if (!post) url.searchParams.set('include', 'albums,artists');
       const l = await AmI18n.catalogLang(country);
       if (l) url.searchParams.set('l', l);
       let res = await fetch(url, { signal });
       // 语言参数被拒绝时去掉 l，改用地区默认语言
       if (res.status === 400 && url.searchParams.has('l')) { url.searchParams.delete('l'); res = await fetch(url, { signal }); }
       if (!res.ok) return;
-      const resource = (await res.json()).data?.[0];
-      const item = resource?.attributes;
+      const data = (await res.json()).data?.[0];
+      const item = data?.attributes;
       if (!item || seq !== metadataSeq) return;
+      resource = data;
       // post 没有艺人，副标题为上传方（官网 subtitleLinks，如 Apple Music Presents）
       title = item.name || title; artist = (post ? item.uploadingBrandName : item.artistName) || '';
       if (signal.aborted) return;
@@ -255,6 +257,8 @@ export function mount({ root, url, signal, player: music, onLangChange }) {
       // post 的 MP4 未加密且已是标准 MP4（moov 在前），原样保存
       result = post ? await downloadDirect(selectedVideo.url, { signal: downloadController.signal, onProgress })
         : await downloadMV(id, selectedVideo, selectedAudio, { signal: downloadController.signal, onProgress,
+          // 标签与批量下载的 MV 相同（设置中心的嵌入字段与封面设置）；取不到元数据时不写
+          tags: resource ? () => mvTags(resource, downloadController.signal).catch(e => { console.warn('MV tags unavailable', e); return null; }) : null,
           onDefrag: () => { $('progress').removeAttribute('value'); status('mv.defrag'); } });
       resultUrl = URL.createObjectURL(result.file); $('save').href = resultUrl;
       $('save').download = `${title} (${id}).mp4`.replace(/[<>:"/\\|?*\x00-\x1f]/g, '_');

@@ -143,6 +143,7 @@ body.has-downloads.has-player { padding-bottom: calc(var(--player-height, 110px)
 .dl-dialog-num { flex: 0 0 22px; color: var(--faint); font-variant-numeric: tabular-nums; text-align: right; }
 .dl-dialog-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dl-dialog-artist { color: var(--muted); }
+.dl-dialog-mv { flex: 0 0 auto; padding: 0 4px; border: 1px solid currentColor; border-radius: 3px; color: var(--muted); font-size: 10px; font-weight: 600; line-height: 14px; }
 .dl-dialog-time { flex: 0 0 auto; color: var(--faint); font-variant-numeric: tabular-nums; }
 .dl-dialog-disc { padding: 10px 8px 4px; color: var(--muted); font-size: 12px; font-weight: 600; }
 .dl-dialog-foot { display: flex; justify-content: flex-end; gap: 10px; padding: 12px 18px 16px; border-top: 1px solid var(--line); }

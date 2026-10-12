@@ -60,7 +60,8 @@ const numericId = (v) => (present(v) && /^\d{1,19}$/.test(String(v)) ? String(v)
 /**
  * tags：{ title, artist, album, albumArtist, composer, genre, date, track: [n, total], disc: [n, total], lyrics,
  *   cover: { bytes, type }, copyright, label, upc, isrc, rating（0 无 / 1 explicit / 2 clean）, songId, albumId, artistId,
- *   compilation, sort: { title, artist, album, albumArtist, composer } }
+ *   compilation, sort: { title, artist, album, albumArtist, composer }, mediaType（stik：1 音乐，6 音乐视频，缺省为 1）,
+ *   custom: { 名称: 值 }（其他 com.apple.iTunes 自定义字段，如 MV 的 PERFORMER、RELEASETIME） }
  */
 export function buildIlst(tags) {
   const items = [];
@@ -85,8 +86,8 @@ export function buildIlst(tags) {
     items.push(item('disk', TYPE_BINARY, b));
   }
   add(tags.compilation, () => item('cpil', TYPE_INT, intBytes(1, 1)));
-  // 媒体类型：音乐
-  items.push(item('stik', TYPE_INT, intBytes(1, 1)));
+  // 媒体类型：音乐或音乐视频
+  items.push(item('stik', TYPE_INT, intBytes(tags.mediaType || 1, 1)));
   add(present(tags.rating), () => item('rtng', TYPE_INT, intBytes(tags.rating, 1)));
   add(present(tags.copyright), () => text('cprt', tags.copyright));
   if (present(tags.label)) {
@@ -95,6 +96,7 @@ export function buildIlst(tags) {
   }
   add(present(tags.isrc), () => freeform('ISRC', tags.isrc));
   add(present(tags.upc), () => freeform('UPC', tags.upc));
+  for (const [name, value] of Object.entries(tags.custom || {})) add(present(value), () => freeform(name, String(value)));
   const songId = numericId(tags.songId);
   const albumId = numericId(tags.albumId);
   const artistId = numericId(tags.artistId);
