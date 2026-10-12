@@ -329,16 +329,20 @@ impl Sink for HostFile {
 
 /// Converts the fragmented MP4 of host file `input` into a progressive MP4
 /// written to the empty host file `output`. `song` selects the reference song
-/// layout, otherwise the interleaved MV layout. Result: the output size as a
-/// big-endian u64.
+/// layout, otherwise the interleaved MV layout. `tags` (may be empty) are the
+/// iTunes items written into moov.udta.meta.ilst. Result: the output size as
+/// a big-endian u64.
+///
+/// # Safety
+/// `tags` must point to `tags_len` readable bytes.
 #[no_mangle]
-pub extern "C" fn media_defrag(input: u32, output: u32, song: i32) -> i32 {
+pub unsafe extern "C" fn media_defrag(input: u32, output: u32, song: i32, tags: *const u8, tags_len: usize) -> i32 {
     run(|_| {
         let mut out = HostFile { handle: output, pos: 0 };
         if out.size() != 0 {
             return Err(Error::new("defrag output is not empty"));
         }
-        let options = if song != 0 { Options::song() } else { Options::mv() };
+        let options = if song != 0 { Options::song() } else { Options::mv() }.with_tags(bytes(tags, tags_len).to_vec());
         defragment(HostFile { handle: input, pos: 0 }, &mut out, &options)?;
         Ok(out.pos.to_be_bytes().to_vec())
     })

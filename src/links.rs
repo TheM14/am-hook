@@ -116,6 +116,11 @@ pub fn is_library_path(path: &str) -> bool {
     LIBRARY_PATH_RE.is_match(path)
 }
 
+/// 是否为设置中心（`settings`，不含开头的 `/`；设置只保存在浏览器中），同样返回单页应用
+pub fn is_settings_path(path: &str) -> bool {
+    path == "settings" || path == "settings/"
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -213,6 +218,10 @@ mod tests {
         assert!(!is_library_path("library/playlist-folder/p.Ab3"));
         assert!(!is_library_path("library/other"));
         assert!(!is_library_path("library/artists/a/b"));
+        assert!(is_settings_path("settings"));
+        assert!(is_settings_path("settings/"));
+        assert!(!is_settings_path("settings/x"));
+        assert!(!is_settings_path("setting"));
         assert!(!is_editorial_link("https://music.apple.com/us/room/abc"));
         assert!(!is_editorial_link("https://music.apple.com/us/curator/name"));
         assert!(!is_editorial_link("https://music.apple.com/us/album/name/123"));

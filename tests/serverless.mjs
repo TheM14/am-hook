@@ -76,7 +76,7 @@ test('path checks match src/amp.rs, src/state.rs and src/links.rs', () => {
   }
 
   for (const page of [
-    '/', '/new', '/new/top-charts', '/new/top-charts/music-videos', '/library', '/library/songs', '/library/all-playlists/',
+    '/', '/new', '/new/top-charts', '/new/top-charts/music-videos', '/settings', '/settings/', '/library', '/library/songs', '/library/all-playlists/',
     '/library/artists/Taylor%20Swift', '/library/playlist/p.A1b2_c3-d4', '/library/favorite-songs', '/library/playlist-folder/f.Ab3_x',
     '/https://music.apple.com/us/song/name/123', '/https://music.apple.com/cn/music-video/x/1836358807',
     '/https://music.apple.com/cn/post/6814689986', '/https://music.apple.com/cn/album/1561058084',
@@ -85,7 +85,7 @@ test('path checks match src/amp.rs, src/state.rs and src/links.rs', () => {
     '/https://music.apple.com/us/curator/1019400049', '/https:/music.apple.com/us/album/lover/1468058165',
   ]) assert(isPagePath(page), page);
   for (const other of [
-    '/new/other', '/new/top-charts/x', '/top-charts', '/library/other', '/library/playlist/pl.123', '/library/artists/a/b',
+    '/new/other', '/new/top-charts/x', '/top-charts', '/settings/x', '/library/other', '/library/playlist/pl.123', '/library/artists/a/b',
     '/https://music.apple.com/us/album/name/abc', '/https://music.apple.com/us/music-video/123', '/https://music.apple.com/us/room/abc',
     '/https://music.apple.com/cn/new/top-charts/stations', '/http://music.apple.com/us/song/name/123', '/https://example.com/us/song/name/123',
     '/assets/missing.js', '/favicon.ico',

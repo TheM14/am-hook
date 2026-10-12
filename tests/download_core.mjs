@@ -1,0 +1,150 @@
+// 批量下载的纯函数部分：ZIP（含 ZIP64）、iTunes 标签（ilst）、文件名模板与音质选择。离线，只需 Node：
+//   node --test tests/download_core.mjs
+import test from 'node:test';
+import assert from 'node:assert/strict';
+import { buildZip, zipParts, crc32, crc32Blob } from '../src/ui/zip.mjs';
+import { buildIlst } from '../src/ui/mp4-tags.mjs';
+import { formatPath, formatName, sanitize } from '../src/ui/naming.mjs';
+
+const enc = new TextEncoder();
+
+/** 读出 ZIP 的中央目录：[{ name, crc, size, offset }]，并按本地文件头取出内容 */
+async function readZip(blob) {
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  const view = new DataView(buf.buffer);
+  let eocd = buf.length - 22;
+  assert.equal(view.getUint32(eocd, true), 0x06054b50);
+  let count = view.getUint16(eocd + 10, true);
+  let cdOffset = view.getUint32(eocd + 16, true);
+  if (cdOffset === 0xffffffff || count === 0xffff) {
+    const loc = eocd - 20;
+    assert.equal(view.getUint32(loc, true), 0x07064b50);
+    const rec = Number(view.getBigUint64(loc + 8, true));
+    assert.equal(view.getUint32(rec, true), 0x06064b50);
+    count = Number(view.getBigUint64(rec + 32, true));
+    cdOffset = Number(view.getBigUint64(rec + 48, true));
+  }
+  const out = [];
+  let p = cdOffset;
+  for (let i = 0; i < count; i++) {
+    assert.equal(view.getUint32(p, true), 0x02014b50);
+    const crc = view.getUint32(p + 16, true);
+    let size = view.getUint32(p + 24, true);
+    const nameLen = view.getUint16(p + 28, true);
+    const extraLen = view.getUint16(p + 30, true);
+    let offset = view.getUint32(p + 42, true);
+    const name = new TextDecoder().decode(buf.subarray(p + 46, p + 46 + nameLen));
+    if (extraLen) {
+      const x = p + 46 + nameLen;
+      assert.equal(view.getUint16(x, true), 1);
+      size = Number(view.getBigUint64(x + 4, true));
+      offset = Number(view.getBigUint64(x + 20, true));
+    }
+    assert.equal(view.getUint32(offset, true), 0x04034b50);
+    const localName = view.getUint16(offset + 26, true);
+    const localExtra = view.getUint16(offset + 28, true);
+    const start = offset + 30 + localName + localExtra;
+    out.push({ name, crc, size, data: buf.subarray(start, start + size) });
+    p += 46 + nameLen + extraLen;
+  }
+  return out;
+}
+
+test('crc32 matches the reference value', async () => {
+  assert.equal(crc32(enc.encode('123456789')), 0xcbf43926);
+  assert.equal(crc32(enc.encode('6789'), crc32(enc.encode('12345'))), 0xcbf43926);
+  assert.equal(await crc32Blob(new Blob([enc.encode('123456789')])), 0xcbf43926);
+});
+
+test('store-only zip round-trips entries, renames duplicates and keeps UTF-8 names', async () => {
+  const song = new Uint8Array(70_000).map((_, i) => i * 7);
+  const zip = await buildZip([
+    { name: '1-01 晴天.m4a', data: new Blob([song]), crc: crc32(song) },
+    { name: '1-01 晴天.lrc', data: enc.encode('[00:01.00]故事的小黄花') },
+    { name: 'cover.jpg', data: new Blob([enc.encode('jpeg')]) },
+    { name: 'cover.jpg', data: enc.encode('second') },
+  ]);
+  const entries = await readZip(zip);
+  assert.deepEqual(entries.map((e) => e.name), ['1-01 晴天.m4a', '1-01 晴天.lrc', 'cover.jpg', 'cover (2).jpg']);
+  assert.deepEqual([...entries[0].data], [...song]);
+  for (const e of entries) assert.equal(e.crc, crc32(e.data), e.name);
+});
+
+test('zip64 records are written when an offset passes 4 GiB', async () => {
+  // Only sizes matter for the layout: a stand-in for a 4.5 GiB file on disk.
+  const big = { size: 4.5 * 2 ** 30 };
+  const parts = await zipParts([{ name: 'big.m4a', data: big, crc: 0 }, { name: 'after.txt', data: enc.encode('x') }]);
+  assert.equal(parts[1], big);
+  const local2 = new DataView(parts[2].buffer);
+  assert.equal(local2.getUint32(0, true), 0x04034b50);
+  // The second entry starts past 4 GiB: its central record carries a zip64 extra with the real offset.
+  const cd2 = parts[5];
+  const v = new DataView(cd2.buffer);
+  assert.equal(v.getUint32(42, true), 0xffffffff);
+  const nameLen = v.getUint16(28, true);
+  // local header of big.m4a: 30 bytes + name (7) + zip64 extra (20), then the data
+  assert.equal(Number(v.getBigUint64(46 + nameLen + 20, true)), 30 + 'big.m4a'.length + 20 + big.size);
+  const tail = Buffer.concat(parts.slice(6).map((p) => Buffer.from(p))).toString('latin1');
+  assert.ok(tail.startsWith('PK\x06\x06'), 'zip64 end record');
+  assert.ok(tail.includes('PK\x06\x07'), 'zip64 locator');
+});
+
+/** ilst → [[type, payload]]（payload 为 data box 的值） */
+function items(ilst) {
+  const out = [];
+  const view = new DataView(ilst.buffer, ilst.byteOffset, ilst.byteLength);
+  for (let p = 0; p < ilst.length;) {
+    const size = view.getUint32(p);
+    const type = Buffer.from(ilst.subarray(p + 4, p + 8)).toString('latin1');
+    let q = p + 8;
+    if (type === '----') {
+      const meanSize = view.getUint32(q); q += meanSize;
+      const nameSize = view.getUint32(q);
+      const name = Buffer.from(ilst.subarray(q + 12, q + nameSize)).toString('utf8'); q += nameSize;
+      out.push([`----:${name}`, Buffer.from(ilst.subarray(q + 16, p + size)).toString('utf8')]);
+    } else {
+      assert.equal(Buffer.from(ilst.subarray(q + 4, q + 8)).toString('latin1'), 'data');
+      out.push([type, ilst.subarray(q + 16, p + size), view.getUint32(q + 8)]);
+    }
+    p += size;
+  }
+  return out;
+}
+
+test('ilst items use iTunes atoms and data types', () => {
+  const cover = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
+  const ilst = buildIlst({
+    title: '晴天', artist: '周杰伦', album: '叶惠美', albumArtist: '周杰伦', track: [3, 11], disc: [1, 1], date: '2003-07-31',
+    genre: '流行', rating: 1, songId: '536035716', albumId: '536035714', artistId: '300117743', label: 'JVR', isrc: 'TWK970300303',
+    upc: '0000', lyrics: '[00:01.00]x', cover: { bytes: cover, type: 'png' }, sort: { title: '晴天' }, empty: '',
+  });
+  const map = new Map(items(ilst).map(([k, ...v]) => [k, v]));
+  assert.equal(Buffer.from(map.get('\xa9nam')[0]).toString(), '晴天');
+  assert.equal(map.get('\xa9nam')[1], 1);
+  assert.deepEqual([...map.get('trkn')[0]], [0, 0, 0, 3, 0, 11, 0, 0]);
+  assert.deepEqual([...map.get('disk')[0]], [0, 0, 0, 1, 0, 1]);
+  assert.deepEqual([...map.get('rtng')[0]], [1]);
+  assert.equal(map.get('cnID')[0].length, 4);
+  assert.equal(new DataView(map.get('cnID')[0].buffer, map.get('cnID')[0].byteOffset).getUint32(0), 536035716);
+  assert.equal(map.get('plID')[0].length, 8);
+  assert.equal(map.get('covr')[1], 14);
+  assert.deepEqual([...map.get('covr')[0]], [...cover]);
+  assert.equal(map.get('----:ISRC')[0], 'TWK970300303');
+  assert.equal(map.get('----:LABEL')[0], 'JVR');
+  assert.equal(Buffer.from(map.get('sonm')[0]).toString(), '晴天');
+  assert.ok(!map.has('soar'));
+  assert.ok(map.has('stik'));
+});
+
+test('file name templates: padding, subfolders, sanitizing', () => {
+  const vars = { title: 'AC/DC: Back?', artist: 'AC/DC', album: 'X', tracknum: 3, disk: 1, explicit: '', index: 7 };
+  assert.deepEqual(formatPath('{disk}-{tracknum:02d} {title}', vars), ['1-03 AC_DC_ Back_']);
+  assert.deepEqual(formatPath('{artist}/{album}', vars), ['AC_DC', 'X']);
+  assert.deepEqual(formatPath('Disc {disk}/{tracknum:02d}. {title} {explicit}', vars), ['Disc 1', '03. AC_DC_ Back_']);
+  assert.deepEqual(formatPath('{index:03d} {nope}', vars), ['007 {nope}']);
+  assert.equal(formatName('{artist}/{album}', vars), 'AC_DC - X');
+  assert.deepEqual(formatPath('../{title}', { title: '' }), ['_']);
+  assert.equal(sanitize('CON'), '_CON');
+  assert.equal(sanitize('name. . '), 'name');
+  assert.equal([...sanitize('长'.repeat(300))].length, 180);
+});

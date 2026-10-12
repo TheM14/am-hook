@@ -10,6 +10,7 @@ import { mountSettings } from '/assets/settings.mjs';
 import * as library from '/assets/library.mjs';
 import { newPlaylist, newFolder, playlistName, folderName, LIB_ICON } from '/assets/views/library-ui.mjs';
 import { openMenu, createActions, nowPlayingTarget, songTarget } from '/assets/views/actions.mjs';
+import { mountDownloadCenter } from '/assets/download-center.mjs';
 
 const { AmPlayer } = window.AmHook;
 const { AmI18n, AmWrapper } = window;
@@ -51,6 +52,8 @@ function route(url) {
   if (url.pathname === '/') return 'home';
   // 「新发现」（跟随主地区）
   if (url.pathname === '/new') return 'new';
+  // 设置中心（与 src/links.rs 的 is_settings_path 相同）
+  if (/^\/settings\/?$/.test(url.pathname)) return 'settings';
   if (CHARTS_PATH.test(url.pathname)) return 'charts';
   if (LIBRARY_PATH.test(url.pathname)) return 'library';
   if (LIBRARY_PLAYLIST_PATH.test(url.pathname)) return 'library-playlist';
@@ -167,7 +170,7 @@ setNavExpanded(false);
  * 各榜单的「查看全部」仍标为排行榜；资料库按分类（library:songs 等），歌单与文件夹按地址（所在文件夹自动展开）
  */
 function syncNav(name, path) {
-  nav.classList.toggle('is-home', name === 'home' || name === 'new' || path === '/new/top-charts' || name === 'library' || name === 'library-playlist');
+  nav.classList.toggle('is-home', name === 'home' || name === 'new' || path === '/new/top-charts' || name === 'settings' || name === 'library' || name === 'library-playlist');
   const key = name === 'library' || path.startsWith('/library/favorite-songs') ? `library:${path.split('/')[2] || 'recently-added'}` : name;
   for (const link of nav.querySelectorAll('[data-nav]')) {
     if (link.dataset.nav === key) link.setAttribute('aria-current', 'page');
@@ -323,6 +326,10 @@ newButton.addEventListener('click', (event) => {
     { icon: LIB_ICON.newFolder, label: t('library.newFolderEllipsis'), onSelect: () => newFolder({ open: true, navigate: go, toast }) },
   ]);
 });
+
+/* ---------- 下载中心：与播放条一样常驻（download-center.mjs，下载由 downloads.mjs 管理） ---------- */
+const downloadCenter = mountDownloadCenter({ root: $('downloads'), navigate: (href) => navigate(href) });
+window.AmApp.downloads = downloadCenter;
 
 /* ---------- 设置：主地区与曲库语言的选择面板 ---------- */
 const settings = mountSettings({ picker: $('picker'), scrim: $('picker-scrim'), checkStatus: () => loadStatus() });
@@ -502,7 +509,7 @@ function stylesheet(href) {
 }
 
 /** 由播放条、歌词界面、导航菜单维护的 body 类名，切换页面时保留 */
-const APP_CLASSES = new Set(['has-player', 'lyrics-open', 'nav-open']);
+const APP_CLASSES = new Set(['has-player', 'has-downloads', 'lyrics-open', 'nav-open']);
 
 function unmount() {
   if (!current) return;
@@ -511,7 +518,7 @@ function unmount() {
   const { body } = document;
   for (const name of [...body.classList]) if (!APP_CLASSES.has(name)) body.classList.remove(name);
   // 页面在 body 上设置的样式变量（封面主色等）；播放条高度保留
-  for (const prop of [...body.style]) if (prop !== '--player-height') body.style.removeProperty(prop);
+  for (const prop of [...body.style]) if (prop !== '--player-height' && prop !== '--downloads-height') body.style.removeProperty(prop);
 }
 
 /**

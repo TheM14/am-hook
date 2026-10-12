@@ -123,9 +123,25 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
 ### 歌曲
 
 - 自动解析全部音质（无损 ALAC / 杜比全景声 / AAC / HE-AAC，含双耳、缩混版本），显示封面、歌名等信息（经服务端 `/amp` 代理请求 Apple Music 目录接口 amp-api）。
-- 每个音质的「更多」菜单中有 **下载解密文件**：在浏览器内解密，显示进度，可随时取消。离开歌曲页后下载在后台继续，完成后照常保存；回到该歌曲页时接着显示进度（关闭或刷新标签页会中断）。
+- 每个音质的「更多」菜单中有 **下载解密文件**：在浏览器内解密并写入标签、封面与歌词（按设置中心的下载设置），显示进度，可随时取消。离开歌曲页后下载在后台继续（进度也在下载中心），完成后照常保存；回到该歌曲页时接着显示进度（关闭或刷新标签页会中断）。
 - 内置播放器：MSE 加浏览器端解密。浏览器不支持 ALAC 时通过 FLAC-in-MP4 无损播放；EC-3 的 MSE 不可用时回退为多声道 PCM，并提示空间音频限制。下载保留原始编码。支持空格 / 方向键和系统媒体控制。
 - 歌词：正在播放的歌曲有歌词时，播放条上出现「歌词」按钮（在任何页面都能打开，切歌后自动换成新歌的歌词）。歌词视图由 [AMLL（Apple Music-like Lyrics）](https://github.com/amll-dev/applemusic-like-lyrics) 渲染：逐词 / 逐行高亮与弹簧滚动、和声、对唱、翻译与发音、间奏圆点，点击任意一行即可跳转。背景是 AMLL 由专辑封面生成的流动网格渐变，也可以选引入 AMLL 前的经典背景（仿 Apple Music 网页版，由多份旋转的封面经扭曲、模糊生成；浏览器不支持 WebGL 时也用它），Esc 收起。点击播放条的封面、标题或空白处展开全屏播放界面（没有歌词的歌曲也能展开，只显示封面与播放控件）。同 music.apple.com，界面里的标题旁有喜爱（☆）与「更多」按钮（添加到资料库、添加到歌单、前往专辑、复制链接）；右下角的歌词按钮（手机上在播放控件下方）显示 / 隐藏歌词；按钮的位置同 music.apple.com——关闭在左上角，歌词翻译在右上角，播放按钮没有底色、居中排成一行，歌名与艺人各占一行、过长时滚动；手机上同官网的手机版：顶部是收起界面的下拉把手，显示歌词时标题行收成一行小封面，底部只有上一首 / 播放 / 下一首，下面是歌词开关与待播清单开关——待播清单占据歌词的位置，随机 / 重复在清单标题旁；隐藏时封面与播放控件居中，这个选择保存在浏览器中。右上角的歌词选项按钮（原来只有翻译菜单）可以切换翻译与发音、调整字号（70%–150%）与字重（细体到特粗）、在 Apple Music 与 [AMLL 歌词库](https://amll.dev/reference/http-api/overview)之间切换歌词来源（由浏览器按 Apple Music 歌曲 ID 直接查询，未收录的歌曲仍用 Apple Music 歌词；不选它时不会向它发送请求）、在 AMLL 与经典背景之间切换，以及下载当前显示的 TTML 歌词；除翻译与发音外都保存在浏览器中。
+
+### 批量下载与设置中心
+
+- **设置中心**（`/settings`，侧边栏与手机菜单中「排行榜」下方的「设置」）：通用设置（主地区、曲库语言、界面语言、wrapper-lite，与导航底部相同）与下载设置，保存在 localStorage，修改立即生效（进行中的下载沿用开始时的设置），也为之后的播放设置预留了位置。下载设置参考 [apple-music-downloader](https://github.com/itouakirai/apple-music-downloader) 与 [amd.wol.moe](https://amd.wol.moe/)：
+  - 音质：首选音质（无损 ALAC / 杜比全景声 / AAC / AAC 双耳 / AAC 缩混 / HE-AAC）、ALAC 最高采样率、全景声上限（2768 / 2448）、没有首选音质时是否降级
+  - 性能：同时下载的曲目数、失败重试次数、是否用 OPFS 暂存
+  - 保存方式：**ZIP**（整张专辑 / 歌单一个文件，不压缩，超过 4 GiB 时为 ZIP64）、**文件夹**（File System Access API 直接写入选定的本地文件夹，可建子文件夹，可跳过已存在的文件；需要 Chrome / Edge 桌面版）、**逐个文件**；歌单可附带 `.m3u8` 播放列表
+  - 文件名模板：专辑 / 歌单文件夹（ZIP 名）、专辑曲目、歌单曲目、单曲；`/` 表示子文件夹，`{tracknum:02d}` 补零，变量有 `{title}` `{artist}` `{album}` `{album_artist}` `{composer}` `{genre}` `{tracknum}` `{tracktotal}` `{disk}` `{disktotal}` `{year}` `{release_date}` `{codec}` `{quality}` `{bit_depth}` `{sample_rate}` `{sample_rate_kHz}` `{explicit}` `{song_id}` `{album_id}` `{artist_id}` `{isrc}` `{upc}` `{record_label}` `{copyright}` `{playlist}` `{playlist_id}` `{curator}` `{index}`，编辑时实时预览；变量值里的 `/` 等非法字符替换为 `_`
+  - 标签：可选写入的字段（标题、艺人、专辑、专辑艺人、作曲、流派、发行日期、曲目号、碟号、歌词、封面、版权、厂牌、UPC、ISRC、分级、歌曲 / 专辑 / 艺人 ID），排序字段，歌单曲目使用原专辑信息或歌单信息，元数据语言
+  - 封面：JPEG / PNG / 原图、尺寸、另存 `cover.jpg`
+  - 歌词：另存 `.lrc` / `.ttml`、逐字（增强型 LRC）、附带翻译 / 发音、歌词语言
+- **下载**：专辑页与歌单页的下载按钮（播放、随机播放旁）打开对话框，可临时改音质并选择曲目（默认全部，MV 与未发行的曲目除外）；各处的「更多」菜单（曲目行、搜索结果、货架等）中的歌曲、专辑与歌单也可直接下载；歌曲页各音质的「下载解密文件」同样经下载管理器（`src/ui/downloads.mjs`）进行，带标签。
+  - 每首歌在浏览器内解密后，`media.wasm` 在整理为标准 MP4 时把 iTunes 标签（`moov.udta.meta.ilst`，字段同 go-mp4tag）连同封面、歌词一起写入 `moov`，不需要第二次改写文件；封面与歌词与音频同时获取，取不到时只是不写入
+  - 元数据来自 amp-api `songs?ids=…&include=albums,artists`（每 100 首一次请求）：作曲、ISRC、曲目号 / 碟号，以及所属专辑的 UPC、版权、厂牌与曲目数
+  - ZIP 不复制数据：由 OPFS 中的各个文件与头部拼成一个 Blob，CRC-32 在 defrag 写出时顺带计算
+- **下载中心**（`src/ui/download-center.mjs`）：与播放条一样常驻在页面底部（播放条上方），站内跳转时下载不中断；显示总进度、速度与当前任务，展开后列出各专辑 / 歌单 / 单曲及每首歌的状态，可以取消、重试（整个任务或单首）、有失败曲目时仍然保存已完成的部分、再次保存、移除。移除或关闭标签页时删除临时文件；下载进行中关闭标签页会提示。
 
 ### MV
 
@@ -188,6 +204,7 @@ box 处理：FairPlay 元数据 box（`sinf`、`senc`、`saiz`、`saio`、`pssh`
 | `GET /https://music.apple.com/<cc>/album/<slug>/<id>` | 专辑页（与 music.apple.com 相同的 `editorialVideo` 动态封面：宽屏方形、手机全宽 3:4；曲目列表、连续播放、相关推荐货架；数据来自与 music.apple.com 相同的 amp-api `albums` 请求）。带 `?i=` 的专辑链接与 music.apple.com 一样打开专辑页，选中（高亮）该曲目并滚动到它 |
 | `GET /https://music.apple.com/<cc>/playlist/<slug>/<pl.id>` | 歌单页（编辑歌单与公开的用户歌单：与专辑页相同的动态封面；曲目带封面、艺人、专辑列；连续播放；精选艺人、策展人的更多歌单货架；数据来自与 music.apple.com 相同的 amp-api `playlists` 请求，经 `/amp` 获取） |
 | `GET /https://music.apple.com/<cc>/artist/<slug>/<id>` | 艺人页（与 music.apple.com 相同的头部：按目录数据显示动态视频、通栏图片或圆形头像；最新发行、歌曲排行与连续播放、专辑 / MV / 歌单 / 相似艺人货架与「显示全部」、艺人简介；数据来自与 music.apple.com 相同的 amp-api `artists` 请求，经 `/amp` 获取）。歌曲页、MV 页、专辑页的艺人名（多位艺人时各自单独链接）与艺人货架都链接到这里 |
+| `GET /settings` | 设置中心（下载设置等）。服务端只返回单页应用，设置保存在浏览器中（`src/ui/prefs.mjs`） |
 | `GET /library[/<分类>]`、`GET /library/artists/<名称>`、`GET /library/playlist/p.<id>`、`GET /library/favorite-songs`、`GET /library/playlist-folder/f.<id>` | 资料库页面（分类 `recently-added`、`artists`、`albums`、`songs`、`music-videos`、`all-playlists`）、本地歌单、喜爱的歌曲与歌单文件夹。服务端只返回单页应用，资料库数据保存在浏览器的 IndexedDB 中（`src/ui/library.mjs`） |
 | `GET /new` | 新发现（侧边栏的「新发现」）：与 music.apple.com/{cc}/new 相同的编辑区块（amp-api `editorial/{cc}/groupings?name=music`），使用主地区，切换后重新加载——hero 大卡、四行曲目货架、专辑 / 歌单 / 电台 / 视频货架（列数与官网 shelf-grid 相同）与「探索更多」链接；`/https://music.apple.com/<cc>/new` 为固定地区 |
 | `GET /new/top-charts[/<kind>]` | 排行榜（新发现「探索更多」中的链接，与 music.apple.com/{cc}/new/top-charts 相同，amp-api `catalog/{cc}/charts`，使用主地区）：带名次的热门歌曲（三行）、城市排行榜、每周热门 100 首，以及带名次的热门歌单 / 专辑 / 视频。各榜单的「查看全部」（`songs`、`playlists`、`albums`、`music-videos`，另有 `city-charts`、`daily-global-top-charts`）列出整个榜单并滚动分页，歌曲与歌单页的榜单行相同；歌曲、专辑、视频榜可按类型筛选（`?genreId=`，类型来自 `catalog/{cc}/genres`）；`/https://music.apple.com/<cc>/new/top-charts[/<kind>]` 为固定地区 |
@@ -247,9 +264,9 @@ cargo test --test e2e_test -- --ignored
 
 | 类型 | 命令 |
 |---|---|
-| 离线，仅需 Node | `node --test tests/player_*.cjs`、`node tests/mv_hls.cjs`、`node tests/mv_captions.cjs`、`node --test tests/serverless.mjs`（serverless 后端与 `dist/` 的生成，CI 也会运行） |
+| 离线，仅需 Node | `node --test tests/player_*.cjs`、`node tests/mv_hls.cjs`、`node tests/mv_captions.cjs`、`node --test tests/serverless.mjs`（serverless 后端与 `dist/` 的生成，CI 也会运行）、`node --test tests/download_core.mjs`（ZIP / ZIP64、iTunes 标签、文件名模板） |
 | 离线，Playwright + Chrome 与本地 fixture | `node tests/ui_layout.cjs <playwright>`、`node tests/lyrics_ui.cjs <playwright>`、`node tests/mv_ui.cjs <playwright>`、`node tests/library_ui.cjs <playwright>`（资料库与歌单：添加、歌单、排序、刷新后保留、导出 / 导入与文件校验、喜爱、文件夹与拖放、数据库升级） |
-| 在线（需运行 am-hook、wrapper-lite 并能访问 Apple CDN） | `node tests/mv_live.cjs <playwright> [base]`、`node tests/mv_captions_live.cjs <playwright> [base]`、`node tests/alac_recovery.cjs <playwright>`、`node tests/alac_source_recovery.cjs <playwright>`、`node tests/search_ui.cjs <playwright> [base]`、`node tests/album_ui.cjs <playwright> [base]`、`node tests/playlist_ui.cjs <playwright> [base]`、`node tests/artist_ui.cjs <playwright> [base]`、`node tests/browse_ui.cjs <playwright> [base]`（需能访问 music.apple.com）、`node tests/app_ui.cjs <playwright> [base]`（单页应用：跳转后继续播放、队列、前进 / 后退、歌词） |
+| 在线（需运行 am-hook、wrapper-lite 并能访问 Apple CDN） | `node tests/mv_live.cjs <playwright> [base]`、`node tests/mv_captions_live.cjs <playwright> [base]`、`node tests/alac_recovery.cjs <playwright>`、`node tests/alac_source_recovery.cjs <playwright>`、`node tests/search_ui.cjs <playwright> [base]`、`node tests/album_ui.cjs <playwright> [base]`、`node tests/playlist_ui.cjs <playwright> [base]`、`node tests/artist_ui.cjs <playwright> [base]`、`node tests/browse_ui.cjs <playwright> [base]`（需能访问 music.apple.com）、`node tests/app_ui.cjs <playwright> [base]`（单页应用：跳转后继续播放、队列、前进 / 后退、歌词）、`node tests/download_ui.cjs <playwright> [base]`（批量下载：设置中心、专辑 ZIP 的标签 / 封面 / 歌词、文件夹模式、歌单与 .m3u8、取消 / 重试；需要 cn 地区的 wrapper-lite） |
 
 `<playwright>` 为 Playwright 包路径；在线测试的 `[base]` 省略时：MV 测试默认 `http://127.0.0.1:18888`，其余测试默认 `AM_HOOK_URL` 或 `http://127.0.0.1:8888`（ALAC 测试只读 `AM_HOOK_URL`）。
 
@@ -273,6 +290,9 @@ src/
     app.css / mv.css   样式
     i18n.js            中英文文案；主地区与曲库语言设置
     settings.mjs       主地区 / 曲库语言选择面板
+    prefs.mjs          设置中心的存储（下载设置等，localStorage）；页面在 views/settings.mjs
+    downloads.mjs      批量下载管理器（音质选择、元数据、封面与歌词、保存方式）；download-center.mjs 为常驻的下载中心，views/download-dialog.mjs 为专辑 / 歌单页的下载对话框
+    mp4-tags.mjs / zip.mjs / naming.mjs / lrc.mjs   iTunes 标签（ilst）、不压缩的 ZIP（含 ZIP64）、文件名模板、TTML 转 LRC
     library.mjs        资料库与歌单的存储（IndexedDB、标签页间同步、导入 / 导出格式与校验）；页面在 views/library*.mjs，共用的对话框与菜单在 views/library-ui.mjs
     player.js          歌曲播放器（MSE）与播放队列；页面视图经 scope() 使用常驻的播放器
     motion-art.mjs     专辑、歌单、艺人页的动态封面（editorialVideo HLS，MSE 播放）

@@ -52,6 +52,15 @@ pub static ASSETS: &[Asset] = &[
     // MV 与歌曲下载共用的媒体 Worker：PlayReady、CENC/CBCS 解密、合并与 defrag（crates/am-media-wasm 编译产物）
     asset!("/assets/media-worker.js", JS, "media-worker.js"),
     asset!("/assets/media.wasm", WASM, "media.wasm"),
+    // 批量下载（专辑 / 歌单 / 单曲）：下载管理器与下载中心、设置存储、MP4 标签、ZIP、文件名模板与 TTML 转 LRC
+    asset!("/assets/downloads.mjs", JS, "downloads.mjs"),
+    asset!("/assets/download-center.mjs", JS, "download-center.mjs"),
+    asset!("/assets/downloads.css", CSS, "downloads.css"),
+    asset!("/assets/prefs.mjs", JS, "prefs.mjs"),
+    asset!("/assets/mp4-tags.mjs", JS, "mp4-tags.mjs"),
+    asset!("/assets/zip.mjs", JS, "zip.mjs"),
+    asset!("/assets/naming.mjs", JS, "naming.mjs"),
+    asset!("/assets/lrc.mjs", JS, "lrc.mjs"),
     // FLAC 转码与 EC-3 解码
     asset!("/assets/flac-transcode-worker.js", JS, "flac-transcode-worker.js"),
     asset!("/assets/flac.wasm", WASM, "flac.wasm"),
@@ -101,6 +110,11 @@ pub static ASSETS: &[Asset] = &[
     asset!("/assets/views/library-playlist.mjs", JS, "views/library-playlist.mjs"),
     // 资料库的对话框、歌单封面拼图、导入与导出（导航与各页面共用）
     asset!("/assets/views/library-ui.mjs", JS, "views/library-ui.mjs"),
+    // 设置中心（下载设置等）与专辑 / 歌单页的下载对话框
+    asset!("/assets/views/settings.html", HTML, "views/settings.html"),
+    asset!("/assets/views/settings.mjs", JS, "views/settings.mjs"),
+    asset!("/assets/views/settings.css", CSS, "views/settings.css"),
+    asset!("/assets/views/download-dialog.mjs", JS, "views/download-dialog.mjs"),
 ];
 
 /// 以 `no-cache` + 内容 ETag 提供资源：每次使用前都向服务器确认（未变化时 304），

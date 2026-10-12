@@ -12,6 +12,7 @@
 //   extraItems：页面自己的菜单项（如「从歌单中删除」）；noPlay：菜单里不列出「播放」（正在播放的歌曲）
 import * as library from '/assets/library.mjs';
 import { LIB_ICON, playlistMenuItems, moveMenuItems } from './library-ui.mjs';
+import { downloads } from '../downloads.mjs';
 
 const { AmI18n } = window;
 const { t } = AmI18n;
@@ -25,7 +26,23 @@ export const ICON = {
   album: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="2.5"/></svg>',
   link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></svg>',
   apple: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
+  download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>',
 };
+
+/** 「更多」菜单里的下载（downloads.mjs，使用设置中心的下载设置）：歌曲、专辑与 Apple Music 歌单；不能下载时为 null */
+function downloadSpec(target) {
+  const r = target.resource;
+  if (target.kind === 'song') {
+    const id = (r && r.id) || (target.track && target.track.id);
+    if (!id || (r && !playable(r))) return null;
+    return { kind: 'song', id, country: target.country, tracks: r && r.attributes ? [r] : null };
+  }
+  if ((target.kind === 'album' || target.kind === 'playlist') && r && r.id) {
+    const c = target.collection;
+    return { kind: target.kind, id: r.id, country: target.country, resource: c ? c.resource : null, tracks: c ? c.tracks : null };
+  }
+  return null;
+}
 
 function el(tag, props = {}, ...children) {
   const node = Object.assign(document.createElement(tag), props);
@@ -547,6 +564,13 @@ export function createActions({ signal, player, navigate, toast }) {
       items.push({ icon: ICON.shuffle, label: t('action.shuffle'), onSelect: () => (target.onShuffle ? target.onShuffle() : play(target, button, true)) });
     }
     if (target.kind === 'song') items.push({ icon: ICON.quality, label: t('album.quality'), onSelect: () => navigate(target.href) });
+    const dl = downloadSpec(target);
+    if (dl) {
+      items.push({
+        icon: ICON.download, label: t(`dlc.menu.${target.kind}`),
+        onSelect: () => downloads.add(dl).then((job) => { if (job) toast(t('dlc.added', { name: target.name })); }, (err) => toast(err.message)),
+      });
+    }
     if (target.albumHref) items.push({ icon: ICON.album, label: t('action.goAlbum'), onSelect: () => navigate(target.albumHref) });
     const lib = libraryItems(target, button);
     if (lib.length) items.push(...(items.length ? ['-'] : []), ...lib);

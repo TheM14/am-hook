@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## Unreleased
+
+### New
+- ✨ Settings (`/settings`, below Top Charts in the sidebar and the phone menu): general and download settings (quality, performance, save mode, file name templates, tags, cover art, lyrics), stored in the browser
+- ✨ Batch downloads of albums and playlists: the download button on album and playlist pages picks the quality and tracks; songs, albums and playlists can also be downloaded from every More menu
+  - Full iTunes tags, cover art and lyrics (LRC, optionally word-timed, with translation / pronunciation lines), plus optional `cover.jpg` and `.lrc` / `.ttml` files
+  - Saved as a ZIP (with ZIP64), into a local folder (File System Access API, optionally skipping existing files) or as separate files; playlists can include an `.m3u8`
+- ✨ Download center: stays at the bottom like the player bar with overall progress and speed, and expands to every track's progress with cancel, retry, save again and remove
+
+### Changed
+- "Download decrypted file" on the song page now goes through the download manager, so it is tagged with metadata, cover art and lyrics and shows in the download center
+- The `media.wasm` defrag can write ilst tags while building `moov` (`media_defrag` takes a tags argument) and computes CRC-32 while writing
+
 ## v0.3.2 (2026-10-10)
 
 ### New

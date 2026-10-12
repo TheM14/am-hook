@@ -331,18 +331,19 @@
       this.worker = null;
     }
 
-    /** 把 fMP4 解碎片到同目录新文件并删除 fMP4，返回最终 File */
-    async defrag(signal) {
+    /** 把 fMP4 解碎片到同目录新文件（同时写入 tags）并删除 fMP4，返回 { file, crc } */
+    async defrag(signal, tags) {
       const input = this.name;
       this.output = input.replace(/\.m4a$/, '-defrag.m4a');
+      let result;
       try {
-        await defragInWorker([input, this.output, OPFS_DIR], signal);
+        result = await defragInWorker([input, this.output, OPFS_DIR, tags], signal);
       } finally {
         await removeOpfsFile(input);
       }
       this.name = this.output;
       this.output = null;
-      return (await (await opfsDir()).getFileHandle(this.name)).getFile();
+      return { file: await (await (await opfsDir()).getFileHandle(this.name)).getFile(), crc: result.crc };
     }
 
     async abort() {
@@ -378,10 +379,11 @@
     }
 
     /** 无 OPFS 时 Worker 直接读 Blob、返回新 Blob */
-    defrag(signal) {
+    async defrag(signal, tags) {
       const blob = this.blob;
       this.blob = null;
-      return defragInWorker([blob], signal);
+      const { blob: file, crc } = await defragInWorker([blob, tags], signal);
+      return { file, crc };
     }
 
     abort() {
@@ -392,8 +394,8 @@
     cleanup() {}
   }
 
-  async function openSink(size) {
-    if (opfsSupported()) {
+  async function openSink(size, memory) {
+    if (!memory && opfsSupported()) {
       await collectGarbage();
       try {
         return await OpfsSink.open(size);
@@ -406,7 +408,8 @@
 
   /**
    * 在媒体 Worker 中运行参考实现的 DefragmentMP4（歌曲用法：M4A ftyp、每个 trun 一个 chunk、
-   * 不做 MV 那样的按时间交错）。args 为 [输入文件名, 输出文件名, OPFS 目录] 或 [Blob]；取消时直接终止 Worker。
+   * 不做 MV 那样的按时间交错）。args 为 [输入文件名, 输出文件名, OPFS 目录, tags] 或 [Blob, tags]
+   * （tags 为 ilst 条目，见 mp4-tags.mjs，可省略）；结果带输出的 CRC-32；取消时直接终止 Worker。
    */
   function defragInWorker(args, signal) {
     signal.throwIfAborted();
@@ -427,10 +430,12 @@
   /**
    * 下载并解密整条轨道并解碎片，约定与 MV 的 downloadMV 相同。
    * onProgress(doneBytes, totalBytes)；onDefrag() 在开始解碎片时调用；
-   * 返回 { file, storage: 'opfs' | 'memory', size, dispose }：由页面保存 file，
+   * tags：解碎片时写入的 iTunes 标签（ilst 条目，见 mp4-tags.mjs），也可以是返回它的异步函数（分段下载完后调用，
+   * 封面、歌词等因此可以与下载同时获取）；memory：不使用 OPFS。
+   * 返回 { file, storage: 'opfs' | 'memory', size, crc, dispose }：由页面保存 file（crc 为其 CRC-32，未知时为 null），
    * 不再需要时调用 dispose() 删除 OPFS 临时文件并释放 Web Lock。
    */
-  async function download(track, { signal, onProgress, onDefrag } = {}) {
+  async function download(track, { signal, onProgress, onDefrag, tags, memory } = {}) {
     const ctl = new AbortController();
     const onAbort = () => ctl.abort(signal.reason);
     if (signal) {
@@ -438,7 +443,7 @@
       signal.addEventListener('abort', onAbort, { once: true });
     }
     const pieces = [track.init, ...track.segments];
-    const sink = await openSink(track.size);
+    const sink = await openSink(track.size, memory);
     let next = 0;
     let done = 0;
     const lane = async () => {
@@ -459,9 +464,11 @@
         throw err;
       })));
       await sink.finish();
+      const ilst = typeof tags === 'function' ? await tags() : tags;
+      ctl.signal.throwIfAborted();
       if (onDefrag) onDefrag();
-      const file = await sink.defrag(ctl.signal);
-      return { file, storage: sink.kind, size: file.size, dispose: () => sink.cleanup() };
+      const { file, crc } = await sink.defrag(ctl.signal, ilst || undefined);
+      return { file, storage: sink.kind, size: file.size, crc: crc ?? null, dispose: () => sink.cleanup() };
     } catch (err) {
       ctl.abort(err);
       await sink.abort();

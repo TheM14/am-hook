@@ -1,0 +1,284 @@
+// 设置中心（/settings），由 app.mjs 挂载。通用设置（主地区、曲库语言、界面语言、wrapper-lite）沿用导航底部的选择面板；
+// 下载设置（音质、保存方式、文件名、标签、封面、歌词）保存在 prefs.mjs，修改立即生效（进行中的下载沿用开始时的设置）。
+import { prefs, OPTIONS, TAG_FIELDS, DEFAULTS } from '../prefs.mjs';
+import { formatPath, TEMPLATE_VARS } from '../naming.mjs';
+import { downloads } from '../downloads.mjs';
+
+const { AmI18n, AmDecrypt } = window;
+const { t } = AmI18n;
+
+export const bodyClass = 'settings-page';
+export const styles = ['/assets/views/settings.css'];
+
+function el(tag, props = {}, ...children) {
+  const node = Object.assign(document.createElement(tag), props);
+  node.append(...children.filter((c) => c !== null && c !== undefined && c !== false));
+  return node;
+}
+
+/** 文件名模板的预览：一首虚构的歌 */
+const SAMPLE = {
+  title: 'Blank Space', artist: 'Taylor Swift', album: "1989 (Taylor's Version)", album_artist: 'Taylor Swift',
+  composer: 'Taylor Swift, Max Martin & Shellback', genre: 'Pop', tracknum: 2, tracktotal: 21, disk: 1, disktotal: 1,
+  year: '2023', release_date: '2023-10-27', codec: 'ALAC', quality: 'ALAC 24bit 48kHz', bit_depth: 24, sample_rate: 48000,
+  sample_rate_kHz: '48', explicit: '', song_id: '1713845737', album_id: '1713845538', artist_id: '159260351',
+  isrc: 'USUG12306673', upc: '00602458807400', record_label: 'Taylor Swift', copyright: '℗ 2023 Taylor Swift',
+  playlist: "Today's Hits", playlist_id: 'pl.f4d106fed2bd41149aaacabb233eb5eb', curator: 'Apple Music', index: 7,
+};
+
+export function mount({ root, signal, onLangChange, toast }) {
+  document.title = `${t('set.title')} · am-hook`;
+  const host = root.querySelector('#download');
+  /** 控件：每项设置变化后刷新显示（正在输入的文本框除外） */
+  const controls = [];
+  let lastTemplate = null;
+  let resetArmed = false;
+
+  const get = () => prefs.get('download');
+  const set = (patch) => prefs.set('download', patch);
+
+  /* ---------- 控件 ---------- */
+  function row(label, desc, control, { id, wide } = {}) {
+    const node = el('div', { className: `set-row${wide ? ' set-row-wide' : ''}` },
+      el('span', { className: 'set-label' }, el('span', { textContent: label, id: id ? `${id}-label` : '' }), desc ? el('span', { className: 'set-desc', textContent: desc }) : null),
+      el('div', { className: 'set-control' }, control));
+    return node;
+  }
+
+  function select(key, options) {
+    const node = el('select', { className: 'set-select' }, ...options.map(([value, label]) => el('option', { value: String(value), textContent: label })));
+    node.addEventListener('change', () => set({ [key]: typeof DEFAULTS.download[key] === 'number' ? Number(node.value) : node.value }));
+    controls.push((v) => { node.value = String(v[key]); });
+    return node;
+  }
+
+  function toggle(key, label) {
+    const input = el('input', { type: 'checkbox', className: 'set-switch-input' });
+    input.setAttribute('role', 'switch');
+    input.setAttribute('aria-label', label);
+    input.addEventListener('change', () => set({ [key]: input.checked }));
+    controls.push((v) => { input.checked = !!v[key]; });
+    return el('label', { className: 'set-switch' }, input, el('span', { className: 'set-switch-track', ariaHidden: 'true' }));
+  }
+
+  function number(key, min, max, label) {
+    const input = el('input', { type: 'number', className: 'set-input set-number', min, max, step: 1 });
+    input.setAttribute('aria-label', label);
+    input.addEventListener('change', () => {
+      const n = Math.round(Number(input.value));
+      if (Number.isFinite(n)) set({ [key]: Math.min(max, Math.max(min, n)) });
+      input.value = String(get()[key]);
+    });
+    controls.push((v) => { if (document.activeElement !== input) input.value = String(v[key]); });
+    return input;
+  }
+
+  function text(key, placeholder, label, pattern) {
+    const input = el('input', { type: 'text', className: 'set-input', placeholder, spellcheck: false, autocomplete: 'off' });
+    input.setAttribute('aria-label', label);
+    input.addEventListener('change', () => {
+      const value = input.value.trim();
+      if (pattern && value && !pattern.test(value)) { toast(t('set.invalid')); input.value = get()[key]; return; }
+      set({ [key]: value });
+    });
+    controls.push((v) => { if (document.activeElement !== input) input.value = v[key]; });
+    return input;
+  }
+
+  function segmented(key, options, label) {
+    const group = el('div', { className: 'set-segmented', role: 'radiogroup' });
+    group.setAttribute('aria-label', label);
+    const buttons = options.map(([value, text, disabled]) => {
+      const b = el('button', { type: 'button', className: 'set-segment', textContent: text, disabled: !!disabled });
+      b.setAttribute('role', 'radio');
+      b.addEventListener('click', () => set({ [key]: value }));
+      group.append(b);
+      return [value, b];
+    });
+    controls.push((v) => { for (const [value, b] of buttons) b.setAttribute('aria-checked', String(v[key] === value)); });
+    return group;
+  }
+
+  function template(key, label, kind) {
+    const input = el('input', { type: 'text', className: 'set-input set-template', spellcheck: false, autocomplete: 'off' });
+    input.setAttribute('aria-label', label);
+    const preview = el('div', { className: 'set-preview' });
+    const update = () => {
+      const value = input.value.trim() || DEFAULTS.download[key];
+      const path = formatPath(value, SAMPLE);
+      preview.textContent = kind === 'file' ? `${path.join('/')}.m4a` : kind === 'zip' ? `${path.join(' - ')}.zip  ·  ${path.join('/')}/` : path.join('/');
+    };
+    input.addEventListener('focus', () => { lastTemplate = input; });
+    input.addEventListener('input', update);
+    input.addEventListener('change', () => { set({ [key]: input.value.trim() || DEFAULTS.download[key] }); });
+    controls.push((v) => { if (document.activeElement !== input) input.value = v[key]; update(); });
+    const reset = el('button', { type: 'button', className: 'set-mini', textContent: t('set.default'), title: DEFAULTS.download[key] });
+    reset.addEventListener('click', () => { input.value = DEFAULTS.download[key]; set({ [key]: DEFAULTS.download[key] }); });
+    return el('div', { className: 'set-template-box' }, el('div', { className: 'set-template-line' }, input, reset), preview);
+  }
+
+  function section(id, titleKey, ...rows) {
+    return el('section', { className: 'set-group', id }, el('h2', { className: 'set-group-title', textContent: t(titleKey) }), el('div', { className: 'set-card' }, ...rows));
+  }
+
+  /* ---------- 各分组 ---------- */
+  function render() {
+    controls.length = 0;
+    const o = OPTIONS.download;
+    const opfs = AmDecrypt.opfsSupported();
+
+    const quality = section('quality', 'set.quality',
+      row(t('set.codec'), t('set.codecDesc'), select('codec', o.codec.map((c) => [c, t(`set.codec.${c}`)]))),
+      row(t('set.alacMax'), t('set.alacMaxDesc'), select('alacMax', o.alacMax.map((n) => [n, `${n / 1000} kHz`]))),
+      row(t('set.atmosMax'), t('set.atmosMaxDesc'), select('atmosMax', o.atmosMax.map((n) => [n, `${n} (${n % 1000} kbps)`]))),
+      row(t('set.fallback'), t('set.fallbackDesc'), toggle('fallback', t('set.fallback'))));
+
+    const performance = section('performance', 'set.performance',
+      row(t('set.concurrency'), t('set.concurrencyDesc'), number('concurrency', 1, 6, t('set.concurrency'))),
+      row(t('set.retries'), t('set.retriesDesc'), number('retries', 0, 5, t('set.retries'))),
+      row(t('set.opfs'), opfs ? t('set.opfsDesc') : t('set.opfsUnsupported'), toggle('opfs', t('set.opfs'))));
+
+    // 保存方式：文件夹需要 File System Access API（Chrome / Edge 桌面版）
+    const folderName = el('span', { className: 'set-folder-name' });
+    const pick = el('button', { type: 'button', className: 'set-btn' });
+    pick.addEventListener('click', async () => {
+      try { await downloads.folder.pick(); syncFolder(); } catch (err) { if (err && err.name !== 'AbortError') toast(err.message); }
+    });
+    const forget = el('button', { type: 'button', className: 'set-btn set-btn-plain', textContent: t('set.folderForget') });
+    forget.addEventListener('click', async () => { await downloads.folder.forget(); syncFolder(); });
+    function syncFolder() {
+      const name = downloads.folder.name();
+      folderName.textContent = name || t('set.folderNone');
+      folderName.classList.toggle('is-empty', !name);
+      pick.textContent = t(name ? 'set.folderChange' : 'set.folderPick');
+      forget.hidden = !name;
+    }
+    downloads.folder.ready.then(syncFolder);
+    syncFolder();
+    const folderRow = row(t('set.folder'), t('set.folderDesc'), el('div', { className: 'set-folder' }, folderName, pick, forget));
+    const skipRow = row(t('set.skipExisting'), t('set.skipExistingDesc'), toggle('skipExisting', t('set.skipExisting')));
+    const save = section('save', 'set.save',
+      row(t('set.saveMode'), downloads.folder.supported ? t('set.saveModeDesc') : t('set.saveModeNoFolder'), segmented('saveMode', [
+        ['zip', t('set.mode.zip')], ['folder', t('set.mode.folder'), !downloads.folder.supported], ['files', t('set.mode.files')],
+      ], t('set.saveMode')), { wide: true }),
+      folderRow, skipRow,
+      row(t('set.m3u'), t('set.m3uDesc'), toggle('m3u', t('set.m3u'))));
+    controls.push((v) => {
+      const folder = v.saveMode === 'folder' && downloads.folder.supported;
+      folderRow.hidden = !folder;
+      skipRow.hidden = !folder;
+    });
+
+    // 文件名：模板 + 预览；点击变量插入到最近编辑的模板中
+    const chips = el('div', { className: 'set-vars' }, ...TEMPLATE_VARS.map((name) => {
+      const chip = el('button', { type: 'button', className: 'set-var', textContent: `{${name}}`, title: t(`set.var.${name}`) });
+      chip.addEventListener('mousedown', (e) => e.preventDefault()); // 保留文本框的焦点与光标
+      chip.addEventListener('click', () => {
+        const input = lastTemplate;
+        if (!input) return;
+        const token = name === 'tracknum' || name === 'index' ? `{${name}:02d}` : `{${name}}`;
+        const start = input.selectionStart ?? input.value.length;
+        const end = input.selectionEnd ?? start;
+        input.setRangeText(token, start, end, 'end');
+        input.dispatchEvent(new Event('input'));
+        input.dispatchEvent(new Event('change'));
+        input.focus();
+      });
+      return chip;
+    }));
+    const naming = section('naming', 'set.naming',
+      row(t('set.albumFolder'), t('set.albumFolderDesc'), template('albumFolder', t('set.albumFolder'), 'zip'), { wide: true }),
+      row(t('set.songFile'), t('set.songFileDesc'), template('songFile', t('set.songFile'), 'file'), { wide: true }),
+      row(t('set.playlistFolder'), '', template('playlistFolder', t('set.playlistFolder'), 'zip'), { wide: true }),
+      row(t('set.playlistFile'), '', template('playlistFile', t('set.playlistFile'), 'file'), { wide: true }),
+      row(t('set.singleFile'), t('set.singleFileDesc'), template('singleFile', t('set.singleFile'), 'file'), { wide: true }),
+      el('div', { className: 'set-row set-row-wide set-vars-row' },
+        el('span', { className: 'set-label' }, el('span', { textContent: t('set.vars') }), el('span', { className: 'set-desc', textContent: t('set.varsDesc') })),
+        chips));
+
+    // 标签：嵌入字段
+    const checks = TAG_FIELDS.map((field) => {
+      const input = el('input', { type: 'checkbox' });
+      input.addEventListener('change', () => {
+        const embed = new Set(get().embed);
+        if (input.checked) embed.add(field); else embed.delete(field);
+        set({ embed: [...embed] });
+      });
+      controls.push((v) => { input.checked = v.embed.includes(field); });
+      return el('label', { className: 'set-check' }, input, el('span', { textContent: t(`set.field.${field}`) }));
+    });
+    const all = el('button', { type: 'button', className: 'set-mini', textContent: t('set.all') });
+    all.addEventListener('click', () => set({ embed: [...TAG_FIELDS] }));
+    const none = el('button', { type: 'button', className: 'set-mini', textContent: t('set.none') });
+    none.addEventListener('click', () => set({ embed: [] }));
+    const tags = section('tags', 'set.tags',
+      el('div', { className: 'set-row set-row-wide' },
+        el('span', { className: 'set-label' }, el('span', { textContent: t('set.embed') }), el('span', { className: 'set-desc', textContent: t('set.embedDesc') })),
+        el('div', { className: 'set-control set-checks-box' }, el('div', { className: 'set-checks' }, ...checks), el('div', { className: 'set-mini-row' }, all, none))),
+      row(t('set.sortTags'), t('set.sortTagsDesc'), toggle('sortTags', t('set.sortTags'))),
+      row(t('set.playlistAlbumInfo'), t('set.playlistAlbumInfoDesc'), toggle('playlistAlbumInfo', t('set.playlistAlbumInfo'))),
+      row(t('set.metaLang'), t('set.metaLangDesc'), text('metaLang', t('set.followCatalog'), t('set.metaLang'), /^[A-Za-z0-9-]{1,35}$/)));
+
+    const sizeInput = number('coverSize', 100, 10000, t('set.coverSize'));
+    const cover = section('cover', 'set.cover',
+      row(t('set.coverFormat'), t('set.coverFormatDesc'), select('coverFormat', o.coverFormat.map((f) => [f, t(`set.coverFormat.${f}`)]))),
+      row(t('set.coverSize'), t('set.coverSizeDesc'), sizeInput),
+      row(t('set.saveCover'), t('set.saveCoverDesc'), toggle('saveCover', t('set.saveCover'))));
+    controls.push((v) => { sizeInput.disabled = v.coverFormat === 'original'; });
+
+    const lyrics = section('lyrics', 'set.lyrics',
+      row(t('set.saveLyrics'), t('set.saveLyricsDesc'), toggle('saveLyrics', t('set.saveLyrics'))),
+      row(t('set.lyricsFormat'), t('set.lyricsFormatDesc'), select('lyricsFormat', o.lyricsFormat.map((f) => [f, `.${f}`]))),
+      row(t('set.syllable'), t('set.syllableDesc'), toggle('syllable', t('set.syllable'))),
+      row(t('set.lyricsTranslation'), t('set.lyricsTranslationDesc'), toggle('lyricsTranslation', t('set.lyricsTranslation'))),
+      row(t('set.lyricsPronunciation'), t('set.lyricsPronunciationDesc'), toggle('lyricsPronunciation', t('set.lyricsPronunciation'))),
+      row(t('set.lyricsLang'), t('set.lyricsLangDesc'), text('lyricsLang', t('set.followMeta'), t('set.lyricsLang'), /^[A-Za-z0-9-]{1,35}$/)));
+
+    const reset = el('button', { type: 'button', className: 'set-btn set-btn-danger', textContent: t('set.reset') });
+    reset.addEventListener('click', () => {
+      if (!resetArmed) {
+        resetArmed = true;
+        reset.textContent = t('set.resetConfirm');
+        setTimeout(() => { resetArmed = false; if (reset.isConnected) reset.textContent = t('set.reset'); }, 4000);
+        return;
+      }
+      resetArmed = false;
+      prefs.reset('download');
+      toast(t('set.resetDone'));
+      render();
+    });
+    const center = el('button', { type: 'button', className: 'set-btn', textContent: t('set.openCenter') });
+    center.addEventListener('click', () => window.AmApp.downloads.open());
+    center.hidden = !downloads.jobs.length;
+    const footer = el('div', { className: 'set-footer' }, center, reset);
+
+    host.replaceChildren(
+      el('h2', { className: 'set-part-title', textContent: t('set.download') }),
+      el('p', { className: 'set-part-desc', textContent: t('set.downloadDesc') }),
+      quality, performance, save, naming, tags, cover, lyrics, footer);
+
+    // 目录
+    const groups = [['general', 'set.general'], ['quality', 'set.quality'], ['save', 'set.save'], ['naming', 'set.naming'], ['tags', 'set.tags'], ['cover', 'set.cover'], ['lyrics', 'set.lyrics']];
+    root.querySelector('#toc').replaceChildren(...groups.map(([id, key]) => {
+      const a = el('a', { href: `#${id}`, className: 'set-toc-link', textContent: t(key) });
+      a.addEventListener('click', (e) => { e.preventDefault(); root.querySelector(`#${id}`).scrollIntoView({ behavior: 'smooth', block: 'start' }); });
+      return a;
+    }));
+    sync();
+  }
+
+  function sync() {
+    const v = get();
+    for (const fn of controls) fn(v);
+  }
+
+  const off = prefs.onChange((section) => { if (section === 'download') sync(); });
+  signal.addEventListener('abort', off, { once: true });
+  const offDl = downloads.onChange(() => {
+    const center = host.querySelector('.set-footer .set-btn:not(.set-btn-danger)');
+    if (center) center.hidden = !downloads.jobs.length;
+  });
+  signal.addEventListener('abort', offDl, { once: true });
+  onLangChange(() => { document.title = `${t('set.title')} · am-hook`; render(); });
+  render();
+}

@@ -162,6 +162,7 @@ fn describe(path: &str, query: &str) -> Entry {
     }
     match path {
         "/" => return Entry::new("page", "home"),
+        "/settings" | "/settings/" => return Entry::new("page", "settings"),
         "/status" => return Entry::new("status", "wrapper-lite").quiet(),
         "/key" => return Entry::new("key", format!("adamId {}", query_param(query, "adamId").unwrap_or_default())),
         "/mv/license" => return Entry::new("mv", "license"),
@@ -387,6 +388,7 @@ mod tests {
         assert_eq!(describe("/new/top-charts/songs", "genreId=20").detail, "new/top-charts/songs genre 20");
         assert_eq!(describe("/new/top-charts/unknown", "").kind, "other");
         assert_eq!(describe("/library", "").detail, "library");
+        assert_eq!(describe("/settings", "").detail, "settings");
         assert_eq!(describe("/library/songs", "").detail, "library/songs");
         assert_eq!(describe("/library/playlist/p.abc", "").detail, "library/playlist/p.abc");
         assert_eq!(describe("/library/favorite-songs", "").detail, "library/favorite-songs");

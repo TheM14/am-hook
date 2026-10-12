@@ -16,6 +16,7 @@
     { "source": "/new", "destination": "/index.html" },
     { "source": "/new/top-charts", "destination": "/index.html" },
     { "source": "/new/top-charts/:kind", "destination": "/index.html" },
+    { "source": "/settings", "destination": "/index.html" },
     { "source": "/library", "destination": "/index.html" },
     { "source": "/library/:section", "destination": "/index.html" },
     { "source": "/library/:section/:__id", "destination": "/index.html" }

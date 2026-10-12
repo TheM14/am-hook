@@ -32,17 +32,33 @@ pub struct Options {
     pub minor_version: u32,
     pub compatible_brands: Vec<FourCC>,
     pub interleave: bool,
+    /// iTunes metadata items (the payload of moov.udta.meta.ilst). When not
+    /// empty it replaces any ilst of the source, so tags and cover art are part
+    /// of moov before chunk offsets are computed: no second pass rewrites the file.
+    pub tags: Vec<u8>,
 }
 
 impl Options {
     /// The reference song path (`DefragmentMP4`).
     pub fn song() -> Options {
-        Options { major_brand: *b"M4A ", minor_version: 1, compatible_brands: vec![*b"M4A ", *b"mp42", *b"isom", *b"iso5"], interleave: false }
+        Options {
+            major_brand: *b"M4A ",
+            minor_version: 1,
+            compatible_brands: vec![*b"M4A ", *b"mp42", *b"isom", *b"iso5"],
+            interleave: false,
+            tags: Vec::new(),
+        }
     }
 
     /// MV downloads: same brands as the reference mv.Mux output, interleaved chunks.
     pub fn mv() -> Options {
-        Options { major_brand: *b"isom", minor_version: 0x200, compatible_brands: vec![*b"isom", *b"iso4"], interleave: true }
+        Options { major_brand: *b"isom", minor_version: 0x200, compatible_brands: vec![*b"isom", *b"iso4"], interleave: true, tags: Vec::new() }
+    }
+
+    /// Writes `ilst` (concatenated item boxes) into moov.udta.meta.ilst.
+    pub fn with_tags(mut self, ilst: Vec<u8>) -> Options {
+        self.tags = ilst;
+        self
     }
 
     fn ftyp(&self) -> Atom {
@@ -190,7 +206,7 @@ pub fn defragment<S: Source, W: Sink>(input: S, output: &mut W, options: &Option
     build_progressive_moov(&mut moov, &tracks).map_err(|e| e.context("build progressive moov"))?;
     moov.children_mut().retain(|c| &c.kind != b"mvex");
     let ftyp = options.ftyp();
-    ensure_tag_metadata(&mut moov);
+    ensure_tag_metadata(&mut moov, &options.tags).map_err(|e| e.context("write tags"))?;
 
     let order = write_order(&tracks, options.interleave);
     let mdat_sizes = plan_mdats(&tracks, &order).map_err(|e| e.context("plan output mdat boxes"))?;
@@ -721,7 +737,12 @@ fn build_sbgps(sgpds: &[Atom], td: &Track) -> Result<Vec<Atom>> {
 }
 
 /// go-mp4tag only accepts ISO meta with hdlr and requires moov.udta.meta.ilst.
-fn ensure_tag_metadata(moov: &mut Atom) {
+/// A non-empty `tags` becomes the ilst payload.
+fn ensure_tag_metadata(moov: &mut Atom, tags: &[u8]) -> Result<()> {
+    if !tags.is_empty() {
+        // Each item must be a whole box: a malformed list would corrupt moov.
+        bmff::spans(tags, 0, tags.len()).map_err(|e| e.context("invalid ilst items"))?;
+    }
     let hdlr = || {
         let mut b = version_flags(0, 0).to_vec();
         b.extend_from_slice(&0u32.to_be_bytes());
@@ -735,8 +756,8 @@ fn ensure_tag_metadata(moov: &mut Atom) {
     }
     let udta = moov.children_mut().iter_mut().find(|c| &c.kind == b"udta" && c.is_tree()).unwrap();
     let Some(meta) = udta.children_mut().iter_mut().find(|c| &c.kind == b"meta" && c.is_tree()) else {
-        udta.children_mut().push(Atom::tree(b"meta", version_flags(0, 0).to_vec(), vec![hdlr(), Atom::data(b"ilst", Vec::new())]));
-        return;
+        udta.children_mut().push(Atom::tree(b"meta", version_flags(0, 0).to_vec(), vec![hdlr(), Atom::data(b"ilst", tags.to_vec())]));
+        return Ok(());
     };
     if meta.head().is_empty() {
         // QuickTime meta: give it the 4-byte version/flags of an ISO meta.
@@ -745,9 +766,12 @@ fn ensure_tag_metadata(moov: &mut Atom) {
     if meta.child(b"hdlr").is_none() {
         meta.children_mut().push(hdlr());
     }
-    if meta.child(b"ilst").is_none() {
-        meta.children_mut().push(Atom::data(b"ilst", Vec::new()));
+    match meta.children_mut().iter_mut().find(|c| &c.kind == b"ilst") {
+        Some(ilst) if !tags.is_empty() => *ilst = Atom::data(b"ilst", tags.to_vec()),
+        Some(_) => {}
+        None => meta.children_mut().push(Atom::data(b"ilst", tags.to_vec())),
     }
+    Ok(())
 }
 
 #[derive(Clone, Copy)]
@@ -1069,6 +1093,31 @@ mod tests {
         // mdhd carries the media duration.
         let mdhd = moov.path(&[b"trak", b"mdia", b"mdhd"]).unwrap().bytes();
         assert_eq!(be32(mdhd, 16), 100 * 4096);
+    }
+
+    /// Tags (here with a cover larger than the samples) sit in moov before
+    /// mdat, so every chunk offset already accounts for them.
+    #[test]
+    fn song_tags_are_written_into_moov() {
+        let specs = [Spec { id: 1, timescale: 44100, duration: 4096, samples: 60, per_fragment: 20 }];
+        let item = |kind: &[u8; 4], kind_code: u32, value: &[u8]| {
+            let mut data = kind_code.to_be_bytes().to_vec();
+            data.extend_from_slice(&[0; 4]);
+            data.extend_from_slice(value);
+            Atom::tree(kind, Vec::new(), vec![Atom::data(b"data", data)]).to_bytes()
+        };
+        let mut ilst = item(b"\xa9nam", 1, "标题".as_bytes());
+        ilst.extend(item(b"covr", 13, &[0xab; 200_000]));
+        let mut out = Vec::new();
+        defragment(&fragmented(&specs)[..], &mut out, &Options::song().with_tags(ilst.clone())).unwrap();
+        let atoms = bmff::parse(&out).unwrap();
+        let moov = &atoms[1];
+        assert_eq!(moov.path(&[b"udta", b"meta", b"ilst"]).unwrap().bytes(), &ilst[..]);
+        assert!(moov.path(&[b"udta", b"meta", b"hdlr"]).is_some());
+        check_samples(&out, moov.child(b"trak").unwrap(), &specs[0]);
+
+        let bad = Options::song().with_tags(vec![0, 0, 0, 99, b'x']);
+        assert!(defragment(&fragmented(&specs)[..], &mut Vec::new(), &bad).unwrap_err().to_string().contains("invalid ilst items"));
     }
 
     #[test]

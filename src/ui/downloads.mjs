@@ -1,0 +1,872 @@
+// 下载管理器：专辑、歌单与单曲的批量下载（浏览器内解密），带完整的 iTunes 标签、封面与歌词。
+// 与播放条一样常驻（app.mjs 挂载下载中心，见 download-center.mjs），站内跳转时下载不中断；关闭或刷新标签页会中断。
+//
+// 每首歌：wrapper-lite 取 master → 按设置选音质 → 浏览器内解密（decrypt.js）→ 同时取元数据、封面与歌词 →
+// defrag 时由 media.wasm 把标签写进 moov（mp4-tags.mjs）→ 按保存方式保存：
+//   zip：整张专辑 / 歌单打成一个 ZIP（不复制数据，见 zip.mjs）；folder：写入选定的本地文件夹（File System Access API）；
+//   files：每首歌完成后由浏览器逐个保存。参考 apple-music-downloader 与 amd.wol.moe 的下载设置（设置中心，prefs.mjs）。
+//
+//   downloads.add(spec)          spec：{ kind: 'album' | 'playlist' | 'song', id, country, resource?, tracks?, select?, codec?, variant? }
+//                                resource / tracks 为页面已取到的 amp-api 资源（省略时这里获取）；select：只下载这些曲目 id；
+//                                codec：覆盖设置中的首选音质；variant：单曲指定的音质（master 的 GROUP-ID）
+//   downloads.jobs               全部任务（只读）；job.tasks 为其中各曲目
+//   downloads.cancel(job, task?) / retry(job, task?) / remove(job) / clearFinished() / save(job)
+//   downloads.onChange(fn)       状态变化（节流）后回调
+//   downloads.stats()            { active, queued, done, failed, total, ratio, speed }
+//   downloads.folder             保存到文件夹：{ supported, name(), pick() }
+
+import { prefs } from './prefs.mjs';
+import { buildIlst, imageType } from './mp4-tags.mjs';
+import { buildZip, crc32 } from './zip.mjs';
+import { formatPath, formatName } from './naming.mjs';
+import { ttmlToLrc } from './lrc.mjs';
+
+const { AmDecrypt, AmWrapper, AmI18n } = window;
+const t = (key, vars) => AmI18n.t(key, vars);
+const encoder = new TextEncoder();
+
+/* ---------- amp-api ---------- */
+async function amp(path, params) {
+  const url = new URL('/amp' + path, location.origin);
+  for (const [key, value] of Object.entries(params || {})) if (value !== undefined && value !== '') url.searchParams.set(key, value);
+  let res = await fetch(url);
+  // 地区不支持该语言时去掉 l
+  if (res.status === 400 && url.searchParams.has('l')) {
+    url.searchParams.delete('l');
+    res = await fetch(url);
+  }
+  const data = await res.json().catch(() => null);
+  if (!res.ok || !data) throw new Error((data && ((data.errors && data.errors[0] && data.errors[0].detail) || data.msg)) || `HTTP ${res.status}`);
+  return data;
+}
+
+/** 关联资源下一页（rel.next）全部取完 */
+async function allPages(first, next, params) {
+  let list = first || [];
+  for (let more = next; more;) {
+    const page = await amp(more, params);
+    list = list.concat(page.data || []);
+    more = page.next;
+  }
+  return list;
+}
+
+const playableSong = (r) => r && r.type === 'songs' && r.attributes && r.attributes.playParams;
+
+/* ---------- 音质选择 ---------- */
+/** master 变体的种类与排序值（GROUP-ID：audio-alac-stereo-96000-24、audio-atmos-2768、audio-stereo-256[-binaural|-downmix]、audio-HE-stereo-64…） */
+function classify(v) {
+  const g = (v.group_id || '').toLowerCase();
+  if (g.includes('alac')) return { kind: 'alac', rank: (v.sample_rate || 0) * 100 + (v.bit_depth || 0) };
+  if (g.includes('atmos')) return { kind: 'atmos', rank: Number((g.match(/atmos-(\d+)/) || [])[1]) || 0 };
+  const kbps = Number((g.match(/stereo-(\d+)/) || [])[1]) || 0;
+  const he = g.includes('he-');
+  if (g.includes('binaural')) return { kind: he ? 'he-binaural' : 'aac-binaural', rank: kbps };
+  if (g.includes('downmix')) return { kind: he ? 'he-downmix' : 'aac-downmix', rank: kbps };
+  return { kind: he ? 'aac-he' : 'aac', rank: kbps };
+}
+
+const FALLBACK = {
+  alac: ['alac', 'aac', 'aac-he'],
+  atmos: ['atmos', 'alac', 'aac', 'aac-he'],
+  aac: ['aac', 'aac-he', 'alac'],
+  'aac-binaural': ['aac-binaural', 'aac', 'aac-he', 'alac'],
+  'aac-downmix': ['aac-downmix', 'aac', 'aac-he', 'alac'],
+  'aac-he': ['aac-he', 'aac', 'alac'],
+};
+
+/** 按首选音质（及上限）选变体；fallback 时依次降级。返回 { variant, fallback } 或 null */
+export function pickVariant(variants, { codec, alacMax, atmosMax, fallback }) {
+  const order = fallback ? FALLBACK[codec] || [codec] : [codec];
+  for (const kind of order) {
+    const list = variants.map((v) => ({ v, c: classify(v) })).filter(({ v, c }) => c.kind === kind
+      && (kind !== 'alac' || !v.sample_rate || v.sample_rate <= alacMax)
+      && (kind !== 'atmos' || c.rank <= atmosMax));
+    if (!list.length) continue;
+    list.sort((a, b) => b.c.rank - a.c.rank || (b.v.bandwidth || 0) - (a.v.bandwidth || 0));
+    return { variant: list[0].v, fallback: kind !== codec };
+  }
+  return null;
+}
+
+/** 文件名变量 codec / quality / bit_depth / sample_rate */
+function qualityVars(v) {
+  const { kind, rank } = classify(v);
+  const kbps = Number((v.group_id.match(/(?:stereo|atmos)-(\d+)/i) || [])[1]) || 0;
+  if (kind === 'alac') {
+    const khz = v.sample_rate ? String(v.sample_rate / 1000).replace(/\.0+$/, '') : '';
+    return { codec: 'ALAC', quality: ['ALAC', v.bit_depth && `${v.bit_depth}bit`, khz && `${khz}kHz`].filter(Boolean).join(' '),
+      bit_depth: v.bit_depth || '', sample_rate: v.sample_rate || '', sample_rate_kHz: khz };
+  }
+  if (kind === 'atmos') return { codec: 'ATMOS', quality: `Dolby Atmos ${rank >= 1000 ? rank % 1000 : rank}kbps`, bit_depth: '', sample_rate: '', sample_rate_kHz: '' };
+  const name = kind.startsWith('he') ? 'HE-AAC' : 'AAC';
+  const tag = kind.endsWith('binaural') ? ' Binaural' : kind.endsWith('downmix') ? ' Downmix' : '';
+  return { codec: name.replace('-', ''), quality: `${name}${tag} ${kbps}kbps`, bit_depth: '', sample_rate: '', sample_rate_kHz: '' };
+}
+
+/* ---------- 封面 ---------- */
+/** artwork.url 模板 → 下载地址：指定尺寸的 jpg / png，或 original（a5.mzstatic.com 上的原图，同参考实现） */
+export function coverUrl(template, { coverFormat, coverSize }) {
+  if (!template) return '';
+  if (coverFormat === 'original') {
+    const m = template.match(/^https:\/\/is\d+-ssl\.mzstatic\.com\/image\/thumb\/(.+)\/\{w\}x\{h\}/);
+    if (m) return `https://a5.mzstatic.com/us/r1000/0/${m[1]}`;
+  }
+  const f = coverFormat === 'png' ? 'png' : 'jpg';
+  return template.replace('{w}', coverSize).replace('{h}', coverSize).replace('{c}', 'bb').replace('{f}', f)
+    .replace(/\{[a-z]+\}/g, '');
+}
+
+/** 同一张封面在一个任务中只下载一次 */
+function fetchCover(cache, url, signal) {
+  if (!url) return Promise.resolve(null);
+  if (!cache.has(url)) {
+    const p = fetch(url, { signal }).then(async (res) => {
+      if (!res.ok) throw new Error(`cover HTTP ${res.status}`);
+      const bytes = new Uint8Array(await res.arrayBuffer());
+      return { bytes, type: imageType(bytes) };
+    });
+    p.catch(() => cache.delete(url));
+    cache.set(url, p);
+  }
+  return cache.get(url);
+}
+
+/* ---------- 保存到文件夹（File System Access API），所选文件夹保存在 IndexedDB ---------- */
+const DB_NAME = 'am-hook-downloads';
+function idb(mode, fn) {
+  return new Promise((resolve, reject) => {
+    const open = indexedDB.open(DB_NAME, 1);
+    open.onupgradeneeded = () => open.result.createObjectStore('kv');
+    open.onerror = () => reject(open.error);
+    open.onsuccess = () => {
+      const db = open.result;
+      const tx = db.transaction('kv', mode);
+      const req = fn(tx.objectStore('kv'));
+      tx.oncomplete = () => { db.close(); resolve(req && req.result); };
+      tx.onerror = () => { db.close(); reject(tx.error); };
+    };
+  });
+}
+
+let folderHandle;
+const folderReady = (async () => {
+  try { folderHandle = (await idb('readonly', (s) => s.get('folder'))) || null; } catch { folderHandle = null; }
+})();
+
+const folder = {
+  supported: typeof window.showDirectoryPicker === 'function',
+  name: () => (folderHandle ? folderHandle.name : ''),
+  ready: folderReady,
+  /** 选择文件夹（需要用户操作触发） */
+  async pick() {
+    const handle = await window.showDirectoryPicker({ id: 'am-hook-downloads', mode: 'readwrite' });
+    folderHandle = handle;
+    try { await idb('readwrite', (s) => s.put(handle, 'folder')); } catch {}
+    notify();
+    return handle;
+  },
+  async forget() {
+    folderHandle = null;
+    try { await idb('readwrite', (s) => s.delete('folder')); } catch {}
+    notify();
+  },
+  /** 取得可写的文件夹：没有时让用户选择，已选择的请求写入权限（同样需要在用户操作中调用） */
+  async writable() {
+    await folderReady;
+    if (!folderHandle) return folder.pick();
+    const opts = { mode: 'readwrite' };
+    if ((await folderHandle.queryPermission(opts)) === 'granted' || (await folderHandle.requestPermission(opts)) === 'granted') return folderHandle;
+    throw new Error(t('dlc.folderDenied'));
+  },
+};
+
+async function dirFor(root, segments, create = true) {
+  let dir = root;
+  for (const name of segments) dir = await dir.getDirectoryHandle(name, { create });
+  return dir;
+}
+
+async function fileExists(root, path) {
+  try {
+    const dir = await dirFor(root, path.slice(0, -1), false);
+    await dir.getFileHandle(path[path.length - 1]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function writeFile(root, path, data) {
+  const dir = await dirFor(root, path.slice(0, -1));
+  const handle = await dir.getFileHandle(path[path.length - 1], { create: true });
+  const writable = await handle.createWritable();
+  try {
+    if (data instanceof Blob) await data.stream().pipeTo(writable, { preventClose: true });
+    else await writable.write(data);
+    await writable.close();
+  } catch (err) {
+    await writable.abort().catch(() => {});
+    throw err;
+  }
+}
+
+/* ---------- 交给浏览器保存（与歌曲页相同：保存期间保留临时文件，任务移除或关闭标签页时再删除） ---------- */
+function saveBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = Object.assign(document.createElement('a'), { href: url, download: name });
+  a.style.display = 'none';
+  document.body.append(a);
+  a.click();
+  a.remove();
+  // 浏览器开始读取之前不能撤销
+  setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+/* ---------- 状态 ---------- */
+const jobs = [];
+const listeners = new Set();
+let notifyTimer = 0;
+function notify() {
+  if (notifyTimer) return;
+  notifyTimer = setTimeout(() => {
+    notifyTimer = 0;
+    for (const fn of listeners) {
+      try { fn(); } catch (err) { console.error(err); }
+    }
+  }, 100);
+}
+
+let seq = 0;
+const ACTIVE = new Set(['resolving', 'downloading', 'tagging', 'saving']);
+const SETTLED = new Set(['done', 'skipped', 'error', 'cancelled']);
+
+/** 下载速度：最近几秒内的字节数 */
+const samples = [];
+let bytesTotal = 0;
+function addBytes(n) {
+  bytesTotal += n;
+  const now = performance.now();
+  samples.push([now, bytesTotal]);
+  while (samples.length > 2 && now - samples[0][0] > 4000) samples.shift();
+}
+function speed() {
+  if (samples.length < 2) return 0;
+  const [t0, b0] = samples[0];
+  const [t1, b1] = samples[samples.length - 1];
+  if (performance.now() - t1 > 3000) return 0;
+  return t1 > t0 ? ((b1 - b0) * 1000) / (t1 - t0) : 0;
+}
+
+export function jobState(job) {
+  if (job.state === 'preparing' || job.state === 'packing') return job.state;
+  if (job.prepError) return 'error';
+  const tasks = job.tasks;
+  if (job.cancelled && !tasks.length) return 'cancelled';
+  if (tasks.some((x) => ACTIVE.has(x.state))) return 'running';
+  if (tasks.some((x) => x.state === 'queued')) return 'queued';
+  if (!tasks.length) return 'error';
+  if (tasks.every((x) => x.state === 'cancelled')) return 'cancelled';
+  if (tasks.some((x) => x.state === 'error' || x.state === 'cancelled')) return tasks.some((x) => x.state === 'done') ? 'partial' : 'error';
+  return 'done';
+}
+
+/** 任务进度 0–1：已完成曲目 + 进行中曲目的字节比例 */
+export function jobProgress(job) {
+  const tasks = job.tasks.filter((x) => x.state !== 'cancelled');
+  if (!tasks.length) return 0;
+  let sum = 0;
+  for (const x of tasks) {
+    if (x.state === 'done' || x.state === 'skipped') sum += 1;
+    else if (x.state === 'downloading' && x.total) sum += 0.95 * (x.done / x.total);
+    else if (x.state === 'tagging' || x.state === 'saving') sum += 0.97;
+  }
+  return sum / tasks.length;
+}
+
+/* ---------- 新任务 ---------- */
+async function add(spec) {
+  const options = prefs.get('download');
+  if (spec.codec) options.codec = spec.codec;
+  // 只有一首歌的单曲下载不打包
+  let mode = options.saveMode;
+  if (mode === 'folder' && !folder.supported) mode = 'zip';
+  const job = {
+    id: `j${++seq}`,
+    kind: spec.kind,
+    cid: spec.id,
+    country: (spec.country || AmI18n.storefront || 'us').toLowerCase(),
+    title: (spec.resource && spec.resource.attributes && spec.resource.attributes.name) || spec.title || '',
+    subtitle: '',
+    artwork: '',
+    created: Date.now(),
+    options,
+    mode,
+    variant: spec.variant || '',
+    spec,
+    state: 'preparing',
+    tasks: [],
+    folder: [],
+    outputs: [],
+    covers: new Map(),
+    disposers: [],
+    ctl: new AbortController(),
+    dir: null,
+    packed: false,
+  };
+  // 写入文件夹需要在用户操作（点击）中取得权限，所以先于其他异步操作
+  if (mode === 'folder') {
+    try {
+      job.dir = await folder.writable();
+    } catch (err) {
+      if (err && err.name === 'AbortError') return null; // 取消了选择
+      job.mode = 'zip';
+      job.notice = t('dlc.folderFallback', { msg: err.message || String(err) });
+    }
+  }
+  jobs.unshift(job);
+  notify();
+  prepare(job, spec);
+  return job;
+}
+
+/** 取得专辑 / 歌单与各曲目的完整元数据，生成曲目任务 */
+async function prepare(job, spec) {
+  job.state = 'preparing';
+  job.prepError = '';
+  notify();
+  try {
+    const cc = job.country;
+    const l = job.options.metaLang || (await Promise.resolve(AmI18n.catalogLang(cc)).catch(() => undefined));
+    job.lang = l;
+    let collection = spec.resource || null;
+    let list = spec.tracks || null;
+    if (job.kind === 'album' && (!collection || !list)) {
+      const data = await amp(`/v1/catalog/${cc}/albums/${job.cid}`, { l, include: 'tracks,artists' });
+      collection = data.data && data.data[0];
+      if (!collection) throw new Error('album not found');
+      const rel = collection.relationships && collection.relationships.tracks;
+      list = await allPages(rel && rel.data, rel && rel.next, { l });
+    } else if (job.kind === 'playlist' && (!collection || !list)) {
+      const data = await amp(`/v1/catalog/${cc}/playlists/${job.cid}`, { l, include: 'tracks,curator', 'limit[tracks]': 300 });
+      collection = data.data && data.data[0];
+      if (!collection) throw new Error('playlist not found');
+      const rel = collection.relationships && collection.relationships.tracks;
+      list = await allPages(rel && rel.data, rel && rel.next, { l });
+    } else if (job.kind === 'song' && !list) {
+      list = [{ id: String(job.cid), type: 'songs', attributes: { playParams: {} } }];
+    }
+    // 位置（歌单中的序号）按原列表计算，再按选择过滤；MV 与尚未发行的曲目跳过
+    const entries = list.map((r, i) => ({ r, index: i + 1 })).filter(({ r }) => playableSong(r) && (!spec.select || spec.select.includes(r.id)));
+    if (!entries.length) throw new Error(t('dlc.noSongs'));
+    const ca = (collection && collection.attributes) || {};
+    job.title ||= ca.name || '';
+    job.collection = {
+      name: ca.name || '',
+      artist: ca.artistName || ca.curatorName || '',
+      id: job.cid,
+      artwork: ((ca.editorialArtwork && ca.editorialArtwork.staticDetailSquare) || ca.artwork || {}).url || '',
+      // 专辑的碟数：所有曲目（不只是选中的）中最大的碟号
+      discCount: job.kind === 'album' ? Math.max(1, ...list.map((r) => (r.attributes && r.attributes.discNumber) || 1)) : 0,
+      total: list.filter(playableSong).length,
+    };
+
+    // 歌曲的完整属性（作曲、ISRC、碟号、所属专辑的 UPC / 版权 / 厂牌）一次取 100 首
+    const meta = new Map();
+    const ids = entries.map(({ r }) => r.id);
+    for (let i = 0; i < ids.length; i += 100) {
+      const data = await amp(`/v1/catalog/${cc}/songs`, { ids: ids.slice(i, i + 100).join(','), include: 'albums,artists', l });
+      for (const song of data.data || []) meta.set(song.id, song);
+    }
+    job.ctl.signal.throwIfAborted();
+    job.tasks = entries.map(({ r, index }) => {
+      const song = meta.get(r.id) || r;
+      const a = song.attributes || {};
+      return {
+        id: r.id,
+        index,
+        name: a.name || r.id,
+        artist: a.artistName || '',
+        artwork: (a.artwork && a.artwork.url) || job.collection.artwork,
+        song,
+        state: 'queued',
+        done: 0,
+        total: 0,
+        attempts: 0,
+        quality: '',
+        error: '',
+      };
+    });
+    const first = job.tasks[0].song;
+    const fa = first.attributes || {};
+    if (job.kind === 'song') {
+      job.title = fa.name || job.title;
+      job.subtitle = fa.artistName || '';
+      job.artwork = (fa.artwork && fa.artwork.url) || '';
+    } else {
+      job.subtitle = job.collection.artist;
+      job.artwork = job.collection.artwork || (fa.artwork && fa.artwork.url) || '';
+    }
+    job.folder = folderPath(job);
+    job.state = 'ready';
+  } catch (err) {
+    job.state = 'ready';
+    if (job.ctl.signal.aborted) {
+      job.cancelled = true;
+    } else {
+      job.prepError = (err && err.message) || String(err);
+    }
+  }
+  notify();
+  pump();
+}
+
+/* ---------- 文件名 ---------- */
+function albumOf(song) {
+  return (song.relationships && song.relationships.albums && song.relationships.albums.data && song.relationships.albums.data[0]) || null;
+}
+
+/** 曲目的标签与文件名变量 */
+function trackInfo(job, task) {
+  const a = task.song.attributes || {};
+  const album = albumOf(task.song);
+  const aa = (album && album.attributes) || {};
+  const artist = task.song.relationships && task.song.relationships.artists && task.song.relationships.artists.data && task.song.relationships.artists.data[0];
+  const playlistTags = job.kind === 'playlist' && !job.options.playlistAlbumInfo;
+  const discCount = job.kind === 'album' ? job.collection.discCount : 0;
+  return {
+    title: a.name || '',
+    artist: a.artistName || '',
+    album: playlistTags ? job.collection.name : a.albumName || aa.name || '',
+    albumArtist: playlistTags ? job.collection.artist : aa.artistName || a.albumArtistName || a.artistName || '',
+    composer: a.composerName || '',
+    genre: (a.genreNames || [])[0] || '',
+    date: a.releaseDate || aa.releaseDate || '',
+    track: playlistTags ? [task.index, job.collection.total] : [a.trackNumber || 0, aa.trackCount || 0],
+    disc: playlistTags ? [1, 1] : [a.discNumber || 0, discCount],
+    copyright: aa.copyright || '',
+    label: aa.recordLabel || '',
+    upc: aa.upc || '',
+    isrc: a.isrc || '',
+    rating: a.contentRating === 'explicit' ? 1 : a.contentRating === 'clean' ? 2 : 0,
+    songId: task.id,
+    albumId: album ? album.id : (job.kind === 'album' ? job.cid : ''),
+    artistId: artist ? artist.id : '',
+    compilation: !!aa.isCompilation,
+    artwork: (a.artwork && a.artwork.url) || aa.artwork && aa.artwork.url || job.collection.artwork,
+  };
+}
+
+function nameVars(job, task, info, quality) {
+  return {
+    title: info.title, artist: info.artist, album: info.album, album_artist: info.albumArtist, composer: info.composer, genre: info.genre,
+    tracknum: info.track[0] || '', tracktotal: info.track[1] || '', disk: info.disc[0] || '', disktotal: info.disc[1] || '',
+    year: (info.date || '').slice(0, 4), release_date: info.date, explicit: info.rating === 1 ? '[E]' : '',
+    song_id: info.songId, album_id: info.albumId, artist_id: info.artistId, isrc: info.isrc, upc: info.upc,
+    record_label: info.label, copyright: info.copyright,
+    playlist: job.kind === 'playlist' ? job.collection.name : '', playlist_id: job.kind === 'playlist' ? job.cid : '',
+    curator: job.kind === 'playlist' ? job.collection.artist : '', index: task.index,
+    ...quality,
+  };
+}
+
+/** 任务的文件夹（ZIP 名）：专辑 / 歌单按模板；单曲保存到文件夹时放进其专辑文件夹（同参考实现） */
+function folderPath(job) {
+  const o = job.options;
+  if (job.kind === 'playlist') return formatPath(o.playlistFolder, { playlist: job.collection.name, playlist_id: job.cid, curator: job.collection.artist });
+  const task = job.tasks[0];
+  const info = trackInfo(job, task);
+  const vars = nameVars(job, task, info, {});
+  if (job.kind === 'album') return formatPath(o.albumFolder, vars);
+  return job.mode === 'folder' ? formatPath(o.albumFolder, vars) : [];
+}
+
+function filePath(job, task, info, quality) {
+  const o = job.options;
+  const template = job.kind === 'album' ? o.songFile : job.kind === 'playlist' ? o.playlistFile : o.singleFile;
+  const path = formatPath(template, nameVars(job, task, info, quality));
+  path[path.length - 1] += '.m4a';
+  return path;
+}
+
+/* ---------- 下载一首歌 ---------- */
+let running = 0;
+
+function nextTask() {
+  // 先建的任务先下载
+  for (let i = jobs.length - 1; i >= 0; i--) {
+    const job = jobs[i];
+    if (job.state !== 'ready' || job.prepError) continue;
+    const task = job.tasks.find((x) => x.state === 'queued' && !x.waiting);
+    if (task) return [job, task];
+  }
+  return null;
+}
+
+function pump() {
+  const limit = prefs.get('download').concurrency;
+  while (running < limit) {
+    const next = nextTask();
+    if (!next) break;
+    running++;
+    const [job, task] = next;
+    runTask(job, task).finally(() => {
+      running--;
+      settle(job);
+      pump();
+    });
+  }
+  notify();
+}
+
+async function runTask(job, task) {
+  const o = job.options;
+  task.ctl = new AbortController();
+  const signal = AbortSignal.any ? AbortSignal.any([task.ctl.signal, job.ctl.signal]) : task.ctl.signal;
+  if (!AbortSignal.any) job.ctl.signal.addEventListener('abort', () => task.ctl.abort(), { once: true });
+  task.attempts++;
+  task.error = '';
+  task.done = 0;
+  task.total = 0;
+  try {
+    task.state = 'resolving';
+    notify();
+    const info = trackInfo(job, task);
+    const { variants } = await AmWrapper.songMaster(task.id, signal);
+    let picked;
+    if (job.variant) {
+      const v = variants.find((x) => x.group_id === job.variant);
+      picked = v ? { variant: v, fallback: false } : null;
+    } else picked = pickVariant(variants, o);
+    if (!picked) throw Object.assign(new Error(t('dlc.noVariant')), { final: true });
+    const v = picked.variant;
+    const quality = qualityVars(v);
+    task.quality = quality.quality + (picked.fallback ? ` · ${t('dlc.fallback')}` : '');
+    task.path = filePath(job, task, info, quality);
+
+    if (job.mode === 'folder' && o.skipExisting && job.dir && await fileExists(job.dir, [...job.folder, ...task.path])) {
+      task.state = 'skipped';
+      task.saved = true;
+      return;
+    }
+
+    const track = await AmDecrypt.openTrack(v.url, signal);
+    task.total = track.size;
+    task.state = 'downloading';
+    notify();
+
+    // 封面与歌词与音频同时获取；拿不到时不影响下载，只是不写入
+    const embed = new Set(o.embed);
+    const wantLyrics = embed.has('lyrics') || o.saveLyrics;
+    const coverPromise = embed.has('cover') || (o.saveCover && job.kind !== 'playlist')
+      ? fetchCover(job.covers, coverUrl(info.artwork, o), signal).catch((err) => { console.warn('[am-hook] 封面获取失败', err); return null; })
+      : Promise.resolve(null);
+    const lyricsPromise = wantLyrics ? fetchLyrics(job, task, signal) : Promise.resolve(null);
+    const tags = async () => {
+      const [cover, lyrics] = await Promise.all([coverPromise, lyricsPromise]);
+      task.lyrics = lyrics;
+      return buildIlst(tagsFor(info, embed, o, cover, lyrics));
+    };
+
+    let last = 0;
+    const result = await AmDecrypt.download(track, {
+      signal,
+      memory: !o.opfs,
+      tags,
+      onProgress: (done) => {
+        addBytes(done - last);
+        last = done;
+        task.done = done;
+        notify();
+      },
+      onDefrag: () => { task.state = 'tagging'; notify(); },
+    });
+    task.result = result;
+    job.disposers.push(() => result.dispose());
+    task.state = 'saving';
+    notify();
+    await deliver(job, task);
+    task.state = 'done';
+  } catch (err) {
+    const aborted = (err && err.name === 'AbortError') || signal.aborted;
+    if (task.result) { task.result.dispose(); task.result = null; }
+    if (aborted) {
+      task.state = 'cancelled';
+    } else if (!err.final && task.attempts <= o.retries) {
+      // 自动重试：稍等再排队
+      task.state = 'queued';
+      task.waiting = true;
+      task.error = (err && err.message) || String(err);
+      setTimeout(() => { task.waiting = false; pump(); }, 1500 * task.attempts);
+    } else {
+      task.state = 'error';
+      task.error = (err && err.message) || String(err);
+      console.warn('[am-hook] 下载失败', task.id, err);
+    }
+  } finally {
+    task.ctl = null;
+    notify();
+  }
+}
+
+/** 歌词：wrapper-lite 返回逐字 TTML，按设置转为 LRC（嵌入的也是 LRC） */
+async function fetchLyrics(job, task, signal) {
+  const o = job.options;
+  try {
+    const lang = o.lyricsLang || job.lang || undefined;
+    const ttml = await AmWrapper.lyrics(task.id, lang, signal);
+    if (!ttml) return null;
+    let lrc = '';
+    try {
+      lrc = ttmlToLrc(ttml, { syllable: o.syllable, translation: o.lyricsTranslation, pronunciation: o.lyricsPronunciation });
+    } catch (err) {
+      console.warn('[am-hook] 歌词转换失败', err);
+    }
+    return { ttml, lrc };
+  } catch (err) {
+    // 取消时下载本身会结束，这里不再抛出（没有人等待这个 Promise 时会成为未处理的拒绝）
+    if (!signal.aborted) console.warn('[am-hook] 歌词获取失败', err);
+    return null;
+  }
+}
+
+function tagsFor(info, embed, o, cover, lyrics) {
+  const on = (f) => embed.has(f);
+  return {
+    title: on('title') ? info.title : '',
+    artist: on('artist') ? info.artist : '',
+    album: on('album') ? info.album : '',
+    albumArtist: on('album_artist') ? info.albumArtist : '',
+    composer: on('composer') ? info.composer : '',
+    genre: on('genre') ? info.genre : '',
+    date: on('created') ? info.date : '',
+    track: on('tracknum') ? info.track : null,
+    disc: on('disk') ? info.disc : null,
+    lyrics: on('lyrics') && lyrics ? lyrics.lrc : '',
+    cover: on('cover') ? cover : null,
+    copyright: on('copyright') ? info.copyright : '',
+    label: on('record_company') ? info.label : '',
+    upc: on('upc') ? info.upc : '',
+    isrc: on('isrc') ? info.isrc : '',
+    rating: on('rtng') ? info.rating : null,
+    songId: on('song_id') ? info.songId : '',
+    albumId: on('album_id') ? info.albumId : '',
+    artistId: on('artist_id') ? info.artistId : '',
+    compilation: on('album') && info.compilation,
+    sort: o.sortTags ? { title: info.title, artist: info.artist, album: info.album, albumArtist: info.albumArtist, composer: info.composer } : null,
+  };
+}
+
+/** 歌词文件（与歌曲同名、扩展名不同） */
+function lyricsFile(job, task) {
+  const o = job.options;
+  if (!o.saveLyrics || !task.lyrics) return null;
+  const text = o.lyricsFormat === 'ttml' ? task.lyrics.ttml : task.lyrics.lrc;
+  if (!text) return null;
+  const path = [...task.path];
+  path[path.length - 1] = path[path.length - 1].replace(/\.m4a$/, `.${o.lyricsFormat}`);
+  return { path, data: encoder.encode(text) };
+}
+
+/** 一首歌完成后：文件夹模式立即写入并删除临时文件；逐个保存模式交给浏览器；ZIP 模式留到最后打包 */
+async function deliver(job, task) {
+  const lyrics = lyricsFile(job, task);
+  if (job.mode === 'folder' && job.dir) {
+    await writeFile(job.dir, [...job.folder, ...task.path], task.result.file);
+    if (lyrics) await writeFile(job.dir, [...job.folder, ...lyrics.path], lyrics.data);
+    task.result.dispose();
+    task.result = null;
+    task.saved = true;
+  } else if (job.mode === 'files' || job.kind === 'song') {
+    saveBlob(task.result.file, task.path.join(' - '));
+    if (lyrics) saveBlob(new Blob([lyrics.data]), lyrics.path.join(' - '));
+    task.saved = true;
+  } else {
+    task.extra = lyrics;
+  }
+}
+
+/* ---------- 全部曲目结束后：封面、播放列表与 ZIP ---------- */
+function settle(job) {
+  if (job.state !== 'ready' || job.packed) return;
+  const state = jobState(job);
+  if (state === 'running' || state === 'queued') return;
+  // 有失败的曲目时等用户决定（重试或仍然保存）；全部完成时自动保存
+  if (state === 'done') finalize(job);
+  notify();
+}
+
+function m3u(job) {
+  const lines = ['#EXTM3U'];
+  for (const task of job.tasks) {
+    if (!(task.state === 'done' || task.state === 'skipped') || !task.path) continue;
+    const a = task.song.attributes || {};
+    lines.push(`#EXTINF:${Math.round((a.durationInMillis || 0) / 1000)},${a.artistName || ''} - ${a.name || ''}`, task.path.join('/'));
+  }
+  return encoder.encode(lines.join('\n') + '\n');
+}
+
+async function extras(job) {
+  const o = job.options;
+  const out = [];
+  if (o.saveCover && job.kind !== 'song' || (o.saveCover && job.kind === 'song' && job.mode === 'folder')) {
+    const art = job.kind === 'playlist' ? job.collection.artwork : trackInfo(job, job.tasks[0]).artwork;
+    const cover = await fetchCover(job.covers, coverUrl(art, o), job.ctl.signal).catch(() => null);
+    if (cover) out.push({ path: [`cover.${cover.type === 'png' ? 'png' : 'jpg'}`], data: cover.bytes });
+  }
+  if (job.kind === 'playlist' && o.m3u) out.push({ path: [`${formatName(o.playlistFolder, { playlist: job.collection.name, playlist_id: job.cid, curator: job.collection.artist })}.m3u8`], data: m3u(job) });
+  return out;
+}
+
+async function finalize(job, force = false) {
+  if (job.packed && !force) return;
+  job.packed = true;
+  job.state = 'packing';
+  notify();
+  try {
+    const files = await extras(job);
+    if (job.mode === 'folder' && job.dir) {
+      for (const f of files) await writeFile(job.dir, [...job.folder, ...f.path], f.data);
+    } else if (job.mode === 'files' || job.kind === 'song') {
+      for (const f of files) saveBlob(new Blob([f.data]), f.path.join(' - '));
+    } else {
+      const entries = [];
+      for (const task of job.tasks) {
+        if (task.state !== 'done' || !task.result) continue;
+        entries.push({ name: task.path.join('/'), data: task.result.file, crc: task.result.crc });
+        if (task.extra) entries.push({ name: task.extra.path.join('/'), data: task.extra.data, crc: crc32(task.extra.data) });
+      }
+      for (const f of files) entries.push({ name: f.path.join('/'), data: f.data, crc: crc32(f.data) });
+      job.zip = await buildZip(entries);
+      job.zipName = `${job.folder.join(' - ') || 'am-hook'}.zip`;
+      saveBlob(job.zip, job.zipName);
+    }
+    job.saved = true;
+  } catch (err) {
+    job.packError = (err && err.message) || String(err);
+  } finally {
+    job.state = 'ready';
+    notify();
+  }
+}
+
+/* ---------- 操作 ---------- */
+function cancel(job, task) {
+  if (task) {
+    if (task.ctl) task.ctl.abort();
+    else if (task.state === 'queued') task.state = 'cancelled';
+    settle(job);
+    notify();
+    return;
+  }
+  job.ctl.abort();
+  for (const x of job.tasks) if (x.state === 'queued') x.state = 'cancelled';
+  if (job.state === 'preparing') job.cancelled = true;
+  notify();
+}
+
+function retry(job, task) {
+  if (job.prepError || job.cancelled && !job.tasks.length) {
+    job.ctl = new AbortController();
+    job.cancelled = false;
+    prepare(job, job.spec);
+    return;
+  }
+  if (job.ctl.signal.aborted) job.ctl = new AbortController();
+  const targets = task ? [task] : job.tasks.filter((x) => x.state === 'error' || x.state === 'cancelled');
+  for (const x of targets) {
+    x.state = 'queued';
+    x.attempts = 0;
+    x.error = '';
+  }
+  job.packed = false;
+  job.saved = false;
+  job.packError = '';
+  pump();
+}
+
+function dispose(job) {
+  for (const fn of job.disposers.splice(0)) {
+    try { fn(); } catch {}
+  }
+  job.zip = null;
+}
+
+function remove(job) {
+  cancel(job);
+  dispose(job);
+  const i = jobs.indexOf(job);
+  if (i >= 0) jobs.splice(i, 1);
+  notify();
+}
+
+function clearFinished() {
+  for (const job of [...jobs]) {
+    const state = jobState(job);
+    if (state !== 'running' && state !== 'queued' && state !== 'preparing' && state !== 'packing') remove(job);
+  }
+}
+
+/** 再次保存（ZIP 或单曲文件）；有失败曲目时「仍然保存」已完成的部分 */
+function save(job) {
+  if (job.zip) { saveBlob(job.zip, job.zipName); return; }
+  if (job.kind === 'song' || job.mode === 'files') {
+    for (const task of job.tasks) if (task.result) saveBlob(task.result.file, task.path.join(' - '));
+    return;
+  }
+  finalize(job, true);
+}
+
+function stats() {
+  let active = 0, queued = 0, done = 0, failed = 0, total = 0;
+  let progress = 0;
+  for (const job of jobs) {
+    const state = jobState(job);
+    for (const x of job.tasks) {
+      if (x.state === 'cancelled') continue;
+      total++;
+      if (ACTIVE.has(x.state)) active++;
+      else if (x.state === 'queued') queued++;
+      else if (x.state === 'done' || x.state === 'skipped') done++;
+      else if (x.state === 'error') failed++;
+    }
+    if (state === 'preparing') queued++;
+    progress += jobProgress(job) * job.tasks.filter((x) => x.state !== 'cancelled').length;
+  }
+  return { active, queued, done, failed, total, ratio: total ? progress / total : 0, speed: speed() };
+}
+
+export const downloads = {
+  get jobs() { return jobs; },
+  add,
+  cancel,
+  retry,
+  remove,
+  clearFinished,
+  save,
+  stats,
+  jobState,
+  jobProgress,
+  folder,
+  onChange(fn) { listeners.add(fn); return () => listeners.delete(fn); },
+  /** 正在下载或排队中的曲目（id → task），歌曲页、专辑页用来在曲目行上显示进度 */
+  taskFor(songId) {
+    for (const job of jobs) {
+      const task = job.tasks.find((x) => x.id === songId && !SETTLED.has(x.state));
+      if (task) return { job, task };
+    }
+    return null;
+  },
+  busy() {
+    return jobs.some((job) => { const s = jobState(job); return s === 'running' || s === 'queued' || s === 'preparing' || s === 'packing'; });
+  },
+};
+
+// 设置中修改同时下载数后立即生效
+prefs.onChange((section) => { if (section === 'download') pump(); });
+// 下载在当前标签页内进行，关闭或刷新会中断
+addEventListener('beforeunload', (e) => { if (downloads.busy()) e.preventDefault(); });
+// 关闭标签页时删除临时文件（OPFS 中没删掉的，下次由 AmDecrypt.collectGarbage 回收）
+addEventListener('pagehide', () => { for (const job of jobs) dispose(job); });
+
+window.AmDownloads = downloads;

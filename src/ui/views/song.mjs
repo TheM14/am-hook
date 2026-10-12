@@ -1,44 +1,16 @@
 // 歌曲页（/https://music.apple.com/{cc}/song/{slug}/{id}），由 app.mjs 挂载
 import { createActions, targetOf } from './actions.mjs';
+import { downloads } from '../downloads.mjs';
 
 const { detectMode, artistNodes, qualityBadge, qualityIcon, formatTime } = window.AmHook;
 const { AmDecrypt, AmI18n, AmWrapper } = window;
 const { t } = AmI18n;
 
 /**
- * 进行中的浏览器端下载：adamId -> Map(group_id -> { ctl, done, total })。
- * 放在页面之外：离开歌曲页后下载继续，完成后照常保存；回到该歌曲页时接着显示进度。
+ * 下载交给下载管理器（downloads.mjs）：离开歌曲页后继续，完成后照常保存，进度也显示在页面底部的下载中心；
+ * 回到该歌曲页时各音质行接着显示进度。
  */
-const downloadsBySong = new Map();
-/** adamId -> 当前显示该歌曲的页面刷新下载进度的函数 */
-const progressViews = new Map();
-// 下载在当前标签页内进行，关闭或刷新会中断
-addEventListener('beforeunload', (e) => {
-  for (const downloads of downloadsBySong.values()) if (downloads.size) { e.preventDefault(); return; }
-});
-
-/**
- * 已交给浏览器保存的下载结果 { url, dispose }，同 MV 页的 result：浏览器要从 OPFS 临时文件
- * 复制到下载目录，不能保存后立即删除；开始新下载、离开歌曲页或关闭标签页时再删除。
- */
-const saved = new Set();
-
-function saveResult(result, fileName) {
-  const url = URL.createObjectURL(result.file);
-  const a = Object.assign(document.createElement('a'), { href: url, download: fileName });
-  a.style.display = 'none';
-  document.body.append(a);
-  a.click();
-  a.remove();
-  saved.add({ url, dispose: result.dispose });
-}
-
-function disposeSaved() {
-  const items = [...saved];
-  saved.clear();
-  return Promise.all(items.map(({ url, dispose }) => { URL.revokeObjectURL(url); return dispose(); }));
-}
-addEventListener('pagehide', disposeSaved);
+const ACTIVE_JOB = new Set(['preparing', 'queued', 'running', 'packing']);
 
 export function mount({ root, url, signal, player, navigate, onLangChange, toast }) {
   document.title = t('song.pageTitle');
@@ -50,11 +22,6 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
   let meta = {};
   let variants = [];
   let rows = new Map();
-  /** group_id -> { ctl, done, total }，本歌曲进行中的浏览器端下载（见 downloadsBySong） */
-  if (adamId && !downloadsBySong.has(adamId)) downloadsBySong.set(adamId, new Map());
-  const downloads = downloadsBySong.get(adamId) || new Map();
-  /** 刷新下载进度：交给当前显示本歌曲的页面（离开后再回来时是新的页面） */
-  const showDownload = (id) => progressViews.get(adamId)?.(id);
 
   $('source').textContent = songUrl;
   $('apple-link').href = songUrl;
@@ -127,59 +94,43 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     return { group: 'AAC', rank: 2, kbps, name: kbps ? `AAC · ${kbps} kbps` : v.group_id, tags, sub: variantRank };
   }
 
-  function safeName(s) {
-    return s.replace(/[\\/:*?"<>|]+/g, '_').trim();
-  }
-
   function formatSize(bytes) {
     return bytes >= 1024 ** 3 ? `${(bytes / 1024 ** 3).toFixed(2)} GB` : `${(bytes / 1024 ** 2).toFixed(1)} MB`;
   }
 
-  /* ---------- 浏览器端下载：直连 CDN + wasm 解密 + OPFS 暂存 ---------- */
-  async function startDownload(v, fileName) {
-    const id = v.group_id;
-    if (downloads.has(id)) { toast(t('dl.busy')); return; }
-    const job = { ctl: new AbortController(), done: 0, total: 0 };
-    downloads.set(id, job);
-    showDownload(id);
-    try {
-      await disposeSaved();
-      const track = await AmDecrypt.openTrack(v.m3u8Url, job.ctl.signal);
-      job.total = track.size;
-      showDownload(id);
-      const result = await AmDecrypt.download(track, {
-        signal: job.ctl.signal,
-        onProgress: (done) => { job.done = done; showDownload(id); },
-        onDefrag: () => { job.defrag = true; showDownload(id); },
-      });
-      saveResult(result, fileName);
-      toast(t('dl.done', { size: formatSize(result.size) }));
-    } catch (err) {
-      const msg = (err && err.message) || String(err);
-      if (err && err.name === 'AbortError') toast(t('dl.cancelled'));
-      // 已离开本页时改用底部提示
-      else if (signal.aborted) toast(t('dl.failed', { msg }));
-      else showAlert('error', () => t('dl.failed', { msg }));
-    } finally {
-      downloads.delete(id);
-      showDownload(id);
-    }
+  /* ---------- 浏览器端下载：直连 CDN + wasm 解密 + OPFS 暂存，写入标签、封面与歌词（downloads.mjs） ---------- */
+  /** 本歌曲该音质进行中的下载任务 */
+  function jobFor(groupId) {
+    return downloads.jobs.find((j) => j.kind === 'song' && j.cid === adamId && j.variant === groupId && ACTIVE_JOB.has(downloads.jobState(j)));
+  }
+
+  async function startDownload(v) {
+    if (jobFor(v.group_id)) { toast(t('dl.busy')); return; }
+    const job = await downloads.add({
+      kind: 'song', id: adamId, country: meta.country || country, variant: v.group_id,
+      tracks: meta.resource ? [meta.resource] : null,
+    }).catch((err) => { showAlert('error', () => t('dl.failed', { msg: err.message })); return null; });
+    if (job) renderDownloads();
   }
 
   function renderDownload(id) {
     const r = rows.get(id);
     if (!r) return;
-    const job = downloads.get(id);
+    const job = jobFor(id);
     r.progress.hidden = !job;
     if (!job) return;
-    const ratio = job.total ? job.done / job.total : 0;
+    const task = job.tasks[0];
+    const ratio = task && task.total ? task.done / task.total : 0;
     r.progressFill.style.width = `${ratio * 100}%`;
-    r.progressText.textContent = job.defrag
-      ? t('dl.defrag')
-      : job.total
-      ? t('dl.progress', { pct: Math.floor(ratio * 100), done: formatSize(job.done), total: formatSize(job.total) })
-      : t('dl.preparing');
+    r.progressText.textContent = !task || task.state === 'queued' || task.state === 'resolving' ? t('dl.preparing')
+      : task.state === 'downloading' ? t('dl.progress', { pct: Math.floor(ratio * 100), done: formatSize(task.done), total: formatSize(task.total) })
+      : t('dl.defrag');
   }
+
+  function renderDownloads() {
+    for (const id of rows.keys()) renderDownload(id);
+  }
+  signal.addEventListener('abort', downloads.onChange(renderDownloads), { once: true });
 
   /* ---------- 下拉菜单（单例，fixed 定位，避免被列表 overflow 裁剪） ---------- */
   const menu = { el: $('menu'), trigger: null };
@@ -270,9 +221,9 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     else closeMenu(false);
   }, { capture: true, signal });
 
-  function variantMenu(v, fileName) {
+  function variantMenu(v) {
     return [
-      { icon: ICON.download, label: t('menu.download'), hint: t('menu.downloadHint', { file: fileName }), onSelect: () => startDownload(v, fileName) },
+      { icon: ICON.download, label: t('menu.download'), hint: t('menu.downloadHint'), onSelect: () => startDownload(v) },
     ];
   }
 
@@ -324,16 +275,15 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
       const progressText = el('span', { className: 'dl-text' });
       const cancel = el('button', { className: 'icon-btn dl-cancel', type: 'button', title: t('row.cancel'), innerHTML: ICON.close });
       cancel.setAttribute('aria-label', t('row.cancelAria', { name: v.info.name }));
-      cancel.addEventListener('click', () => { const job = downloads.get(v.group_id); if (job) job.ctl.abort(); });
+      cancel.addEventListener('click', () => { const job = jobFor(v.group_id); if (job) downloads.cancel(job); });
       const progress = el('div', { className: 'dl', hidden: true },
         el('div', { className: 'dl-bar' }, progressFill), progressText, cancel);
 
-      const fileName = safeName(`${meta.artist ? meta.artist + ' - ' : ''}${meta.title || adamId} [${v.info.name.replace(/ · /g, ' ')}].m4a`);
       const more = el('button', { className: 'icon-btn more-btn', type: 'button', title: t('row.more'), innerHTML: ICON.more });
       more.setAttribute('aria-label', t('row.moreAria', { name: v.info.name }));
       more.setAttribute('aria-haspopup', 'menu');
       more.setAttribute('aria-expanded', 'false');
-      more.addEventListener('click', () => openMenu(more, variantMenu(v, fileName)));
+      more.addEventListener('click', () => openMenu(more, variantMenu(v)));
       const actions = el('div', { className: 'variant-actions' }, more);
 
       const row = el('div', { className: 'variant' }, playBtn, el('div', {}, name, detail, progress), actions);
@@ -341,7 +291,7 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
       nodes.push(row);
     }
     list.replaceChildren(...nodes);
-    for (const id of downloads.keys()) renderDownload(id);
+    renderDownloads();
     $('count').textContent = t('song.count', { total: variants.length, playable: variants.filter((v) => v.mode).length });
     $('variants').hidden = false;
     $('play-best').disabled = !variants.some((v) => v.mode);
@@ -485,15 +435,9 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     libraryToggle.refresh();
     favoriteToggle.refresh();
     playlistBtn.disabled = !meta.resource;
-    if (rows.size) renderVariants(); // 下载文件名需要歌名
   }
 
   $('reparse').addEventListener('click', loadVariants);
-
-  if (adamId) {
-    progressViews.set(adamId, renderDownload);
-    signal.addEventListener('abort', () => { if (progressViews.get(adamId) === renderDownload) progressViews.delete(adamId); });
-  }
 
   // 切换语言：重绘所有动态生成的文字（播放、下载不受影响）；歌名等由 amp-api 按语言返回，重新获取
   onLangChange(() => {
@@ -515,6 +459,4 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     loadVariants();
     AmDecrypt.collectGarbage();
   }
-  // 离开页面：删除已保存下载的临时文件（进行中的下载继续，完成后照常保存）
-  signal.addEventListener('abort', disposeSaved, { once: true });
 }

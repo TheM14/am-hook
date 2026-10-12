@@ -9,7 +9,7 @@ use serde::Deserialize;
 use serde_json::json;
 use crate::{assets, log};
 use crate::links::{
-    is_charts_path, is_editorial_link, is_library_path, parse_album_link, parse_artist_link, parse_mv_link, parse_playlist_link,
+    is_charts_path, is_editorial_link, is_library_path, is_settings_path, parse_album_link, parse_artist_link, parse_mv_link, parse_playlist_link,
     parse_post_link, parse_song_link,
 };
 use crate::state::AppState;
@@ -22,7 +22,7 @@ pub async fn app_handler(headers: HeaderMap) -> Response<Body> {
 }
 
 /// 其余路径：Apple Music 页面路径本身也是 "https://..."（`/` 后拼接官网地址），
-/// 歌曲 / MV / post / 专辑 / 歌单 / 艺人页、编辑页与资料库页都返回单页应用，其他一律 404
+/// 歌曲 / MV / post / 专辑 / 歌单 / 艺人页、编辑页、资料库页与设置中心都返回单页应用，其他一律 404
 pub async fn fallback_handler(uri: Uri, headers: HeaderMap) -> Response<Body> {
     let path = uri.path().strip_prefix('/').unwrap_or(uri.path());
     if parse_song_link(path).is_ok()
@@ -34,6 +34,7 @@ pub async fn fallback_handler(uri: Uri, headers: HeaderMap) -> Response<Body> {
         || is_editorial_link(path)
         || is_charts_path(path)
         || is_library_path(path)
+        || is_settings_path(path)
     {
         return app_handler(headers).await;
     }

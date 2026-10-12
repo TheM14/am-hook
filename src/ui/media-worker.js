@@ -48,8 +48,31 @@ function withFiles(input, output, fn) {
   files.set(1, input); files.set(2, output);
   try { return fn(1, 2); } finally { files.clear(); }
 }
+
+// CRC-32 (ZIP) of the defrag output, updated as the core writes it front to back, so
+// packaging an album as a ZIP needs no second read of the file.
+const CRC_TABLE = new Uint32Array(256).map((_, n) => {
+  let c = n;
+  for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+  return c;
+});
+function crcWriter(target) {
+  let crc = ~0, next = 0, ordered = true;
+  return {
+    getSize: () => target.getSize(),
+    write(view, opts) {
+      if (opts.at !== next) ordered = false;
+      for (let i = 0; i < view.length; i++) crc = CRC_TABLE[(crc ^ view[i]) & 0xff] ^ (crc >>> 8);
+      next = opts.at + view.length;
+      return target.write(view, opts);
+    },
+    // null if the core ever wrote out of order (the caller then reads the file to compute it)
+    crc: () => (ordered ? (~crc) >>> 0 : null),
+  };
+}
+
 // Synchronous OPFS handles are worker-only; the core streams through them without buffering the file.
-async function defrag(song, input, output, dir) {
+async function defrag(song, input, output, dir, tags) {
   let folder = await navigator.storage.getDirectory();
   if (dir) folder = await folder.getDirectoryHandle(dir);
   const source = await (await folder.getFileHandle(input)).createSyncAccessHandle();
@@ -57,21 +80,24 @@ async function defrag(song, input, output, dir) {
   try {
     target = await (await folder.getFileHandle(output, { create: true })).createSyncAccessHandle();
     target.truncate(0);
-    const result = size(withFiles(source, target, (i, o) => invoke('media_defrag', i, o, song)));
-    target.flush(); return result;
+    // MV files are large and never zipped: no CRC
+    const writer = song ? crcWriter(target) : target;
+    const length = size(withFiles(source, writer, (i, o) => invoke('media_defrag', i, o, song, tags || new Uint8Array(0))));
+    target.flush();
+    return song ? { size: length, crc: writer.crc() } : length;
   } finally { source.close(); target?.close(); }
 }
 // Without OPFS (e.g. plain HTTP), the same code reads a Blob's bytes and returns a Blob.
-async function defragBlob(blob) {
+async function defragBlob(blob, tags) {
   const bytes = new Uint8Array(await blob.arrayBuffer()), parts = [];
   let length = 0;
   const source = { getSize: () => bytes.length, read: (view, { at }) => { const part = bytes.subarray(at, at + view.length); view.set(part); return part.length; } };
-  const target = { getSize: () => length, write: (view, { at }) => {
+  const writer = crcWriter({ getSize: () => length, write: (view, { at }) => {
     if (at !== length) return -1;
     parts.push(view.slice()); length += view.length; return view.length;
-  } };
-  withFiles(source, target, (i, o) => invoke('media_defrag', i, o, 1));
-  return new Blob(parts, { type: blob.type });
+  } });
+  withFiles(source, writer, (i, o) => invoke('media_defrag', i, o, 1, tags || new Uint8Array(0)));
+  return { blob: new Blob(parts, { type: blob.type }), size: length, crc: writer.crc() };
 }
 
 const methods = {
@@ -83,8 +109,9 @@ const methods = {
   muxInit: (video, audio, duration) => invoke('media_mux_init', video, audio, duration),
   release: name => { invoke('media_release', name); },
   defrag: (input, output) => defrag(0, input, output),
-  // defragSong(blob) or defragSong(input, output, dir): the reference song layout.
-  defragSong: (...args) => args[0] instanceof Blob ? defragBlob(args[0]) : defrag(1, ...args),
+  // defragSong(blob, tags) -> { blob, size, crc } or defragSong(input, output, dir, tags) -> { size, crc }:
+  // the reference song layout; tags (Uint8Array, may be omitted) are the ilst items (see mp4-tags.mjs).
+  defragSong: (...args) => args[0] instanceof Blob ? defragBlob(args[0], args[1]) : defrag(1, ...args),
 };
 self.onmessage = async ({ data: { id, method, args } }) => {
   try {
