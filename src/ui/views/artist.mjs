@@ -22,13 +22,18 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
   let rows = new Map();
   let bioExpanded = false;
   let loadToken = 0;
-  // 操作行最后的 ☆（官网艺人页的「喜爱」）：喜爱的艺人出现在资料库的艺人中
-  const favoriteToggle = actions.favoriteButton(() => (artist ? targetOf(artist, country) : null), 'artist-round-btn lib-fav-toggle');
-  root.querySelector('.artist-actions').append(favoriteToggle.button);
+  // 操作行：随机播放 / 播放 / 「更多」（与专辑页相同只留三个按钮）。菜单里有简介（官网的 ⓘ）、喜爱（喜爱的艺人出现在资料库的艺人中）与复制链接，顺序见设置中心
+  const moreBtn = actions.headerMenu(() => (artist ? {
+    target: targetOf(artist, country),
+    entries: $('about').hidden ? {} : { about: { icon: ICON.info, label: t('artist.about', { name: artist.attributes.name }), onSelect: showAbout } },
+  } : null), null, 'artist-round-btn');
+  moreBtn.disabled = true;
+  root.querySelector('.artist-actions').append(moreBtn);
 
   const ICON = {
     play: '<svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z"/></svg>',
     pause: '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>',
+    info: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 11v5.5"/><circle cx="12" cy="7.75" r=".6" fill="currentColor"/></svg>',
   };
 
   function el(tag, props = {}, ...children) {
@@ -199,7 +204,6 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     if (logoSrc) $('logo').querySelector('img').srcset = `${logoSrc} 1x, ${artUrl(logoArt, 800, 266, 'bb', 'webp')} 2x`;
     $('apple-link').href = a.url || `https://music.apple.com/${country}/artist/${artistId}`;
     $('apple-link-text').textContent = t('artist.openInApple', { name: a.name });
-    $('info').setAttribute('aria-label', t('artist.about', { name: a.name }));
     $('play-all').setAttribute('aria-label', t('album.play'));
     $('shuffle').setAttribute('aria-label', t('album.shuffle'));
 
@@ -292,7 +296,6 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     $('featured').hidden = !latest && !topSongs.length;
     $('featured').classList.toggle('has-latest', !!latest);
     $('play-all').disabled = $('shuffle').disabled = topSongs.length === 0;
-    $('info').disabled = $('about').hidden;
     syncRows(player.current, !player.transport().paused);
   }
 
@@ -377,11 +380,11 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     $('facts').replaceChildren(...facts.flatMap(([label, value]) => [el('dt', { textContent: label }), el('dd', { textContent: value })]));
   }
 
-  // 官网的 ⓘ 按钮打开简介页；这里展开简介并滚动到「关于」
-  $('info').addEventListener('click', () => {
+  // 官网的 ⓘ 按钮打开简介页；这里（「更多」菜单的「关于」）展开简介并滚动到「关于」
+  function showAbout() {
     if (!bioExpanded && !$('bio').hidden) { bioExpanded = true; renderAbout(); }
     $('about').scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
-  });
+  }
 
   $('bio-more').addEventListener('click', () => {
     bioExpanded = !bioExpanded;
@@ -393,7 +396,7 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     renderAbout();
     renderFeatured();
     renderShelves();
-    favoriteToggle.refresh();
+    moreBtn.disabled = false;
   }
 
   async function loadArtist() {

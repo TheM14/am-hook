@@ -1,5 +1,5 @@
 // 专辑页（/https://music.apple.com/{cc}/album/{slug}/{id}），由 app.mjs 挂载
-import { createActions, playable, targetOf } from './actions.mjs';
+import { createActions, ICON as ACTION_ICON, playable, targetOf } from './actions.mjs';
 import { createDetailHeader } from './detail-header.mjs';
 import { openDownloadDialog } from './download-dialog.mjs';
 
@@ -28,24 +28,17 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
   /** 当前专辑（amp-api albums 资源）与其中的曲目 */
   let album = null;
   let tracks = [];
-  // 头部的资料库按钮（官网的「+」）：专辑连同全部曲目加入资料库，曲目已取到，不再重新请求
-  const libraryTarget = () => (album ? targetOf(album, country, { collection: { resource: album, tracks } }) : null);
-  const libraryToggle = actions.libraryButton(libraryTarget);
+  // 头部只留随机播放、播放与「更多」：下载、喜爱、资料库（专辑连同全部曲目，曲目已取到，不再重新请求）、添加到歌单、复制链接等收进菜单，顺序见设置中心
+  const moreBtn = actions.headerMenu(() => (album ? {
+    target: targetOf(album, country, { collection: { resource: album, tracks } }),
+    // 下载（批量浏览器内解密，带标签、封面与歌词）：选择音质与曲目后交给下载中心
+    entries: songs().length ? {
+      download: { icon: ACTION_ICON.download, label: t('dlc.downloadAlbum'), onSelect: () => openDownloadDialog({ kind: 'album', resource: album, tracks, country, navigate, toast }) },
+    } : {},
+  } : null));
+  moreBtn.disabled = true;
   root.querySelector('.detail-actions').append(Object.assign(document.createElement('span'), { className: 'detail-extra' }));
-  // 喜爱（与 Apple Music 相同，喜爱即加入资料库）
-  const favoriteToggle = actions.favoriteButton(libraryTarget);
-  root.querySelector('.detail-extra').append(libraryToggle.button, favoriteToggle.button);
-  // 下载（批量浏览器内解密，带标签、封面与歌词）：选择音质与曲目后交给下载中心
-  const downloadBtn = Object.assign(document.createElement('button'), {
-    className: 'detail-circle-btn detail-download', type: 'button', disabled: true,
-    innerHTML: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>',
-  });
-  const labelDownload = () => { downloadBtn.title = t('dlc.downloadAlbum'); downloadBtn.setAttribute('aria-label', downloadBtn.title); };
-  labelDownload();
-  downloadBtn.addEventListener('click', () => {
-    if (album) openDownloadDialog({ kind: 'album', resource: album, tracks, country, navigate, toast });
-  });
-  $('shuffle').after(downloadBtn);
+  root.querySelector('.detail-extra').append(moreBtn);
   let rows = new Map();
   let notesExpanded = false;
   let loadToken = 0;
@@ -241,7 +234,7 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     }
     $('tracks').replaceChildren(...nodes);
     $('tracks').hidden = false;
-    $('play-all').disabled = $('shuffle').disabled = downloadBtn.disabled = songs().length === 0;
+    $('play-all').disabled = $('shuffle').disabled = songs().length === 0;
     syncRows(player.current, !player.transport().paused);
     select(selectedId);
     const target = revealPending && rows.get(selectedId);
@@ -309,8 +302,7 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     renderTracks();
     renderFooter();
     renderShelves();
-    libraryToggle.refresh();
-    favoriteToggle.refresh();
+    moreBtn.disabled = false;
   }
 
   async function loadAlbum() {
@@ -396,7 +388,6 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
 
   // 切换语言：名称、简介和货架标题由 amp-api 按语言返回，重新获取
   onLangChange(() => {
-    labelDownload();
     renderAlert();
     if (album) render();
     if (albumId) loadAlbum();

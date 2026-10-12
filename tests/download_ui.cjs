@@ -83,7 +83,9 @@ function nextDownload(page) {
 }
 
 async function pickTracks(page, indexes) {
-  await page.click('.detail-download');
+  // 头部「更多」→「下载专辑 / 下载歌单」
+  await page.click('.detail-extra .detail-circle-btn');
+  await page.locator('.menu .menu-label').filter({ hasText: /^下载(专辑|歌单)$/ }).click();
   await page.waitForSelector('.dl-dialog[open]');
   await page.click('.dl-dialog-tools button:nth-of-type(2)');
   const boxes = page.locator('.dl-dialog-item:not(.is-disabled) input');
@@ -113,7 +115,7 @@ async function pickTracks(page, indexes) {
     {
       const { page, errors } = await newPage(browser, { codec: 'aac', coverSize: 600, saveLyrics: true });
       await openPage(page, base + ALBUM);
-      await page.waitForSelector('.detail-download:not([disabled])', { timeout: 30000 });
+      await page.waitForSelector('.detail-extra .detail-circle-btn:not([disabled])', { timeout: 30000 });
       await pickTracks(page, [0, 1]);
       const download = nextDownload(page);
       await page.click('.dl-dialog-start');
@@ -148,7 +150,7 @@ async function pickTracks(page, indexes) {
       const { page, errors } = await newPage(browser, settings, true);
       await openPage(page, base + ALBUM);
       await page.evaluate(async () => { try { await (await navigator.storage.getDirectory()).removeEntry('picked', { recursive: true }); } catch {} });
-      await page.waitForSelector('.detail-download:not([disabled])', { timeout: 30000 });
+      await page.waitForSelector('.detail-extra .detail-circle-btn:not([disabled])', { timeout: 30000 });
       for (let round = 0; round < 2; round++) {
         await pickTracks(page, [2]);
         await page.click('.dl-dialog-start');
@@ -182,7 +184,7 @@ async function pickTracks(page, indexes) {
     {
       const { page, errors } = await newPage(browser, { codec: 'aac-he', coverSize: 300, playlistAlbumInfo: false });
       await openPage(page, base + PLAYLIST);
-      await page.waitForSelector('.detail-download:not([disabled])', { timeout: 30000 });
+      await page.waitForSelector('.detail-extra .detail-circle-btn:not([disabled])', { timeout: 30000 });
       await pickTracks(page, [1]);
       const download = nextDownload(page);
       await page.click('.dl-dialog-start');

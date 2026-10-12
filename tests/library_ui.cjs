@@ -68,14 +68,24 @@ const album = {
     };
     const rowTitles = () => page.locator('#view .lib-track .track-title').allTextContents();
 
-    // 1. 专辑页头部的「+」：专辑与全部曲目加入资料库，按钮变为 ✓
+    const menuLabel = (text) => page.locator('.menu .menu-label').filter({ hasText: new RegExp(`^${text}$`) });
+    // 详情页头部只有随机播放、播放与「更多」
+    const headerMore = page.locator('.detail-extra .detail-circle-btn');
+    const openHeaderMenu = async () => {
+      await page.waitForFunction(() => document.querySelector('.detail-extra .detail-circle-btn')?.disabled === false);
+      await headerMore.click();
+      await page.locator('.menu:not([hidden])').waitFor();
+    };
+
+    // 1. 专辑页头部「更多」→「添加到资料库」：专辑与全部曲目加入资料库，菜单项变为「从资料库中删除」
     await page.goto(BASE + ALBUM_PATH);
-    const toggle = page.locator('.detail-extra .lib-toggle');
-    await page.waitForFunction(() => document.querySelector('.detail-extra .lib-toggle')?.disabled === false);
-    assert.equal(await toggle.getAttribute('aria-pressed'), 'false');
-    await toggle.click();
+    await openHeaderMenu();
+    assert.equal(await page.locator('.detail-actions button:not([hidden])').count(), 3, 'album header keeps three buttons');
+    await menuLabel('Add to Library').click();
     await toast(/Added “Test Album”/);
-    assert.equal(await toggle.getAttribute('aria-pressed'), 'true', 'album is in the library');
+    await openHeaderMenu();
+    assert.equal(await menuLabel('Delete from Library').count(), 1, 'album is in the library');
+    await page.keyboard.press('Escape');
 
     // 2. 资料库各分类：歌曲、专辑、艺人、最近添加
     await page.locator('#nav [data-nav="library:songs"]').click();
@@ -194,8 +204,7 @@ const album = {
     assert.equal(await page.locator('#view .lib-track a[href^="javascript"], #view .lib-track a[href^="https://evil"]').count(), 0, 'unsafe links dropped');
     assert.equal(await page.locator('#view .lib-track span.track-title').textContent(), 'Evil', 'title kept as plain text');
 
-    // 10. 喜爱：歌曲行菜单「喜爱」→ 行内星形、「喜爱」筛选、「喜爱的歌曲」；专辑页 ☆
-    const menuLabel = (text) => page.locator('.menu .menu-label').filter({ hasText: new RegExp(`^${text}$`) });
+    // 10. 喜爱：歌曲行菜单「喜爱」→ 行内星形、「喜爱」筛选、「喜爱的歌曲」；专辑页「更多」→「喜爱」
     await page.goto(BASE + '/library/songs');
     await page.locator('#view .lib-track').nth(2).waitFor();
     await page.locator('#view .lib-track', { hasText: 'Second Song' }).locator('.track-more').click();
@@ -210,17 +219,22 @@ const album = {
     await page.locator('#view .lib-track').first().waitFor();
     assert.equal(await page.locator('#title').textContent(), 'Favorite Songs');
     assert.deepEqual(await rowTitles(), ['Second Song']);
-    assert(await page.locator('#edit').isHidden(), 'Favorite Songs cannot be edited');
+    assert.equal(await page.locator('.detail-actions button:not([hidden])').count(), 3, 'Favorite Songs header keeps three buttons');
+    await page.locator('#more').click();
+    assert.equal(await menuLabel('Edit…').count(), 0, 'Favorite Songs cannot be edited');
+    await page.keyboard.press('Escape');
     assert.equal(await page.locator('#view .lib-grip').count(), 0, 'Favorite Songs cannot be reordered');
     await page.locator('#view .lib-track .track-more').click();
     await menuLabel('Undo Favorite').click();
     await page.locator('#empty:not([hidden])').waitFor();
     assert.equal(await page.locator('#empty .lib-empty-title').textContent(), 'No favorite songs yet');
     await page.goto(BASE + ALBUM_PATH);
-    await page.waitForFunction(() => document.querySelector('.detail-extra .lib-fav-toggle')?.disabled === false);
-    await page.locator('.detail-extra .lib-fav-toggle').click();
+    await openHeaderMenu();
+    await menuLabel('Favorite').click();
     await toast(/Favorited “Test Album”/);
-    assert.equal(await page.locator('.detail-extra .lib-fav-toggle').getAttribute('aria-pressed'), 'true');
+    await openHeaderMenu();
+    assert.equal(await menuLabel('Undo Favorite').count(), 1);
+    await page.keyboard.press('Escape');
     await page.goto(BASE + '/library/albums');
     await page.locator('#fav-only').click();
     assert.deepEqual(await page.locator('#view .lib-grid .shelf-title').allTextContents(), ['Test Album'], 'favorite album listed');

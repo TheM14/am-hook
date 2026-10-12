@@ -2,7 +2,7 @@
 // 歌单保存在浏览器中（/assets/library.mjs）：可以编辑名称与描述、喜爱、拖动排序、从歌单中删除曲目、移到文件夹、复制、导出与删除。
 // /library/favorite-songs 为「喜爱的歌曲」：由喜爱的歌曲自动组成（最近喜爱的在前），不能编辑与排序，取消喜爱即移出。
 import * as library from '/assets/library.mjs';
-import { createActions, openMenu } from './actions.mjs';
+import { createActions } from './actions.mjs';
 import {
   LIB_ICON, playlistCover, playlistName, editPlaylist, deletePlaylist, duplicatePlaylist, exportPlaylist,
   playlistMenuItems, trackRow, syncTrackRows, favoriteCover, folderName, moveMenuItems,
@@ -180,38 +180,36 @@ export function mount({ root, url, signal, player, navigate, toast, onLangChange
   });
   player.onChange(() => syncTrackRows(rows, player));
 
-  // 喜爱歌单（头部 ☆，在编辑按钮之后）；「喜爱的歌曲」没有编辑与喜爱
-  const star = actions.favoriteButton(() => (!smart && current() ? { kind: 'library-playlist', playlistId: id, name: playlistName(current()) } : null));
-  $('edit').after(star.button);
-  $('edit').hidden = star.button.hidden = smart;
-
-  $('edit').addEventListener('click', () => editPlaylist(id));
-  $('more').addEventListener('click', (e) => {
-    e.stopPropagation();
+  // 头部只留随机播放、播放与「更多」：编辑、喜爱歌单等都在菜单里（顺序见设置中心），删除固定在最后；「喜爱的歌曲」没有编辑与喜爱
+  actions.headerMenu(() => {
     const list = current();
-    if (!list) return;
+    if (!list) return null;
     if (smart) {
-      openMenu($('more'), [
-        { icon: LIB_ICON.addToPlaylist, label: t('library.addToPlaylist'), submenu: () => playlistMenuItems(() => current().tracks, { toast, navigate }) },
+      return { entries: {
+        addToPlaylist: { icon: LIB_ICON.addToPlaylist, label: t('library.addToPlaylist'), submenu: () => playlistMenuItems(() => current().tracks, { toast, navigate }) },
         // 把当前的喜爱歌曲存成一个普通歌单（可以编辑、导出、分享）
-        { icon: LIB_ICON.duplicate, label: t('library.saveAsPlaylist'), onSelect: () => {
+        saveAsPlaylist: { icon: LIB_ICON.duplicate, label: t('library.saveAsPlaylist'), onSelect: () => {
           const copy = library.createPlaylist({ name: `${t('library.favoriteSongs')} ${t('library.copySuffix')}`, tracks: current().tracks });
           toast(t('library.created', { name: playlistName(copy) }));
           navigate(`/library/playlist/${copy.id}`);
         } },
-      ]);
-      return;
+      } };
     }
-    openMenu($('more'), [
-      { icon: LIB_ICON.edit, label: t('library.editEllipsis'), onSelect: () => editPlaylist(id) },
-      { icon: LIB_ICON.addToPlaylist, label: t('library.addToPlaylist'), submenu: () => playlistMenuItems(() => current().tracks, { toast, navigate, except: id }) },
-      { icon: LIB_ICON.move, label: t('library.moveToFolder'), submenu: () => moveMenuItems({ type: 'playlist', id }, current().folderId, { toast }) },
-      { icon: LIB_ICON.duplicate, label: t('library.duplicate'), onSelect: () => duplicatePlaylist(id, { toast, navigate }) },
-      { icon: LIB_ICON.export, label: t('library.exportPlaylist'), onSelect: () => exportPlaylist(id) },
-      '-',
-      { icon: LIB_ICON.remove, label: t('library.deletePlaylistEllipsis'), danger: true, onSelect: () => deletePlaylist(id, { toast, onDeleted: () => navigate(list.folderId && library.folder(list.folderId) ? `/library/playlist-folder/${list.folderId}` : '/library/all-playlists', { replace: true }) }) },
-    ]);
-  });
+    return {
+      // 喜爱歌单（favorite）由 target 给出
+      target: { kind: 'library-playlist', playlistId: id, name: playlistName(list) },
+      entries: {
+        edit: { icon: LIB_ICON.edit, label: t('library.editEllipsis'), onSelect: () => editPlaylist(id) },
+        addToPlaylist: { icon: LIB_ICON.addToPlaylist, label: t('library.addToPlaylist'), submenu: () => playlistMenuItems(() => current().tracks, { toast, navigate, except: id }) },
+        moveToFolder: { icon: LIB_ICON.move, label: t('library.moveToFolder'), submenu: () => moveMenuItems({ type: 'playlist', id }, current().folderId, { toast }) },
+        duplicate: { icon: LIB_ICON.duplicate, label: t('library.duplicate'), onSelect: () => duplicatePlaylist(id, { toast, navigate }) },
+        export: { icon: LIB_ICON.export, label: t('library.exportPlaylist'), onSelect: () => exportPlaylist(id) },
+      },
+      tail: [
+        { icon: LIB_ICON.remove, label: t('library.deletePlaylistEllipsis'), danger: true, onSelect: () => deletePlaylist(id, { toast, onDeleted: () => navigate(list.folderId && library.folder(list.folderId) ? `/library/playlist-folder/${list.folderId}` : '/library/all-playlists', { replace: true }) }) },
+      ],
+    };
+  }, $('more'));
   $('notes-more').addEventListener('click', () => {
     notesExpanded = !notesExpanded;
     render();
@@ -238,7 +236,6 @@ export function mount({ root, url, signal, player, navigate, toast, onLangChange
       root.querySelector('#empty .lib-empty-title').textContent = t('library.emptyFavorites');
       root.querySelector('#empty .lib-empty-hint').textContent = t('library.emptyFavoritesHint');
     }
-    star.refresh();
     renderHero(list);
     renderTracks(list);
     renderFooter(list);

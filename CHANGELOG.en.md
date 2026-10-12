@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## Unreleased
+
+### Changed
+- Album, playlist, artist and library playlist headers keep only Shuffle, Play and More: download, favorite, add to library, edit playlist, artist info and the rest moved into the More menu
+- More menus now use the music.apple.com amp-contextual-menu style: frosted material, label on the left and icon on the right; on phones a 270px sheet centered at the bottom over a scrim
+
+### Bug Fixes
+- 🐛 Shuffle and Download buttons overlapping on album and playlist pages on phones
+
 ## v0.4.0 (2026-10-12)
 
 ### New

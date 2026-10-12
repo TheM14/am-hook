@@ -29,6 +29,12 @@ export const ICON = {
   download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>',
 };
 
+/** 详情页头部「更多」菜单（createActions 的 headerMenu）的条目顺序，组间加分隔线；各页面只列出自己有的条目 */
+const HEADER_MENU = [
+  ['download', 'favorite', 'library', 'addToPlaylist', 'about', 'edit', 'moveToFolder', 'duplicate', 'saveAsPlaylist', 'export'],
+  ['copySite', 'copyApple'],
+];
+
 /** 「更多」菜单里的下载（downloads.mjs，使用设置中心的下载设置）：歌曲、专辑与 Apple Music 歌单；不能下载时为 null */
 function downloadSpec(target) {
   const r = target.resource;
@@ -341,12 +347,17 @@ function copyText(text, done) {
 }
 
 /* ---------- 弹出菜单：整站一个，fixed 定位，避免被列表 overflow 裁剪 ---------- */
-const menu = { el: null, trigger: null, player: null };
+const menu = { el: null, scrim: null, trigger: null, player: null };
+/** 与官网 amp-contextual-menu 相同，xsmall（< 484px）时菜单 270px 宽、居中贴底，背后有遮罩 */
+const SHEET = matchMedia('(max-width: 483px)');
 
 function menuEl() {
   if (menu.el) return menu.el;
   menu.el = el('div', { className: 'menu', role: 'menu', hidden: true });
-  document.body.append(menu.el);
+  // 手机上菜单背后的遮罩（与官网 contextual-menu-scrim 相同）；点按遮罩关闭菜单，这次点按不会落到下面的页面上
+  menu.scrim = el('div', { className: 'menu-scrim', hidden: true });
+  menu.scrim.addEventListener('click', () => closeMenu(false));
+  document.body.append(menu.scrim, menu.el);
   menu.el.addEventListener('keydown', (e) => {
     const items = [...menu.el.querySelectorAll('[role="menuitem"]')];
     const i = items.indexOf(document.activeElement);
@@ -359,12 +370,12 @@ function menuEl() {
     else if (e.key === 'Tab') closeMenu(false);
   });
   document.addEventListener('pointerdown', (e) => {
-    if (menu.trigger && !menu.el.contains(e.target) && !menu.trigger.contains(e.target)) closeMenu(false);
+    if (menu.trigger && e.target !== menu.scrim && !menu.el.contains(e.target) && !menu.trigger.contains(e.target)) closeMenu(false);
   });
   addEventListener('resize', () => closeMenu(false));
   addEventListener('scroll', (e) => {
     if (!menu.trigger || menu.el.contains(e.target)) return;
-    if (matchMedia('(max-width: 760px)').matches) positionMenu();
+    if (SHEET.matches) positionMenu();
     else closeMenu(false);
   }, { capture: true });
   return menu.el;
@@ -373,6 +384,7 @@ function menuEl() {
 function closeMenu(focusTrigger) {
   if (!menu.trigger) return;
   menu.el.hidden = true;
+  menu.scrim.hidden = true;
   menu.trigger.setAttribute('aria-expanded', 'false');
   menu.trigger.closest('.card-wrap, .row-wrap')?.classList.remove('menu-open');
   if (focusTrigger) menu.trigger.focus();
@@ -389,6 +401,7 @@ export function openMenu(trigger, items) {
   closeMenu(false);
   if (reopen) return;
   box.hidden = false;
+  menu.scrim.hidden = false;
   menu.trigger = trigger;
   trigger.setAttribute('aria-expanded', 'true');
   // 菜单打开期间封面上的按钮保持显示
@@ -423,16 +436,17 @@ function fillMenu(items) {
   box.querySelector('[role="menuitem"]')?.focus({ preventScroll: true });
 }
 
-/** 与歌曲页的菜单相同：手机上贴底显示；否则右对齐触发按钮，朝空间大的一侧展开 */
+/** 手机上居中贴底（距底 25px，最高为视口高度减去上下各 25px）；否则右对齐触发按钮，朝空间大的一侧展开 */
 function positionMenu() {
   const box = menu.el;
-  if (matchMedia('(max-width: 760px)').matches) {
+  if (SHEET.matches) {
     const viewport = window.visualViewport;
     const top = viewport ? viewport.offsetTop : 0;
     const height = viewport ? viewport.height : innerHeight;
-    box.style.maxHeight = `${Math.max(80, height - 32)}px`;
-    box.style.left = '12px';
-    box.style.top = `${top + height - box.getBoundingClientRect().height - 16}px`;
+    const width = viewport ? viewport.width : innerWidth;
+    box.style.maxHeight = `${Math.max(80, height - 50)}px`;
+    box.style.left = `${(viewport ? viewport.offsetLeft : 0) + (width - box.getBoundingClientRect().width) / 2}px`;
+    box.style.top = `${top + height - box.getBoundingClientRect().height - 25}px`;
     return;
   }
   const r = menu.trigger.getBoundingClientRect();
@@ -526,24 +540,24 @@ export function createActions({ signal, player, navigate, toast }) {
     toast(t(on ? 'library.favoritedName' : 'library.unfavoritedName', { name: target.name }));
   }
 
-  /** 资料库菜单项：喜爱 / 取消喜爱、添加到资料库 / 从资料库中删除、添加到歌单（子菜单）、移到文件夹（子菜单） */
-  function libraryItems(target, button) {
-    const items = [];
+  /** 资料库菜单项（按键名）：favorite 喜爱 / 取消喜爱、library 添加到资料库 / 从资料库中删除、addToPlaylist 添加到歌单（子菜单）、moveToFolder 移到文件夹（子菜单） */
+  function libraryEntries(target, button) {
+    const entries = {};
     const fav = favoriteKey(target);
     if (fav) {
       const on = favoriteOf(fav);
-      items.push({ icon: on ? LIB_ICON.star : LIB_ICON.starFilled, label: t(on ? 'library.unfavorite' : 'library.favorite'), onSelect: () => toggleFavorite(target, button) });
+      entries.favorite = { icon: on ? LIB_ICON.star : LIB_ICON.starFilled, label: t(on ? 'library.unfavorite' : 'library.favorite'), onSelect: () => toggleFavorite(target, button) };
     }
     const key = libraryKey(target);
     if (key) {
       const has = library.inLibrary(key.kind, key.id);
-      items.push({ icon: has ? LIB_ICON.remove : LIB_ICON.add, label: t(has ? 'library.remove' : 'library.add'), onSelect: () => toggleLibrary(target, button) });
+      entries.library = { icon: has ? LIB_ICON.remove : LIB_ICON.add, label: t(has ? 'library.remove' : 'library.add'), onSelect: () => toggleLibrary(target, button) };
     }
     if (key || target.getTracks) {
-      items.push({
+      entries.addToPlaylist = {
         icon: LIB_ICON.addToPlaylist, label: t('library.addToPlaylist'),
         submenu: () => playlistMenuItems(() => targetTracks(target), { toast, navigate, except: target.playlistId }),
-      });
+      };
     }
     // 移到文件夹：本地歌单、文件夹（页面给出 moveEntry），以及已添加到资料库的 Apple Music 歌单
     const catalog = key && key.kind === 'playlist' && library.libraryItem('playlist', key.id);
@@ -551,9 +565,19 @@ export function createActions({ signal, player, navigate, toast }) {
     if (entry) {
       const current = entry.type === 'folder' ? (library.folder(entry.id) || {}).parentId
         : entry.type === 'playlist' ? (library.playlist(entry.id) || {}).folderId : catalog.folderId;
-      items.push({ icon: LIB_ICON.move, label: t('library.moveToFolder'), submenu: () => moveMenuItems(entry, current || '', { toast }) });
+      entries.moveToFolder = { icon: LIB_ICON.move, label: t('library.moveToFolder'), submenu: () => moveMenuItems(entry, current || '', { toast }) };
     }
-    return items;
+    return entries;
+  }
+
+  /** 复制本站链接与 Apple Music 链接（按键名）；本地歌单没有 Apple Music 链接 */
+  function linkEntries(target) {
+    if (!target.href || !target.apple) return {};
+    const site = location.origin + target.href;
+    return {
+      copySite: { icon: ICON.link, label: t('action.copySite'), title: site, onSelect: () => copy(site) },
+      copyApple: { icon: ICON.apple, label: t('action.copyApple'), title: target.apple, onSelect: () => copy(target.apple) },
+    };
   }
 
   function menuItems(target, button) {
@@ -572,17 +596,42 @@ export function createActions({ signal, player, navigate, toast }) {
       });
     }
     if (target.albumHref) items.push({ icon: ICON.album, label: t('action.goAlbum'), onSelect: () => navigate(target.albumHref) });
-    const lib = libraryItems(target, button);
+    const lib = Object.values(libraryEntries(target, button));
     if (lib.length) items.push(...(items.length ? ['-'] : []), ...lib);
     if (target.extraItems && target.extraItems.length) items.push(...(items.length ? ['-'] : []), ...target.extraItems);
-    // 本地歌单没有 Apple Music 链接
-    if (!target.href || !target.apple) return items;
-    if (items.length) items.push('-');
-    const site = location.origin + target.href;
-    items.push(
-      { icon: ICON.link, label: t('action.copySite'), title: site, onSelect: () => copy(site) },
-      { icon: ICON.apple, label: t('action.copyApple'), title: target.apple, onSelect: () => copy(target.apple) });
+    const links = Object.values(linkEntries(target));
+    if (links.length) items.push(...(items.length ? ['-'] : []), ...links);
     return items;
+  }
+
+  /**
+   * 详情页头部的「更多」按钮（专辑 / 歌单 / 艺人 / 本地歌单页的头部只留随机播放、播放与它）。
+   * getMenu(button) 返回 { target?, entries?, tail? } 或 null：target 的资料库操作与复制链接自动加入；
+   * entries 为页面自己的条目（键名见 HEADER_MENU，如 download / about），全部条目按 HEADER_MENU 的顺序分组排列；
+   * tail 固定在最后（如删除歌单）。button 为页面里已有的按钮，没有时新建一个
+   */
+  function headerMenu(getMenu, button = null, className = 'detail-circle-btn') {
+    if (!button) {
+      button = el('button', { className, type: 'button', innerHTML: ICON.more });
+      button.setAttribute('aria-haspopup', 'menu');
+      button.setAttribute('aria-expanded', 'false');
+    }
+    const label = () => { button.title = t('action.more'); button.setAttribute('aria-label', button.title); };
+    label();
+    signal.addEventListener('abort', AmI18n.onChange(label), { once: true });
+    button.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const m = getMenu(button);
+      if (!m) return;
+      const entries = { ...(m.target ? { ...libraryEntries(m.target, button), ...linkEntries(m.target) } : {}), ...m.entries };
+      const items = [];
+      for (const group of [...HEADER_MENU.map((keys) => keys.filter((key) => entries[key]).map((key) => entries[key])), m.tail || []]) {
+        if (group.length) items.push(...(items.length ? ['-'] : []), ...group);
+      }
+      openMenu(button, items);
+    });
+    return button;
   }
 
   /** 「更多」按钮；target 也可以是返回当前条目的函数（如歌词界面里正在播放的歌曲），返回 null 时不弹出菜单 */
@@ -696,5 +745,5 @@ export function createActions({ signal, player, navigate, toast }) {
     return wrap;
   }
 
-  return { moreButton, coverActions, wrapCard, wrapRow, libraryButton, favoriteButton, playlistButton, toggleFavorite };
+  return { moreButton, coverActions, wrapCard, wrapRow, libraryButton, favoriteButton, playlistButton, toggleFavorite, headerMenu };
 }

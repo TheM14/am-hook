@@ -133,11 +133,15 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
   signal.addEventListener('abort', downloads.onChange(renderDownloads), { once: true });
 
   /* ---------- 下拉菜单（单例，fixed 定位，避免被列表 overflow 裁剪） ---------- */
-  const menu = { el: $('menu'), trigger: null };
+  // 样式与位置同 actions.mjs 的菜单（官网 amp-contextual-menu）：手机（< 484px）上居中贴底，背后有遮罩，点按遮罩关闭
+  const menu = { el: $('menu'), scrim: Object.assign(document.createElement('div'), { className: 'menu-scrim', hidden: true }), trigger: null };
+  const sheet = matchMedia('(max-width: 483px)');
+  menu.el.before(menu.scrim);
+  menu.scrim.addEventListener('click', () => closeMenu(false));
 
   function closeMenu(focusTrigger) {
     if (!menu.trigger) return;
-    menu.el.hidden = true;
+    menu.el.hidden = menu.scrim.hidden = true;
     menu.trigger.setAttribute('aria-expanded', 'false');
     if (focusTrigger) menu.trigger.focus();
     menu.trigger = null;
@@ -165,7 +169,7 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
       node.addEventListener('click', () => { closeMenu(false); if (it.onSelect) it.onSelect(); });
       return node;
     }));
-    menu.el.hidden = false;
+    menu.el.hidden = menu.scrim.hidden = false;
     menu.trigger = trigger;
     trigger.setAttribute('aria-expanded', 'true');
     positionMenu();
@@ -177,13 +181,14 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
    * 两侧都放不下时（窄屏 / 页面放大）限制高度，菜单内部滚动。
    */
   function positionMenu() {
-    if (matchMedia('(max-width: 760px)').matches) {
+    if (sheet.matches) {
       const viewport = window.visualViewport;
       const top = viewport ? viewport.offsetTop : 0;
       const height = viewport ? viewport.height : innerHeight;
-      menu.el.style.maxHeight = `${Math.max(80, height - 32)}px`;
-      menu.el.style.left = '12px';
-      menu.el.style.top = `${top + height - menu.el.getBoundingClientRect().height - 16}px`;
+      const width = viewport ? viewport.width : innerWidth;
+      menu.el.style.maxHeight = `${Math.max(80, height - 50)}px`;
+      menu.el.style.left = `${(viewport ? viewport.offsetLeft : 0) + (width - menu.el.getBoundingClientRect().width) / 2}px`;
+      menu.el.style.top = `${top + height - menu.el.getBoundingClientRect().height - 25}px`;
       return;
     }
     const r = menu.trigger.getBoundingClientRect();
@@ -211,13 +216,13 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     else if (e.key === 'Tab') closeMenu(false);
   });
   document.addEventListener('pointerdown', (e) => {
-    if (menu.trigger && !menu.el.contains(e.target) && !menu.trigger.contains(e.target)) closeMenu(false);
+    if (menu.trigger && e.target !== menu.scrim && !menu.el.contains(e.target) && !menu.trigger.contains(e.target)) closeMenu(false);
   }, { signal });
   addEventListener('resize', () => closeMenu(false), { signal });
   // 菜单自身的滚动（放大后内容超出、键盘聚焦自动滚动）不应关闭菜单
   addEventListener('scroll', (e) => {
     if (!menu.trigger || menu.el.contains(e.target)) return;
-    if (matchMedia('(max-width: 760px)').matches) positionMenu();
+    if (sheet.matches) positionMenu();
     else closeMenu(false);
   }, { capture: true, signal });
 
