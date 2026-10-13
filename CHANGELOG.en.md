@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.4.4 (2026-10-13)
 
 ### Changed
 - ⚡ Front-end assets are loaded by content-hashed URLs (`/assets/h/app.<hash>.mjs`) cached as `immutable`, so pages, modules, Workers and wasm are no longer revalidated (304) on every load
