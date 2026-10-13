@@ -251,22 +251,19 @@
     },
 
     /**
-     * 有些歌曲没有 master m3u8（/m3u8 给出的是整首 .m4p 或者报错），只有 AAC-LC 256：与参考实现相同，
-     * 改用 /webplayback 的 media m3u8（Widevine，见 decrypt.js），作为唯一的变体（widevine: true）返回，masterUrl 为 null
+     * 有些歌曲没有 master m3u8（/m3u8 给出的是整首 .m4p），只有 AAC-LC 256：与参考实现相同，
+     * 改用 /webplayback 的 media m3u8（Widevine，见 decrypt.js），作为唯一的变体（widevine: true）返回，masterUrl 为 null。
+     * 只有 /m3u8 成功给出非 .m3u8 地址时才这样降级；/m3u8 或 /webplayback 请求失败（HTTP 500、连不上、code 不为 0）
+     * 直接抛出错误：这类错误多是临时的（批量下载时尤其常见），交给调用方重试，以免把有 ALAC / Atmos 的歌曲下成 AAC
      */
     async songMaster(adamId, signal) {
-      let m3u8 = null, missing = new Error(t('wrapper.noMaster'));
-      try {
-        m3u8 = settings.local
-          ? (await localJson(`/m3u8?${query({ adamId })}`, { signal }))?.m3u8
-          : (await serverJson(`/parse/song/${encodeURIComponent(adamId)}`, { signal })).data?.masterUrl;
-      } catch (error) {
-        if (error && error.name === 'AbortError') throw error;
-        missing = error;
-      }
+      const m3u8 = settings.local
+        ? (await localJson(`/m3u8?${query({ adamId })}`, { signal }))?.m3u8
+        : (await serverJson(`/parse/song/${encodeURIComponent(adamId)}`, { signal })).data?.masterUrl;
+      if (!m3u8) throw new Error(t('wrapper.noMaster'));
       // .m4p 等不是 master（也不要去下载它）
       let master = null;
-      try { master = m3u8 && /\.m3u8$/i.test(new URL(m3u8).pathname) ? m3u8 : null; } catch {}
+      try { master = /\.m3u8$/i.test(new URL(m3u8).pathname) ? m3u8 : null; } catch {}
       if (master) {
         // Apple CDN（aod.itunes.apple.com）允许跨源请求，master 与 media m3u8 都直接获取
         const res = await fetch(master, { signal });
@@ -274,11 +271,8 @@
         const masterUrl = res.url || master;
         return { masterUrl, variants: parseSongMaster(await res.text(), masterUrl) };
       }
-      const url = await AmWrapper.webplayback(adamId, signal).catch((error) => {
-        if (error && error.name === 'AbortError') throw error;
-        return null;
-      });
-      if (!url) throw missing;
+      const url = await AmWrapper.webplayback(adamId, signal);
+      if (!url) throw new Error(t('wrapper.noMaster'));
       return { masterUrl: null, variants: [webplaybackVariant(adamId, url)] };
     },
 

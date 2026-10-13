@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## Unreleased
+
+### Bug Fixes
+- 🐛 A transient wrapper-lite `/m3u8` error (such as HTTP 500) during batch downloads downgraded the song to AAC-LC 256: `/webplayback` is now used only when `/m3u8` returns an `.m4p`, and failed requests are reported and retried
+
 ## v0.4.3 (2026-10-12)
 
 ### New
