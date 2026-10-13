@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.4.5 (2026-10-13)
 
 ### Bug Fixes
 - 🐛 On serverless deployments, the 404 for a missing content-hashed URL (an old page asking for a version that is gone) also carried `immutable`, so after rolling back to that version browsers kept the cached 404: such requests now reach the function, which returns a `no-store` 404
