@@ -38,9 +38,12 @@ pub async fn fallback_handler(uri: Uri, headers: HeaderMap) -> Response<Body> {
     {
         return app_handler(headers).await;
     }
+    // no-store：不存在的内容哈希地址（/assets/h/...，旧页面请求已不存在的版本）也走到这里，
+    // 404 被浏览器或 CDN 缓存的话，回滚到该版本后仍会用缓存的 404（与 serverless/core.mjs 的 notFound 相同）
     let response = Response::builder()
         .status(StatusCode::NOT_FOUND)
         .header(CONTENT_TYPE, "text/plain; charset=utf-8")
+        .header(axum::http::header::CACHE_CONTROL, "no-store")
         .body(Body::from("Not found\n"))
         .unwrap();
     log::note(response, "not found")
@@ -332,4 +335,22 @@ fn gateway_error(message: &str) -> Response<Body> {
 /// 上游请求失败：响应只带概要，请求日志中附上具体原因
 fn upstream_error(message: &str, error: impl std::fmt::Display) -> Response<Body> {
     log::note(internal_error(message), format!("{message}: {error}"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn not_found_is_not_cached() {
+        // 旧版本的内容哈希地址与其他未知路径：404 不能被浏览器或 CDN 缓存
+        for path in ["/assets/h/app.0000000000000000.mjs", "/assets/h/x.0000000000000000.js", "/nope"] {
+            let response = fallback_handler(path.parse().unwrap(), HeaderMap::new()).await;
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
+            assert_eq!(response.headers()[axum::http::header::CACHE_CONTROL], "no-store", "{path}");
+        }
+        // 页面地址仍返回外壳
+        let page = fallback_handler("/library/songs".parse().unwrap(), HeaderMap::new()).await;
+        assert_eq!(page.status(), StatusCode::OK);
+    }
 }
