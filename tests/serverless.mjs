@@ -282,6 +282,10 @@ test('Cloudflare entry: caches amp responses, serves the app shell for page path
     assert.deepEqual(shell, ['https://cf.test/']);
     assert.equal((await worker.fetch(new Request('https://cf.test/library/songs'), env, ctx)).status, 200);
     assert.equal((await worker.fetch(new Request('https://cf.test/assets/missing.js'), env, ctx)).status, 404);
+    // A hashed URL from an older version: the 404 must not be cached (dist/_headers only covers files that exist)
+    const stale = await worker.fetch(new Request('https://cf.test/assets/h/app.0000000000000000.mjs'), env, ctx);
+    assert.equal(stale.status, 404);
+    assert.equal(stale.headers.get('cache-control'), 'no-store');
     assert.equal((await worker.fetch(new Request('https://cf.test/library/songs', { method: 'POST' }), env, ctx)).status, 404);
   } finally {
     delete globalThis.caches;
@@ -302,8 +306,15 @@ test('Vercel entry: handles the original URL and the rewritten /api/handler?__pa
   assert.equal(calls.at(-1).url, 'https://amp-api-edge.music.apple.com/v1/catalog/us/search?term=z');
   assert.equal((await vercel(new Request('https://v.test/api/handler?__path=/status'))).status, 501);
   assert.equal((await vercel(new Request('https://v.test/api/handler'))).status, 404);
+  // Missing hashed URLs are rewritten to the function: its no-store takes priority over the
+  // immutable header vercel.json sets for /assets/h/, so the 404 is not cached for a year
+  const stale = await vercel(new Request('https://v.test/api/handler?__path=/assets/h/app.0000000000000000.mjs&__rest=app.0000000000000000.mjs'));
+  assert.equal(stale.status, 404);
+  assert.equal(stale.headers.get('cache-control'), 'no-store');
 
-  const rewrites = JSON.parse(fs.readFileSync(path.join(root, 'vercel.json'), 'utf8')).rewrites;
+  const config = JSON.parse(fs.readFileSync(path.join(root, 'vercel.json'), 'utf8'));
+  assert(config.rewrites.some(({ source }) => source === '/assets/h/:__rest*'), 'missing hashed URLs reach the function');
+  const rewrites = config.rewrites;
   for (const { source, destination } of rewrites) {
     assert(destination === '/index.html' || destination === `/api/handler?__path=${source}`, source);
     // named segments are stripped by the handler only when they start with `__`
@@ -341,6 +352,10 @@ test('build-static lays out src/ui the way src/assets.rs serves it', () => {
     for (const url of imports) assert(url.startsWith('/assets/h/') && fs.existsSync(path.join(out, url)), url);
     const downloads = read(`assets/h/${fs.readdirSync(path.join(out, 'assets/h')).find((f) => /^downloads\.\w+\.mjs$/.test(f))}`).toString();
     assert(/from '\/assets\/h\/zip\.[0-9a-f]{16}\.mjs'/.test(downloads), 'relative import rewritten');
+    // Vercel would serve _headers as a public file; only the Cloudflare build (wrangler.toml) writes it
+    assert(!fs.existsSync(path.join(out, '_headers')), 'no _headers without --cloudflare');
+    assert(fs.readFileSync(path.join(root, 'wrangler.toml'), 'utf8').includes('build-static.mjs dist --cloudflare'));
+    execFileSync(process.execPath, [path.join(root, 'scripts/build-static.mjs'), out, '--cloudflare'], { stdio: 'pipe' });
     assert(read('_headers').toString().startsWith('/assets/h/*\n'), 'Cloudflare cache headers for hashed files');
     const headers = JSON.parse(fs.readFileSync(path.join(root, 'vercel.json'), 'utf8')).headers;
     assert(headers.some(({ source, headers }) => source === '/assets/h/(.*)' && headers.some((h) => /immutable/.test(h.value))));

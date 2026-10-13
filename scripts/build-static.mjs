@@ -5,15 +5,18 @@
 //
 // 与二进制（src/assets.rs 的 Served）相同：文本资源里对其他资源的引用换成内容哈希地址
 // （/assets/h/views/home.<hash>.mjs），哈希按换完后的内容计算；每个资源同时写到原地址与哈希地址。
-// 哈希地址由 vercel.json 与 dist/_headers（Cloudflare）设为长期缓存。src/assets.rs 的测试会比对两边的输出。
-// 用法：node scripts/build-static.mjs [输出目录]
+// 哈希地址由 vercel.json 与 dist/_headers（Cloudflare，只在 --cloudflare 时生成）设为长期缓存。
+// src/assets.rs 的测试会比对两边的输出。
+// 用法：node scripts/build-static.mjs [输出目录] [--cloudflare]
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ui = path.join(root, 'src/ui');
-const out = path.resolve(root, process.argv[2] || 'dist');
+const args = process.argv.slice(2);
+const cloudflare = args.includes('--cloudflare');
+const out = path.resolve(root, args.find((arg) => !arg.startsWith('--')) || 'dist');
 // 由函数按环境变量生成（serverless/core.mjs），不能有同名静态文件，也不加哈希
 const HOST_JS = '/assets/host.js';
 const HASHED_PREFIX = '/assets/h/';
@@ -110,6 +113,7 @@ assets.forEach(({ url }, i) => {
   write(url, bodies[i]);
   if (url !== '/') write(hashed[i], bodies[i]);
 });
-// Cloudflare Workers 静态资源的响应头（Vercel 见 vercel.json 的 headers）
-fs.writeFileSync(path.join(out, '_headers'), `${HASHED_PREFIX}*\n  Cache-Control: public, max-age=31536000, immutable\n`);
+// Cloudflare Workers 静态资源的响应头，只作用于命中的静态文件（Worker 给出的 404 不受影响）。
+// Vercel 用 vercel.json 的 headers，并会把 _headers 当作普通文件公开，因此不生成
+if (cloudflare) fs.writeFileSync(path.join(out, '_headers'), `${HASHED_PREFIX}*\n  Cache-Control: public, max-age=31536000, immutable\n`);
 console.log(`${count} files -> ${path.relative(root, out) || out}`);

@@ -8,7 +8,8 @@ main = "serverless/cloudflare.mjs"
 compatibility_date = "2025-06-01"
 
 [build]
-command = "node scripts/build-static.mjs"
+# --cloudflare：生成 dist/_headers（内容哈希地址长期缓存）
+command = "node scripts/build-static.mjs dist --cloudflare"
 
 # 能匹配到文件的请求由平台直接提供，其余（后端接口与页面地址）交给 Worker
 [assets]

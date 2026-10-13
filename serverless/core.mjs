@@ -479,6 +479,11 @@ export async function handle(request, env = {}, platform = {}) {
   return wrapperRoute(method, path, url, request, wrapper);
 }
 
+/**
+ * 显式 `no-store`：不存在的内容哈希地址（/assets/h/...，旧页面请求已不存在的版本）也由 vercel.json 改写到这里，
+ * 函数给出的 Cache-Control 优先于 vercel.json 为 /assets/h/ 设置的 immutable，404 因此不会被长期缓存
+ * （否则回滚到该版本后浏览器仍用缓存的 404）。
+ */
 export function notFound() {
-  return new Response('Not found\n', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8' } });
+  return new Response('Not found\n', { status: 404, headers: { 'content-type': 'text/plain; charset=utf-8', ...NO_STORE } });
 }

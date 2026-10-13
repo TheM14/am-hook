@@ -9,6 +9,7 @@
   ],
   "rewrites": [
     { "source": "/assets/host.js", "destination": "/api/handler?__path=/assets/host.js" },
+    { "source": "/assets/h/:__rest*", "destination": "/api/handler?__path=/assets/h/:__rest*" },
     { "source": "/amp/:__rest*", "destination": "/api/handler?__path=/amp/:__rest*" },
     { "source": "/parse/:__rest*", "destination": "/api/handler?__path=/parse/:__rest*" },
     { "source": "/mv/:__rest*", "destination": "/api/handler?__path=/mv/:__rest*" },
