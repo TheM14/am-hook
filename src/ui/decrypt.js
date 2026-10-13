@@ -73,6 +73,30 @@
     }
   }
 
+  /**
+   * 用完的 Worker（Worker 或 WorkerClient）放回这里，下次直接取用：批量下载时不必每首歌都重新请求脚本、
+   * 编译 wasm（资源以 no-cache 提供，每次新建都要向服务器确认）。最多保留 max 个，空闲超过 IDLE_WORKER_MS 即终止以释放内存。
+   */
+  const IDLE_WORKER_MS = 30000;
+  function idleWorkers(max) {
+    const idle = [];
+    return {
+      take() {
+        const worker = idle.pop();
+        if (worker) clearTimeout(worker.idleTimer);
+        return worker;
+      },
+      give(worker) {
+        if (idle.length >= max) return worker.terminate();
+        worker.idleTimer = setTimeout(() => {
+          idle.splice(idle.indexOf(worker), 1);
+          worker.terminate();
+        }, IDLE_WORKER_MS);
+        idle.push(worker);
+      },
+    };
+  }
+
   /** 解密 Worker 池：任务排队，空闲 Worker 依次领取；每个 Worker 各自一个 wasm 实例 */
   class DecryptPool {
     constructor(size) {
@@ -370,6 +394,9 @@
     });
   }
 
+  /** 写 OPFS 的 Worker：只做文件操作，不加载 wasm */
+  const idleFileWorkers = idleWorkers(4);
+
   /** 解密结果写入 OPFS：由专用 Worker 持有同步访问句柄，按偏移乱序写入 */
   class OpfsSink {
     static async open(size) {
@@ -381,7 +408,7 @@
       const id = crypto.randomUUID();
       const name = `${id}.m4a`;
       const unlock = await hold(id);
-      const worker = new WorkerClient();
+      const worker = idleFileWorkers.take() || new WorkerClient();
       try {
         await worker.call('file-open', { dir: OPFS_DIR, name });
       } catch (err) {
@@ -406,7 +433,9 @@
 
     async finish() {
       await this.worker.call('file-close');
-      this.closeWorker();
+      // 句柄已释放，Worker 留给下一首复用
+      idleFileWorkers.give(this.worker);
+      this.worker = null;
     }
 
     closeWorker() {
@@ -494,20 +523,30 @@
    * 在媒体 Worker 中运行参考实现的 DefragmentMP4（歌曲用法：M4A ftyp、每个 trun 一个 chunk、
    * 不做 MV 那样的按时间交错）。args 为 [输入文件名, 输出文件名, OPFS 目录, tags] 或 [Blob, tags]
    * （tags 为 ilst 条目，见 mp4-tags.mjs，可省略）；结果带输出的 CRC-32；取消时直接终止 Worker。
+   * 成功后 Worker 留作空闲复用。
    */
+  const idleDefragWorkers = idleWorkers(4);
   function defragInWorker(args, signal) {
     signal.throwIfAborted();
-    const worker = new Worker(MEDIA_WORKER_URL);
+    const worker = idleDefragWorkers.take() || new Worker(MEDIA_WORKER_URL);
     let onAbort;
+    let ok = false;
     return new Promise((resolve, reject) => {
       onAbort = () => reject(signal.reason);
       signal.addEventListener('abort', onAbort, { once: true });
-      worker.onmessage = ({ data }) => (data.error ? reject(new Error(t('err.defrag', { msg: data.error }))) : resolve(data.result));
+      worker.onmessage = ({ data }) => {
+        if (data.error) return reject(new Error(t('err.defrag', { msg: data.error })));
+        ok = true;
+        resolve(data.result);
+      };
       worker.onerror = (e) => reject(new Error(t('err.defrag', { msg: e.message || t('err.worker') })));
       worker.postMessage({ id: 1, method: 'defragSong', args });
     }).finally(() => {
       signal.removeEventListener('abort', onAbort);
-      worker.terminate();
+      // 成功后放回空闲列表复用，批量下载时不必每首歌都重新请求、编译 media.wasm；取消或出错时终止
+      if (!ok || signal.aborted) return worker.terminate();
+      worker.onmessage = worker.onerror = null;
+      idleDefragWorkers.give(worker);
     });
   }
 

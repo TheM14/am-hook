@@ -257,6 +257,8 @@ async function transcode(buf) {
 if (typeof self !== 'undefined' && typeof self.postMessage === 'function') {
   self.onmessage = async ({ data }) => {
     const { id, op, buf } = data;
+    // The page reuses this worker for the next track: forget the open track, keep the loaded wasm.
+    if (op === 'reset') { codec = undefined; return; }
     try {
       const result = op === 'open' ? await openTrack(buf) : await transcode(buf);
       self.postMessage({ id, ok: true, result }, Array.isArray(result) ? result : [result]);

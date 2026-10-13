@@ -1,9 +1,13 @@
 import { parseMedia, fetchResource } from './hls.mjs';
 import { BrowserCaptions } from './captions.mjs';
 
+// Workers of finished downloads, reused by the next Core so a batch does not refetch and recompile
+// media.wasm for every video; each is terminated after IDLE_MS unused.
+const idle = [], MAX_IDLE = 2, IDLE_MS = 30000;
 export class Core {
   constructor() {
-    this.worker = new Worker('/assets/media-worker.js'); this.pending = new Map(); this.next = 0;
+    this.worker = idle.pop() || new Worker('/assets/media-worker.js'); this.pending = new Map(); this.next = 0;
+    clearTimeout(this.worker.idleTimer);
     this.worker.onmessage = ({ data }) => {
       const p = this.pending.get(data.id); if (!p) return;
       this.pending.delete(data.id); data.error ? p.reject(new Error(data.error)) : p.resolve(data.result);
@@ -20,6 +24,16 @@ export class Core {
   close(error = new DOMException('Cancelled', 'AbortError')) {
     this.worker?.terminate(); this.worker = null;
     for (const p of this.pending.values()) p.reject(error); this.pending.clear();
+  }
+  // After a completed job (every license session closed, no call in flight): free the streams and keep
+  // the worker for the next Core. Id 0 is never pending, so a late reply is ignored by whoever owns it.
+  recycle() {
+    const worker = this.worker;
+    if (!worker || this.pending.size || idle.length >= MAX_IDLE) return this.close();
+    this.worker = null;
+    for (const name of ['video', 'audio']) worker.postMessage({ id: 0, method: 'release', args: [name] });
+    worker.idleTimer = setTimeout(() => { idle.splice(idle.indexOf(worker), 1); worker.terminate(); }, IDLE_MS);
+    idle.push(worker);
   }
 }
 export async function fetchMaster(id, signal) {
@@ -263,7 +277,8 @@ export async function downloadMV(id, video, audio, { signal, onProgress, onDefra
     const file = await (await root.getFileHandle(name)).getFile(); complete = true;
     return { file, crc: out?.crc ?? null, dispose: () => remove(root, name).finally(unlock) };
   } finally {
-    signal.removeEventListener('abort', abort); core.close();
+    signal.removeEventListener('abort', abort);
+    if (complete) core.recycle(); else core.close();
     if (writer) await writer.abort().catch(() => {});
     await remove(root, fragmented);
     if (!complete) { await remove(root, name); unlock(); }

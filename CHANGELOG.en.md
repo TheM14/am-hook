@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### Changed
+- ⚡ Workers are reused during batch downloads and playback: song defragmentation, OPFS writing, MV download and FLAC transcoding Workers are kept after a job (terminated after 30 s idle) instead of refetching and recompiling `media.wasm` and the others for every song
+
 ### Bug Fixes
 - 🐛 A transient wrapper-lite `/m3u8` error (such as HTTP 500) during batch downloads downgraded the song to AAC-LC 256: `/webplayback` is now used only when `/m3u8` returns an `.m4p`, and failed requests are reported and retried
 

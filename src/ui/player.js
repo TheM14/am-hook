@@ -280,9 +280,13 @@
     };
   }
 
+  /** 空闲的 FLAC 转码 Worker：换曲时复用，不必每首都重新加载 flac.wasm 与 flac-init.bin；空闲 30 秒后终止 */
+  const idleFlacWorkers = [];
+
   class FlacTranscoder {
     constructor() {
-      this.worker = new Worker('/assets/flac-transcode-worker.js');
+      this.worker = idleFlacWorkers.pop() || new Worker('/assets/flac-transcode-worker.js');
+      clearTimeout(this.worker.idleTimer);
       this.pending = new Map();
       this.seq = 0;
       this.worker.onmessage = ({ data }) => {
@@ -299,6 +303,8 @@
     }
 
     run(op, buf) {
+      // 销毁后 Worker 可能已交给别的曲目，不能再向它发消息
+      if (!this.worker) return Promise.reject(new DOMException('stale', 'AbortError'));
       const id = ++this.seq;
       return new Promise((resolve, reject) => {
         this.pending.set(id, { resolve, reject });
@@ -307,9 +313,23 @@
     }
 
     destroy() {
-      this.worker.terminate();
-      for (const job of this.pending.values()) job.reject(new DOMException('stale', 'AbortError'));
-      this.pending.clear();
+      const worker = this.worker;
+      if (!worker) return;
+      this.worker = null;
+      // 没有进行中的任务时放回空闲列表（当前曲目与预载的下一首最多同时用两个），否则终止
+      if (this.pending.size || idleFlacWorkers.length >= 2) {
+        worker.terminate();
+        for (const job of this.pending.values()) job.reject(new DOMException('stale', 'AbortError'));
+        this.pending.clear();
+        return;
+      }
+      worker.onmessage = worker.onerror = null;
+      worker.postMessage({ op: 'reset' });
+      worker.idleTimer = setTimeout(() => {
+        idleFlacWorkers.splice(idleFlacWorkers.indexOf(worker), 1);
+        worker.terminate();
+      }, 30000);
+      idleFlacWorkers.push(worker);
     }
   }
 
