@@ -3,6 +3,9 @@
 ## 未发布
 
 ### 变更
+- ⚡ 前端资源改用带内容哈希的地址（`/assets/h/app.<hash>.mjs`）并以 `immutable` 长期缓存，页面、模块、Worker 与 wasm 不再每次加载都向服务器确认（304）
+  - 文本资源里对其他资源的引用（`/assets/...` 与 `./x.mjs` 相对路径）在服务端与 `build-static` 中换成哈希地址，哈希按换完后的内容计算，依赖更新时引用它的资源地址也随之改变
+  - 页面外壳仍为 `no-cache`，升级后立即指向新地址；原地址继续以 `no-cache` + ETag 提供；serverless 部署由 `vercel.json` 与 `dist/_headers`（Cloudflare）设置缓存头
 - ⚡ 批量下载与播放时复用 Worker：歌曲解碎片、OPFS 写入、MV 下载与 FLAC 转码的 Worker 用完后保留复用（空闲 30 秒终止），不再每首歌都重新请求并编译 `media.wasm` 等
 
 ### 修复

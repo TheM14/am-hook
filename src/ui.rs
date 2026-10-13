@@ -16,9 +16,9 @@ use crate::state::AppState;
 use crate::wrapper::Lyrics;
 
 /// 站内页面（首页、新发现与歌曲 / MV / 专辑 / 歌单 / 艺人页、编辑页）。与 music.apple.com 相同，整站是单页应用：
-/// 所有页面地址都返回同一个外壳（[`assets::APP_HTML`]）。目录数据由前端经 `/amp` 代理获取。
+/// 所有页面地址都返回同一个外壳（[`assets::APP_HTML`]，资源引用已换成内容哈希地址）。目录数据由前端经 `/amp` 代理获取。
 pub async fn app_handler(headers: HeaderMap) -> Response<Body> {
-    assets::serve(&headers, &assets::APP_HTML)
+    assets::serve(&headers, &assets::SITE.shell)
 }
 
 /// 其余路径：Apple Music 页面路径本身也是 "https://..."（`/` 后拼接官网地址），

@@ -18,9 +18,9 @@ use crate::state::AppState;
 
 /// 首页与解析接口优先，歌曲 / MV / 专辑 / 歌单 / 艺人页、编辑页（room / multi-room / grouping / curator）、资料库页统一由 fallback 分流
 pub fn router(state: Arc<AppState>) -> Router {
-    // 内嵌前端资源按 assets::ASSETS 表注册，其余是后端接口
-    let router = assets::ASSETS.iter().fold(Router::new(), |router, asset| {
-        router.route(asset.url, get(move |headers: HeaderMap| async move { assets::serve(&headers, asset) }))
+    // 内嵌前端资源按 assets::ASSETS 表注册（原地址与内容哈希地址），其余是后端接口
+    let router = assets::SITE.assets.iter().fold(Router::new(), |router, asset| {
+        router.route(&asset.url, get(move |headers: HeaderMap| async move { assets::serve(&headers, asset) }))
     });
     router
         .route("/", get(ui::app_handler))

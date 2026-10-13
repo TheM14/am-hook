@@ -39,6 +39,22 @@ const PAGES = [
 
 /** 页面名 → 视图文件（/assets/views/<file>.html / .mjs）：新发现与各编辑页共用 browse 视图，其余同名 */
 const VIEW_FILES = { new: 'browse', charts: 'browse', editorial: 'browse', post: 'mv' };
+/**
+ * 视图文件 → [页面内容地址, 加载页面脚本]。地址逐个写全，不用模板拼接：服务端与 build-static 会把
+ * 资源地址换成带内容哈希的地址（见 src/assets.rs），只能替换完整的字面量。
+ */
+const VIEWS = {
+  home: ['/assets/views/home.html', () => import('/assets/views/home.mjs')],
+  song: ['/assets/views/song.html', () => import('/assets/views/song.mjs')],
+  mv: ['/assets/views/mv.html', () => import('/assets/views/mv.mjs')],
+  album: ['/assets/views/album.html', () => import('/assets/views/album.mjs')],
+  playlist: ['/assets/views/playlist.html', () => import('/assets/views/playlist.mjs')],
+  artist: ['/assets/views/artist.html', () => import('/assets/views/artist.mjs')],
+  browse: ['/assets/views/browse.html', () => import('/assets/views/browse.mjs')],
+  library: ['/assets/views/library.html', () => import('/assets/views/library.mjs')],
+  'library-playlist': ['/assets/views/library-playlist.html', () => import('/assets/views/library-playlist.mjs')],
+  settings: ['/assets/views/settings.html', () => import('/assets/views/settings.mjs')],
+};
 /** 跟随主地区的排行榜路径（与 src/links.rs 的 is_charts_path 相同） */
 const CHARTS_PATH = /^\/new\/top-charts(?:\/(?:songs|playlists|albums|music-videos|city-charts|daily-global-top-charts))?\/?$/;
 /** 资料库（与 src/links.rs 的 is_library_path 相同）：各分类与本地歌单，数据只在浏览器中 */
@@ -484,7 +500,7 @@ const styles = new Map();
 
 function fragment(name) {
   if (!fragments.has(name)) {
-    const pending = fetch(`/assets/views/${name}.html`).then((res) => {
+    const pending = fetch(VIEWS[name][0]).then((res) => {
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       return res.text();
     });
@@ -536,7 +552,7 @@ async function render(url, { scroll = 0, initial = false } = {}) {
   let view, html;
   try {
     const file = VIEW_FILES[name] || name;
-    [view, html] = await Promise.all([import(`/assets/views/${file}.mjs`), fragment(file)]);
+    [view, html] = await Promise.all([VIEWS[file][1](), fragment(file)]);
     await Promise.all((view.styles || []).map(stylesheet));
   } catch (err) {
     // 站内跳转时页面资源加载失败（如服务已升级、网络中断）：整页加载该地址；首次加载失败时不再重试，避免反复刷新

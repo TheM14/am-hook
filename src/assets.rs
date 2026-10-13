@@ -1,12 +1,18 @@
 //! 内嵌的前端资源（`src/ui/`）。
 //!
 //! 新增页面资源只需要在 [`ASSETS`] 里加一行：路由由 [`router`](crate::router) 按表注册，
-//! 不需要再写 handler。所有资源都以 `no-cache` + 内容 ETag 提供（见 [`serve`]）。
+//! 不需要再写 handler。页面加载的是带内容哈希的地址（长期缓存），原地址以 `no-cache` + 内容 ETag 提供（见 [`Served`]）。
+
+use std::collections::HashMap;
+use std::ops::Range;
+use std::sync::LazyLock;
 
 use axum::body::Body;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, ETAG, IF_NONE_MATCH};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::Response;
+use bytes::Bytes;
+use regex::Regex;
 
 const HTML: &str = "text/html; charset=utf-8";
 const JS: &str = "text/javascript; charset=utf-8";
@@ -117,21 +123,165 @@ pub static ASSETS: &[Asset] = &[
     asset!("/assets/views/download-dialog.mjs", JS, "views/download-dialog.mjs"),
 ];
 
-/// 以 `no-cache` + 内容 ETag 提供资源：每次使用前都向服务器确认（未变化时 304），
-/// 升级后页面、decrypt.js、Worker 与 wasm 不会因缓存而版本错配。
-pub fn serve(headers: &HeaderMap, asset: &Asset) -> Response<Body> {
-    // FNV-1a 64：内容指纹，资源最大只有几百 KB，逐请求计算的开销可以忽略
-    let hash = asset.body.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3));
-    let etag = format!("\"{hash:016x}\"");
+/// 由部署环境生成的资源（serverless 部署见 serverless/core.mjs）：不加哈希，也不改写
+const HOST_JS: &str = "/assets/host.js";
+/// 内容哈希地址的前缀；其下的资源内容永不改变，可长期缓存（serverless 部署由 vercel.json / dist/_headers 设置）
+pub const HASHED_PREFIX: &str = "/assets/h/";
+const IMMUTABLE: &str = "public, max-age=31536000, immutable";
+
+/// 实际对外提供的资源。每个资源有两个地址：
+/// - 内容哈希地址（`/assets/h/views/home.<hash>.mjs`）：`immutable`，页面实际加载的都是它；
+/// - 原地址：`no-cache` + ETag，供旧页面与外部直接访问。
+///
+/// 文本资源（HTML / JS / CSS）里对其他资源的引用（`/assets/...` 字面量与 `'./x.mjs'` 相对路径）
+/// 都换成对方的哈希地址，哈希按换完后的内容计算：依赖变了，引用它的资源地址也随之改变，
+/// 长期缓存的旧文件因此不会指向旧依赖。scripts/build-static.mjs 以同样的规则生成 serverless 部署的 dist/。
+pub struct Served {
+    pub url: String,
+    mime: &'static str,
+    body: Bytes,
+    etag: String,
+    immutable: bool,
+}
+
+/// 页面外壳（引用已换成哈希地址，本身 `no-cache`）与全部资源路由
+pub struct Site {
+    pub shell: Served,
+    pub assets: Vec<Served>,
+}
+
+pub static SITE: LazyLock<Site> = LazyLock::new(build);
+
+/// FNV-1a 64：内容指纹（与 scripts/build-static.mjs 相同）
+fn fnv(bytes: &[u8]) -> u64 {
+    bytes.iter().fold(0xcbf2_9ce4_8422_2325u64, |h, &b| (h ^ b as u64).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// `/assets/views/home.mjs` → `/assets/h/views/home.<hash>.mjs`
+fn hashed_url(url: &str, hash: u64) -> String {
+    let rest = &url["/assets/".len()..];
+    let name_at = rest.rfind('/').map_or(0, |i| i + 1);
+    match rest[name_at..].rfind('.') {
+        Some(dot) => format!("{HASHED_PREFIX}{}.{hash:016x}{}", &rest[..name_at + dot], &rest[name_at + dot..]),
+        None => format!("{HASHED_PREFIX}{rest}.{hash:016x}"),
+    }
+}
+
+/// 把相对路径按资源地址解析为站内绝对地址（只处理 `./` 与 `../`）
+fn resolve(base: &str, relative: &str) -> String {
+    let mut parts: Vec<&str> = base.split('/').collect();
+    parts.pop();
+    for part in relative.split('/') {
+        match part {
+            "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    parts.join("/")
+}
+
+/// 文本资源中引用其他资源的位置：(要替换的字节范围, 目标资源下标)
+fn references(all: &[&Asset], index: &HashMap<&str, usize>, i: usize) -> Vec<(Range<usize>, usize)> {
+    static RE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r#"/assets/[A-Za-z0-9_./-]+|'(\.\.?/[A-Za-z0-9_./-]+)'|"(\.\.?/[A-Za-z0-9_./-]+)""#).unwrap()
+    });
+    let asset = all[i];
+    let text = match asset.mime {
+        HTML | JS | CSS if asset.url != HOST_JS => std::str::from_utf8(asset.body).unwrap_or(""),
+        _ => "",
+    };
+    RE.captures_iter(text)
+        .filter_map(|c| {
+            let (range, url) = match c.get(1).or(c.get(2)) {
+                Some(relative) => (relative.range(), resolve(asset.url, relative.as_str())),
+                None => (c.get(0)?.range(), c[0].to_string()),
+            };
+            let target = *index.get(url.as_str())?;
+            (target != i && url != HOST_JS).then_some((range, target))
+        })
+        .collect()
+}
+
+fn served(url: String, mime: &'static str, body: Bytes, immutable: bool) -> Served {
+    let etag = format!("\"{:016x}\"", fnv(&body));
+    Served { url, mime, body, etag, immutable }
+}
+
+fn build() -> Site {
+    let all: Vec<&Asset> = std::iter::once(&APP_HTML).chain(ASSETS).collect();
+    let index: HashMap<&str, usize> = all.iter().enumerate().map(|(i, a)| (a.url, i)).collect();
+    let refs: Vec<_> = (0..all.len()).map(|i| references(&all, &index, i)).collect();
+
+    // 依赖在前的顺序（深度优先）；引用成环时无法按内容定哈希，直接报错
+    fn visit(i: usize, refs: &[Vec<(Range<usize>, usize)>], state: &mut [u8], order: &mut Vec<usize>, all: &[&Asset]) {
+        match state[i] {
+            2 => return,
+            1 => panic!("asset references form a cycle through {}", all[i].url),
+            _ => {}
+        }
+        state[i] = 1;
+        for &(_, target) in &refs[i] {
+            visit(target, refs, state, order, all);
+        }
+        state[i] = 2;
+        order.push(i);
+    }
+    let mut state = vec![0; all.len()];
+    let mut order = Vec::with_capacity(all.len());
+    for i in 0..all.len() {
+        visit(i, &refs, &mut state, &mut order, &all);
+    }
+
+    let mut bodies: Vec<Bytes> = vec![Bytes::new(); all.len()];
+    let mut hashed: Vec<String> = vec![String::new(); all.len()];
+    for i in order {
+        let source = all[i].body;
+        bodies[i] = if refs[i].is_empty() {
+            Bytes::from_static(source)
+        } else {
+            let mut body = Vec::with_capacity(source.len() + refs[i].len() * 24);
+            let mut at = 0;
+            for (range, target) in &refs[i] {
+                body.extend_from_slice(&source[at..range.start]);
+                body.extend_from_slice(hashed[*target].as_bytes());
+                at = range.end;
+            }
+            body.extend_from_slice(&source[at..]);
+            Bytes::from(body)
+        };
+        // 外壳（下标 0）与 host.js 不加哈希
+        if i != 0 && all[i].url != HOST_JS {
+            hashed[i] = hashed_url(all[i].url, fnv(&bodies[i]));
+        }
+    }
+
+    let mut assets = Vec::with_capacity(all.len() * 2);
+    for (i, asset) in all.iter().enumerate().skip(1) {
+        assets.push(served(asset.url.to_string(), asset.mime, bodies[i].clone(), false));
+        if asset.url != HOST_JS {
+            assets.push(served(std::mem::take(&mut hashed[i]), asset.mime, bodies[i].clone(), true));
+        }
+    }
+    let shell = served(APP_HTML.url.to_string(), APP_HTML.mime, bodies[0].clone(), false);
+    Site { shell, assets }
+}
+
+/// 内容哈希地址长期缓存（`immutable`）；其余以 `no-cache` + ETag 提供：每次使用前都向服务器确认（未变化时 304），
+/// 升级后页面外壳立即指向新的哈希地址，页面、decrypt.js、Worker 与 wasm 不会因缓存而版本错配。
+pub fn serve(headers: &HeaderMap, asset: &Served) -> Response<Body> {
     let fresh = headers
         .get(IF_NONE_MATCH)
         .and_then(|v| v.to_str().ok())
-        .is_some_and(|v| v.split(',').any(|t| t.trim() == etag));
-    let builder = Response::builder().header(CACHE_CONTROL, "no-cache").header(ETAG, &etag);
+        .is_some_and(|v| v.split(',').any(|t| t.trim() == asset.etag));
+    let cache = if asset.immutable { IMMUTABLE } else { "no-cache" };
+    let builder = Response::builder().header(CACHE_CONTROL, cache).header(ETAG, &asset.etag);
     let response = if fresh {
         builder.status(StatusCode::NOT_MODIFIED).body(Body::empty())
     } else {
-        builder.status(StatusCode::OK).header(CONTENT_TYPE, asset.mime).body(Body::from(asset.body))
+        builder.status(StatusCode::OK).header(CONTENT_TYPE, asset.mime).body(Body::from(asset.body.clone()))
     };
     response.expect("static response headers are valid")
 }
@@ -153,11 +303,74 @@ mod tests {
 
     #[test]
     fn etag_revalidation() {
-        let first = serve(&HeaderMap::new(), &APP_HTML);
+        let first = serve(&HeaderMap::new(), &SITE.shell);
         assert_eq!(first.status(), StatusCode::OK);
+        assert_eq!(first.headers()[CACHE_CONTROL], "no-cache");
         let etag = first.headers()[ETAG].clone();
         let mut headers = HeaderMap::new();
         headers.insert(IF_NONE_MATCH, etag);
-        assert_eq!(serve(&headers, &APP_HTML).status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(serve(&headers, &SITE.shell).status(), StatusCode::NOT_MODIFIED);
+    }
+
+    #[test]
+    fn hashed_urls() {
+        assert_eq!(hashed_url("/assets/views/home.mjs", 0xab), "/assets/h/views/home.00000000000000ab.mjs");
+        assert_eq!(hashed_url("/assets/app.css", 1), "/assets/h/app.0000000000000001.css");
+        assert_eq!(resolve("/assets/views/album.mjs", "../downloads.mjs"), "/assets/downloads.mjs");
+        assert_eq!(resolve("/assets/mv/engine.mjs", "./hls.mjs"), "/assets/mv/hls.mjs");
+
+        let mut seen = HashSet::new();
+        for asset in &SITE.assets {
+            assert!(seen.insert(asset.url.as_str()), "duplicate route {}", asset.url);
+            assert_eq!(asset.immutable, asset.url.starts_with(HASHED_PREFIX), "{}", asset.url);
+            let response = serve(&HeaderMap::new(), asset);
+            assert_eq!(response.headers()[CACHE_CONTROL], if asset.immutable { IMMUTABLE } else { "no-cache" });
+        }
+        // host.js 由部署环境生成，只有原地址；其余资源两个地址
+        assert_eq!(SITE.assets.len(), ASSETS.len() * 2 - 1);
+        assert!(!seen.iter().any(|url| url.starts_with(HASHED_PREFIX) && url.contains("/host.")));
+    }
+
+    /// 页面加载的文本资源里不能留下未换成哈希地址的引用：同一模块经两个地址加载会得到两个实例
+    /// （下载管理器、资料库等状态因此分裂），模板拼接的地址也无法替换
+    #[test]
+    fn every_reference_is_hashed() {
+        let routes: HashSet<&str> = SITE.assets.iter().map(|a| a.url.as_str()).collect();
+        let quoted = Regex::new(r#"['"`(](/assets/[^'"`)\s]*)"#).unwrap();
+        let relative = Regex::new(r#"['"`](\.\.?/[^'"`\s]*)"#).unwrap();
+        for asset in std::iter::once(&SITE.shell).chain(SITE.assets.iter().filter(|a| a.immutable)) {
+            if ![HTML, JS, CSS].contains(&asset.mime) {
+                continue;
+            }
+            let text = std::str::from_utf8(&asset.body).unwrap();
+            for c in quoted.captures_iter(text) {
+                let url = &c[1];
+                assert!(url == HOST_JS || (url.starts_with(HASHED_PREFIX) && routes.contains(url)), "{}: {url}", asset.url);
+            }
+            for c in relative.captures_iter(text) {
+                let base = ASSETS.iter().find(|a| asset.url == hashed_url(a.url, fnv(&asset.body))).map_or("/", |a| a.url);
+                assert!(!routes.contains(resolve(base, &c[1]).as_str()), "{}: {}", asset.url, &c[1]);
+            }
+        }
+    }
+
+    /// serverless 部署（scripts/build-static.mjs）与二进制提供同样的哈希地址与内容；没有 node 时跳过
+    #[test]
+    fn build_static_matches() {
+        let out = std::env::temp_dir().join(format!("am-hook-dist-{}", std::process::id()));
+        let script = concat!(env!("CARGO_MANIFEST_DIR"), "/scripts/build-static.mjs");
+        match std::process::Command::new("node").arg(script).arg(&out).output() {
+            Ok(result) => assert!(result.status.success(), "{}", String::from_utf8_lossy(&result.stderr)),
+            Err(_) => return eprintln!("node not found, skipping"),
+        }
+        for asset in &SITE.assets {
+            if asset.url == HOST_JS {
+                continue;
+            }
+            let built = std::fs::read(out.join(&asset.url[1..])).unwrap_or_else(|e| panic!("{}: {e}", asset.url));
+            assert!(built == asset.body, "{} differs", asset.url);
+        }
+        assert!(std::fs::read(out.join("index.html")).unwrap() == SITE.shell.body);
+        std::fs::remove_dir_all(&out).ok();
     }
 }

@@ -47,7 +47,7 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
 | Vercel | [![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https%3A%2F%2Fgithub.com%2Fitouakirai%2Fam-hook) | `npx vercel --prod` |
 | Cloudflare Workers | [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/itouakirai/am-hook) | `npx wrangler deploy` |
 
-部署 fork 时把按钮链接里的仓库地址换成自己的。构建只需要 Node（`node scripts/build-static.mjs` 把 `src/ui/` 复制到 `dist/`），不需要 Rust；配置见 [vercel.json](vercel.json) 与 [wrangler.toml](wrangler.toml)。
+部署 fork 时把按钮链接里的仓库地址换成自己的。构建只需要 Node（`node scripts/build-static.mjs` 由 `src/ui/` 生成 `dist/`），不需要 Rust；配置见 [vercel.json](vercel.json) 与 [wrangler.toml](wrangler.toml)。
 
 **wrapper-lite**：平台上的函数访问不到你本机的 wrapper-lite，所以默认只有[本地模式](#使用本地-wrapper-lite)——在导航底部的「wrapper-lite」设置里填写自己的 wrapper-lite 地址，请求由浏览器直接发出：
 
@@ -223,7 +223,7 @@ box 处理：FairPlay 元数据 box（`sinf`、`senc`、`saiz`、`saio`、`pssh`
 | `GET /amp/v1/editorial/<path>?<query>` | 代理编辑内容接口（`amp-api-edge.music.apple.com/v1/editorial/...`：groupings、rooms、multirooms，新发现与编辑页使用），方式与 `/amp/v1/catalog` 相同，共用连接与缓存 |
 | `GET /amp/v1/storefronts` | amp-api 全部地区信息（查询参数原样转发，以便跟随分页 `next`）；页面只拉取一次并保存在 localStorage（超过 30 天后在后台刷新），用于主地区列表与曲库语言的可选项（各地区的 `supportedLanguageTags`）（地区不支持的 `l` 会被静默回退到默认语言，如 `cn` 只支持 `zh-Hans-CN` / `en-GB`） |
 | `GET /mv/webplayback/<adamId>`、`POST /mv/license` | 转发到 wrapper-lite `/webplayback` 与 `/license`：MV（PlayReady，`drm-type: pr`）与没有 master m3u8 的歌曲（AAC-LC 的 media m3u8，Widevine，不带 `drm-type`） |
-| `/assets/...` | 内嵌在二进制中的前端路由、页面视图（`/assets/views/`）、脚本、样式与按需加载的 WASM（`no-cache` + ETag）。`/assets/host.js` 告诉页面服务端能否转发 wrapper-lite（serverless 部署由函数生成） |
+| `/assets/...` | 内嵌在二进制中的前端路由、页面视图（`/assets/views/`）、脚本、样式与按需加载的 WASM。页面通过 `/assets/h/` 下带内容哈希的地址加载（`immutable` 长期缓存），原地址以 `no-cache` + ETag 提供。`/assets/host.js` 告诉页面服务端能否转发 wrapper-lite（serverless 部署由函数生成） |
 
 ## 命令行参数
 

@@ -3,6 +3,9 @@
 ## Unreleased
 
 ### Changed
+- ⚡ Front-end assets are loaded by content-hashed URLs (`/assets/h/app.<hash>.mjs`) cached as `immutable`, so pages, modules, Workers and wasm are no longer revalidated (304) on every load
+  - References between text assets (`/assets/...` and `./x.mjs` relative paths) are rewritten to the hashed URLs by the server and by `build-static`; hashes cover the rewritten content, so a changed dependency also changes the URLs of the assets referencing it
+  - The app shell stays `no-cache` and points at the new URLs right after an upgrade; original URLs are still served with `no-cache` + ETag; serverless deployments set the cache headers in `vercel.json` and `dist/_headers` (Cloudflare)
 - ⚡ Workers are reused during batch downloads and playback: song defragmentation, OPFS writing, MV download and FLAC transcoding Workers are kept after a job (terminated after 30 s idle) instead of refetching and recompiling `media.wasm` and the others for every song
 
 ### Bug Fixes
