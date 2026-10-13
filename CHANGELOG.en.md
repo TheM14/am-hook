@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.4.6 (2026-10-13)
 
 ### Bug Fixes
 - 🐛 The binary's 404s also carry `no-store` (as on serverless deployments): behind a CDN (such as the Cloudflare proxy), the 404 for a missing content-hashed URL is not cached, so rolling back a version cannot leave the page stuck on a cached 404
