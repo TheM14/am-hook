@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.4.7 (2026-10-15)
 
 ### Bug Fixes
 - 🐛 `type="replacement"` lyric localizations (e.g. a zh-Hans-CN replacement for zh-Hant lyrics) replace the main lyrics instead of showing as a translation; word-synced lyrics keep the replacement's own word timing, so downloaded word-synced LRC no longer falls back to line-synced
