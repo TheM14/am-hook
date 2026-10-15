@@ -313,15 +313,19 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
   const controls = $('.lyrics-controls');
   let alignPosition = 0.35;
 
+  // 没有时间轴的歌词（timing None）每行都是 0：AMLL 把不早于最后一行结束的时间当作歌曲结束、滚到最后，
+  // 这里一直给它第一行之前的时间，停在开头
+  const viewTime = (ms) => (song?.timing === 'None' ? -1 : ms);
+
   function currentTime() {
-    return player.current ? player.transport().currentTime * 1000 : 0;
+    return viewTime(player.current ? player.transport().currentTime * 1000 : 0);
   }
 
   function seek(ms) {
     if (!player.current) return;
     const transport = player.transport();
     transport.currentTime = ms / 1000;
-    view.setCurrentTime(ms, true);
+    view.setCurrentTime(viewTime(ms), true);
     view.resetScroll();
     if (transport.paused) player.toggle();
   }
@@ -336,7 +340,7 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
     }
     // 隐藏歌词时只有背景在动，歌词视图不再排版
     if (lyricsVisible) {
-      view.setCurrentTime(transport ? transport.currentTime * 1000 : 0);
+      view.setCurrentTime(viewTime(transport ? transport.currentTime * 1000 : 0));
       view.update(lastFrame ? timestamp - lastFrame : 0);
     }
     lastFrame = timestamp;

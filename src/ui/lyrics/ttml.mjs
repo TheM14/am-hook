@@ -75,11 +75,18 @@ export function parseTTML(xml, Parser = globalThis.DOMParser) {
     type: attribute(section, APPLE, 'songPart', 'Verse').toLowerCase(),
     lines: children(section, 'p').map((line, lineIndex) => {
       const key = attribute(line, APPLE, 'key', `${sectionIndex}:${lineIndex}`);
-      const tr = translation.entries.get(key), pr = pronunciation.entries.get(key);
+      const pr = pronunciation.entries.get(key);
+      // A replacement (e.g. zh-Hans-CN for a zh-Hant original) supersedes the lyrics, keeping its own word timing
+      const replacement = translation.type === 'replacement' ? translation.entries.get(key) : null;
+      const tr = replacement ? null : translation.entries.get(key);
       const bgNode = children(line, 'span').find(isBackground);
       const background = readVoice(bgNode, children(tr, 'span').find(isBackground), children(pr, 'span').find(isBackground));
       const main = readVoice(line, tr, pr);
-      // The web renderer displays replacement entries as a secondary line too.
+      if (replacement) {
+        Object.assign(main, { text: cleanText(replacement), tokens: tokens(replacement) });
+        const bgReplacement = children(replacement, 'span').find(isBackground);
+        if (bgReplacement) Object.assign(background, { text: cleanText(bgReplacement), tokens: tokens(bgReplacement) });
+      }
       // It separates a parenthesized background translation even when that row
       // has no timed background vocal (e.g. 01.ttml L2).
       const bgText = background.translation.replace(/[()]/g, '') || main.translation.match(/\(+([^)]+)\)+/)?.[1]?.trim() || '';

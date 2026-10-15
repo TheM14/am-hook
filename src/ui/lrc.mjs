@@ -26,10 +26,9 @@ function timedWords(tokens) {
  */
 export function ttmlToLrc(ttml, { syllable = false, translation = false, pronunciation = false, Parser } = {}) {
   const model = parseTTML(ttml, Parser);
-  const replacement = model.translation.type === 'replacement';
   const out = [];
   if (model.timing === 'None') {
-    for (const line of model.lines) if (line.text) out.push(replacement && line.translation ? line.translation : line.text);
+    for (const line of model.lines) if (line.text) out.push(line.text);
     return out.join('\n');
   }
   const words = syllable && model.timing === 'Word';
@@ -37,9 +36,7 @@ export function ttmlToLrc(ttml, { syllable = false, translation = false, pronunc
     const begin = line.tokens.length ? line.tokens[0].begin : line.begin;
     const bg = line.background && line.background.text ? line.background : null;
     let main;
-    if (replacement && line.translation) {
-      main = lineTag(begin) + line.translation;
-    } else if (words && line.tokens.length) {
+    if (words && line.tokens.length) {
       main = lineTag(begin) + timedWords(line.tokens) + (bg && bg.tokens.length ? ` (${timedWords(bg.tokens)})` : bg ? ` (${bg.text})` : '');
     } else {
       main = lineTag(begin) + line.text + (bg ? ` (${bg.text})` : '');
@@ -54,7 +51,7 @@ export function ttmlToLrc(ttml, { syllable = false, translation = false, pronunc
         if (text) out.push(lineTag(begin) + text);
       }
     }
-    if (translation && !replacement && line.translation) out.push(lineTag(begin) + line.translation);
+    if (translation && line.translation) out.push(lineTag(begin) + line.translation);
   }
   return out.join('\n');
 }
