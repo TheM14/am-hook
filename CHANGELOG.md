@@ -1,5 +1,10 @@
 # 更新日志
 
+## Unreleased
+
+### 修复
+- 🐛 下载的歌曲在 VLC 中播放到约 13 秒会跳到 15 秒：Apple Music 的前约 15 秒（prefetch key）与之后（正式 key）各有一个 sample description，解密后两者完全相同，但 chunk 在 15 秒处切换描述索引，VLC 会重建解码器并丢掉已缓冲的约 2 秒音频。defrag 现在合并内容相同的 `stsd` 条目，整首歌只用一个描述索引（AAC、ALAC 与 Atmos 均适用）
+
 ## v0.4.7 (2026-10-15)
 
 ### 修复

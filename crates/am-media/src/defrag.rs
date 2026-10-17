@@ -12,7 +12,7 @@
 
 use std::collections::HashMap;
 
-use crate::bmff::{self, be32, put32, put64, version_flags, Atom, FourCC};
+use crate::bmff::{self, be32, put32, put64, version_flags, Atom, Body, FourCC};
 use crate::cenc::tkhd_track_id;
 use crate::frag::{sgpd_grouping_type, traf_tfhd, Sample, Sbgp, Tfhd, Trex, Trun, TRUN_DATA_OFFSET};
 use crate::readahead::{Reader, Sink, Source};
@@ -440,8 +440,8 @@ fn build_progressive_moov(moov: &mut Atom, tracks: &[Track]) -> Result<()> {
     for trak in moov.children_mut().iter_mut().filter(|c| &c.kind == b"trak") {
         let id = tkhd_track_id(trak)?;
         let td = *by_id.get(&id).ok_or_else(|| Error::msg(format!("track {id} is missing collected data")))?;
-        let entries = trak.req(&[b"mdia", b"minf", b"stbl", b"stsd"])?.children().len() as u32;
-        let descriptions = normalize_descriptions(td, entries)?;
+        let remap = merge_duplicate_entries(trak.req_mut(&[b"mdia", b"minf", b"stbl", b"stsd"])?);
+        let descriptions = normalize_descriptions(td, &remap)?;
         rebuild_sample_table(trak.req_mut(&[b"mdia", b"minf", b"stbl"])?, td, &descriptions)?;
         // mdhd duration is in the media timescale.
         set_versioned(trak.req_mut(&[b"mdia", b"mdhd"])?, 16, 24, td.duration);
@@ -539,10 +539,39 @@ fn scale_duration(value: u64, from: u64, to: u64) -> Result<u64> {
     Ok(result)
 }
 
-/// Sample description index of every chunk. Some sources carry a stale index
-/// although stsd has a single entry; strict demuxers such as VLC then recreate
-/// the decoder and may stop, so the only existing entry is used.
-fn normalize_descriptions(td: &Track, entries: u32) -> Result<Vec<u32>> {
+/// Drops stsd entries that are byte-identical to an earlier one and returns the
+/// new 1-based index of every original entry. Apple Music songs carry one entry
+/// per key (prefetch for the first chunk, then the real key); once decrypted
+/// they are identical, but switching index mid-stream makes VLC recreate the
+/// decoder and flush the audio already queued (about 2 s before the switch).
+fn merge_duplicate_entries(stsd: &mut Atom) -> Vec<u32> {
+    let mut kept: Vec<Atom> = Vec::new();
+    let mut remap = Vec::new();
+    for entry in stsd.children_mut().drain(..) {
+        match kept.iter().position(|k| *k == entry) {
+            Some(i) => remap.push(i as u32 + 1),
+            None => {
+                kept.push(entry);
+                remap.push(kept.len() as u32);
+            }
+        }
+    }
+    let count = kept.len() as u32;
+    *stsd.children_mut() = kept;
+    if let Body::Tree { head, .. } = &mut stsd.body {
+        if head.len() >= 8 {
+            put32(head, 4, count);
+        }
+    }
+    remap
+}
+
+/// Sample description index of every chunk, after `remap` from
+/// [`merge_duplicate_entries`]. Some sources carry a stale index although stsd
+/// has a single entry; strict demuxers such as VLC then recreate the decoder
+/// and may stop, so the only existing entry is used.
+fn normalize_descriptions(td: &Track, remap: &[u32]) -> Result<Vec<u32>> {
+    let entries = remap.len() as u32;
     if entries == 0 {
         bail!("track {} has empty stsd", td.id);
     }
@@ -551,7 +580,7 @@ fn normalize_descriptions(td: &Track, entries: u32) -> Result<Vec<u32>> {
         .enumerate()
         .map(|(i, c)| match c.description {
             0 => bail!("track {} chunk {i} has sample description index 0", td.id),
-            d if d <= entries => Ok(d),
+            d if d <= entries => Ok(remap[d as usize - 1]),
             _ if entries == 1 => Ok(1),
             d => bail!("track {} chunk {i} references sample description {d}, but stsd has {entries} entries", td.id),
         })
@@ -1009,6 +1038,26 @@ mod tests {
         }
         assert_eq!(total, spec.samples);
         starts
+    }
+
+    /// Decrypted Apple Music songs keep one identical entry per key; they are
+    /// merged so the description index never changes mid-stream.
+    #[test]
+    fn identical_sample_entries_are_merged() {
+        let mp4a = |b: u8| Atom::data(b"mp4a", vec![b; 28]);
+        let mut stsd = Atom::tree(b"stsd", vec![0, 0, 0, 0, 0, 0, 0, 3], vec![mp4a(0), mp4a(0), mp4a(1)]);
+        let remap = merge_duplicate_entries(&mut stsd);
+        assert_eq!(remap, [1, 1, 2]);
+        assert_eq!(stsd.children(), [mp4a(0), mp4a(1)]);
+        assert_eq!(be32(stsd.head(), 4), 2);
+
+        let chunk = |description| Chunk { mdat: 0, offset: 0, size: 0, samples: 1, description };
+        let td = Track { id: 1, samples: Vec::new(), chunks: vec![chunk(1), chunk(2), chunk(3)], groups: Vec::new(), duration: 0 };
+        assert_eq!(normalize_descriptions(&td, &remap).unwrap(), [1, 1, 2]);
+        let td = Track { chunks: vec![chunk(4)], ..td };
+        assert!(normalize_descriptions(&td, &remap).is_err());
+        // A stale index with a single entry still falls back to it.
+        assert_eq!(normalize_descriptions(&td, &[1]).unwrap(), [1]);
     }
 
     /// The reference mv.Mux output: isom ftyp, one chunk per source trun,

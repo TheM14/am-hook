@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## Unreleased
+
+### Bug Fixes
+- 🐛 Downloaded songs skipped from about 13 s to 15 s in VLC: Apple Music gives the first ~15 s (prefetch key) and the rest (real key) separate sample descriptions, which are identical once decrypted, but the chunks switch description index at 15 s, so VLC recreates the decoder and drops the ~2 s of audio it had buffered. Defrag now merges identical `stsd` entries so the whole song uses one description index (AAC, ALAC and Atmos alike)
+
 ## v0.4.7 (2026-10-15)
 
 ### Bug Fixes
