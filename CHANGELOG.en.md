@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.4.9 (2026-10-18)
 
 ### Bug Fixes
 - 🐛 Saving to a folder failed for names that start or end with `~` (e.g. the album "A COMPLETE ~ALL SINGLES~": `Failed to execute 'getDirectoryHandle'`): name sanitizing now follows Chrome's rules, replacing a leading or trailing `~` with the full-width `～` and removing leading and trailing dots and whitespace (including the ideographic space), C1 control characters, format characters (zero-width spaces, direction marks, etc.), noncharacters and lone surrogates; `.lnk` / `.local` / `.{…}` extensions and reserved names such as `clock$`, `desktop.ini`, `thumbs.db` and `COM¹` are renamed too

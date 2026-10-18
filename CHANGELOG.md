@@ -1,6 +1,6 @@
 # 更新日志
 
-## Unreleased
+## v0.4.9 (2026-10-18)
 
 ### 修复
 - 🐛 保存至文件夹时名字以 `~` 开头或结尾会报错（如专辑「A COMPLETE ~ALL SINGLES~」：`Failed to execute 'getDirectoryHandle'`）：文件名清理按 Chrome 的规则补齐，首尾的 `~` 换成全角 `～`，并去掉首尾的点与空白（含全角空格）、C1 控制字符、格式字符（零宽空格、方向标记等）、非字符与落单的代理项；`.lnk` / `.local` / `.{…}` 扩展名与 `clock$`、`desktop.ini`、`thumbs.db`、`COM¹` 等保留名也会改名
