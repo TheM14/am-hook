@@ -92,7 +92,7 @@ export function pagePath(resource, country) {
 }
 
 /** 本站能打开的 Apple Music 页面（与 app.mjs 的路由相同），艺人与策展人链接用 */
-const LOCAL_LINK = /^https:\/\/music\.apple\.com\/[a-z]{2}\/(?:(?:song|music-video)\/[^/?#]+\/\d+|post\/(?:[^/?#]+\/)?\d+|(?:album|artist|curator)\/(?:[^/?#]+\/)?\d+|playlist\/(?:[^/?#]+\/)?pl\.[\w-]+|(?:room|multi-room|grouping)\/\d+)$/i;
+const LOCAL_LINK = /^https:\/\/music\.apple\.com\/[a-z]{2}\/(?:(?:song|music-video)\/[^/?#]+\/\d+|post\/(?:[^/?#]+\/)?\d+|(?:album|artist|curator)\/(?:[^/?#]+\/)?\d+|playlist\/(?:[^/?#]+\/)?pl\.[\w-]+|(?:room|multi-room|grouping)\/\d+|station\/(?:[^/?#]+\/)?ra\.[\w.-]+)$/i;
 
 /** Apple Music 地址 → 本站页面路径；本站打不开时为 '' */
 export function localPath(url) {

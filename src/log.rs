@@ -163,6 +163,12 @@ fn describe(path: &str, query: &str) -> Entry {
     match path {
         "/" => return Entry::new("page", "home"),
         "/settings" | "/settings/" => return Entry::new("page", "settings"),
+        "/radio" | "/radio/" => return Entry::new("page", "radio"),
+        // 电台接口带用户的 media-user-token（在请求头里，不记录）
+        "/station/assets" => return Entry::new("station", format!("assets {}", query_param(query, "id").unwrap_or_default())),
+        "/station/license" => return Entry::new("station", "license"),
+        "/station/storefront" => return Entry::new("station", "storefront"),
+        "/station/recent" => return Entry::new("station", "recent"),
         "/status" => return Entry::new("status", "wrapper-lite").quiet(),
         "/key" => return Entry::new("key", format!("adamId {}", query_param(query, "adamId").unwrap_or_default())),
         "/mv/license" => return Entry::new("mv", "license"),
@@ -177,6 +183,12 @@ fn describe(path: &str, query: &str) -> Entry {
     }
     if let Some(id) = path.strip_prefix("/mv/webplayback/") {
         return Entry::new("mv", format!("webplayback {id}"));
+    }
+    if let Some(rest) = path.strip_prefix("/station/catalog/") {
+        return Entry::new("station", data_detail(rest, query));
+    }
+    if let Some(id) = path.strip_prefix("/station/next-tracks/") {
+        return Entry::new("station", format!("next-tracks {id}"));
     }
     if let Some(id) = path.strip_prefix("/lyrics/") {
         return Entry::new("lyrics", id);
@@ -264,8 +276,8 @@ pub fn print_banner(listen: SocketAddr, config: &Config) {
         secs => format!("keep-alive {secs}s"),
     };
     lines.push(format!("  amp-api       warm connection, {keepalive}, response cache {} MB", config.amp_cache_mb));
-    lines.push("  Pages         home & search · new · top charts · song · album · playlist · artist".into());
-    lines.push("                music video · post · room · multi-room · grouping · curator".into());
+    lines.push("  Pages         home & search · new · top charts · radio · song · album · playlist · artist".into());
+    lines.push("                music video · post · station · room · multi-room · grouping · curator".into());
     lines.push("  Features      lyrics · motion artwork · ALAC / FLAC / Dolby Atmos (EC-3) · MV PlayReady".into());
     lines.push("  Verbose log   RUST_LOG=am_hook=debug (assets, status, suggestions)".into());
     let width = lines.iter().map(|l| l.chars().count()).max().unwrap_or(0);
@@ -389,6 +401,10 @@ mod tests {
         assert_eq!(describe("/new/top-charts/unknown", "").kind, "other");
         assert_eq!(describe("/library", "").detail, "library");
         assert_eq!(describe("/settings", "").detail, "settings");
+        assert_eq!(describe("/radio", "").detail, "radio");
+        assert_eq!(describe("/https://music.apple.com/us/station/apple-music-1/ra.978194965", "").detail, "station US ra.978194965");
+        assert_eq!(describe("/station/next-tracks/ra.686227433", "limit=10").detail, "next-tracks ra.686227433");
+        assert_eq!(describe("/station/assets", "id=ra.978194965&kind=radioStation").detail, "assets ra.978194965");
         assert_eq!(describe("/library/songs", "").detail, "library/songs");
         assert_eq!(describe("/library/playlist/p.abc", "").detail, "library/playlist/p.abc");
         assert_eq!(describe("/library/favorite-songs", "").detail, "library/favorite-songs");

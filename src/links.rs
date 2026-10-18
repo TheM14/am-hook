@@ -18,7 +18,7 @@ macro_rules! new_section {
 /// 带地区码的单资源页类型（`/{cc}/<kind>/…`）
 macro_rules! page_kinds {
     () => {
-        "song|album|playlist|artist|music-video|post|room|multi-room|grouping|curator"
+        "song|album|playlist|artist|music-video|post|room|multi-room|grouping|curator|station"
     };
 }
 pub(crate) use {chart_kinds, new_section, page_kinds};
@@ -40,12 +40,16 @@ static PLAYLIST_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
 /// 艺人链接的 slug 同样可省略（music.apple.com/cn/artist/159260351 也有效）
 static ARTIST_LINK_RE: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^https://music\.apple\.com/[a-z]{2}/artist/(?:[^/?#]+/)?([0-9]+)(?:[/?#]|$)").unwrap());
-/// 编辑页（与 music.apple.com 的路由相同）：新发现 `/new`、排行榜 `/new/top-charts[/<kind>]`、room、multi-room、grouping 与 curator（slug 可省略）
+/// 电台：编辑 / 直播电台 `ra.<数字>`，个人电台 `ra.u-<…>`（同 amp::valid_station_id），slug 可省略
+static STATION_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"^https://music\.apple\.com/[a-z]{2}/station/(?:[^/?#]+/)?(ra\.[0-9A-Za-z._-]+?)/?(?:[?#]|$)").unwrap()
+});
+/// 编辑页（与 music.apple.com 的路由相同）：新发现 `/new`、排行榜 `/new/top-charts[/<kind>]`、广播 `/radio`、room、multi-room、grouping 与 curator（slug 可省略）
 static EDITORIAL_LINK_RE: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(concat!(
         r"^https://music\.apple\.com/[a-z]{2}/(?:",
         new_section!(),
-        r"/?(?:[?#]|$)|(?:room|multi-room|grouping)/[0-9]+(?:[/?#]|$)|curator/(?:[^/?#]+/)?[0-9]+(?:[/?#]|$))"
+        r"/?(?:[?#]|$)|radio/?(?:[?#]|$)|(?:room|multi-room|grouping)/[0-9]+(?:[/?#]|$)|curator/(?:[^/?#]+/)?[0-9]+(?:[/?#]|$))"
     ))
     .unwrap()
 });
@@ -101,7 +105,14 @@ pub fn parse_artist_link(url: &str) -> Result<String, String> {
         .ok_or_else(|| format!("Only Apple Music artist links are supported: {url}"))
 }
 
-/// 是否为编辑页地址（新发现 / room / multi-room / grouping / curator），这些页面同样返回单页应用
+pub fn parse_station_link(url: &str) -> Result<String, String> {
+    STATION_LINK_RE
+        .captures(url.trim())
+        .map(|caps| caps[1].to_string())
+        .ok_or_else(|| format!("Only Apple Music station links are supported: {url}"))
+}
+
+/// 是否为编辑页地址（新发现 / 广播 / room / multi-room / grouping / curator），这些页面同样返回单页应用
 pub fn is_editorial_link(url: &str) -> bool {
     EDITORIAL_LINK_RE.is_match(url.trim())
 }
@@ -114,6 +125,11 @@ pub fn is_charts_path(path: &str) -> bool {
 /// 是否为资料库路径（`library/songs`、`library/playlist/p.xxx` 等），同样返回单页应用
 pub fn is_library_path(path: &str) -> bool {
     LIBRARY_PATH_RE.is_match(path)
+}
+
+/// 是否为跟随主地区的广播页（`radio`，官网 /{cc}/radio，不含开头的 `/`），同样返回单页应用
+pub fn is_radio_path(path: &str) -> bool {
+    path == "radio" || path == "radio/"
 }
 
 /// 是否为设置中心（`settings`，不含开头的 `/`；设置只保存在浏览器中），同样返回单页应用
@@ -187,6 +203,24 @@ mod tests {
         assert_eq!(parse_artist_link("https://music.apple.com/us/artist/the-weeknd/479756766?l=en").unwrap(), "479756766");
         assert!(parse_artist_link("https://music.apple.com/us/album/name/123").is_err());
         assert!(parse_artist_link("https://music.apple.com/us/artist/name/abc").is_err());
+    }
+
+    #[test]
+    fn test_parse_station_link() {
+        assert_eq!(parse_station_link("https://music.apple.com/us/station/apple-music-1/ra.978194965").unwrap(), "ra.978194965");
+        assert_eq!(
+            parse_station_link("https://music.apple.com/us/station/flowers-mariah-carey-sza-in-conversation/ra.1840046955?l=en").unwrap(),
+            "ra.1840046955"
+        );
+        assert_eq!(parse_station_link("https://music.apple.com/cn/station/ra.686227433").unwrap(), "ra.686227433");
+        assert_eq!(parse_station_link("https://music.apple.com/cn/station/x/ra.u-5e1a0b/").unwrap(), "ra.u-5e1a0b");
+        assert!(parse_station_link("https://music.apple.com/us/station/apple-music-1").is_err());
+        assert!(parse_station_link("https://music.apple.com/us/station/a/b/ra.1").is_err());
+        assert!(is_editorial_link("https://music.apple.com/cn/radio"));
+        assert!(is_editorial_link("https://music.apple.com/us/radio/?l=en"));
+        assert!(!is_editorial_link("https://music.apple.com/us/radio/ra.978194965"));
+        assert!(is_radio_path("radio"));
+        assert!(!is_radio_path("radio/x"));
     }
 
     #[test]

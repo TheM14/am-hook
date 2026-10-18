@@ -15,7 +15,7 @@
 -->
 <body>
   <!--
-    导航（官网 .navigation）：≥484px 为左侧边栏（logo、返回、主页、新发现、排行榜、资料库与歌单，底部为主地区、曲库语言、界面语言与 wrapper-lite 状态）；
+    导航（官网 .navigation）：≥484px 为左侧边栏（logo、返回、主页、新发现、排行榜、广播、设置、资料库与歌单，底部为主地区、曲库语言、界面语言与 wrapper-lite 状态）；
     <484px 为顶部固定的 52px 顶栏（返回 / logo / 菜单按钮），菜单按钮展开为整屏菜单，内容与侧边栏相同
   -->
   <nav class="navigation" id="nav" data-i18n-attr="aria-label=nav.label">
@@ -58,6 +58,13 @@
           <a class="nav-link" href="/new/top-charts" data-nav="charts">
             <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 20h16"/><rect x="5" y="11" width="3.5" height="6" rx="1"/><rect x="10.25" y="5" width="3.5" height="12" rx="1"/><rect x="15.5" y="8" width="3.5" height="9" rx="1"/></svg></span>
             <span class="nav-label" data-i18n="nav.charts"></span>
+          </a>
+        </li>
+        <!-- 广播（官网 /{cc}/radio，跟随主地区；电台页见 views/station.mjs） -->
+        <li class="nav-item">
+          <a class="nav-link" href="/radio" data-nav="radio">
+            <span class="nav-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.48M7.76 16.24a6 6 0 0 1 0-8.48M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/></svg></span>
+            <span class="nav-label" data-i18n="nav.radio"></span>
           </a>
         </li>
         <!-- 设置中心（/settings，views/settings.mjs）：下载设置，以及之后的播放设置等，见 prefs.mjs -->

@@ -225,3 +225,10 @@
   .ed-grid.grid-B, .ed-grid.grid-T { --cols: 1; }
   .ed-grid.grid-H { --cols: 3; }
 }
+
+/* 广播页的直播电台卡片（官网 live-radio-lockup）：品牌图标铺在电台主色上，左上角为「直播」标记 */
+.browse-page .ed-live-art { position: relative; background: var(--art-bg, var(--surface-2)); }
+.browse-page .ed-live-badge {
+  position: absolute; left: 8px; top: 8px; padding: 2px 7px; border-radius: 5px;
+  background: var(--accent); color: #fff; font-size: 10px; font-weight: 700; letter-spacing: .06em;
+}

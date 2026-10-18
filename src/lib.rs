@@ -16,7 +16,7 @@ use axum::Router;
 
 use crate::state::AppState;
 
-/// 首页与解析接口优先，歌曲 / MV / 专辑 / 歌单 / 艺人页、编辑页（room / multi-room / grouping / curator）、资料库页统一由 fallback 分流
+/// 首页与解析接口优先，歌曲 / MV / 专辑 / 歌单 / 艺人 / 电台页、编辑页（room / multi-room / grouping / curator）、广播、资料库页统一由 fallback 分流
 pub fn router(state: Arc<AppState>) -> Router {
     // 内嵌前端资源按 assets::ASSETS 表注册（原地址与内容哈希地址），其余是后端接口
     let router = assets::SITE.assets.iter().fold(Router::new(), |router, asset| {
@@ -35,6 +35,13 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/amp/v1/catalog/*path", get(amp::catalog_handler))
         .route("/amp/v1/editorial/*path", get(amp::editorial_handler))
         .route("/amp/v1/storefronts", get(amp::storefronts_handler))
+        // 电台（wrapper-lite 没有这些接口）：带页面传来的 media-user-token 请求 amp-api 与 Apple 的 license 服务器
+        .route("/station/assets", get(amp::station_assets_handler))
+        .route("/station/next-tracks/:id", post(amp::station_next_tracks_handler))
+        .route("/station/storefront", get(amp::station_storefront_handler))
+        .route("/station/catalog/*path", get(amp::station_catalog_handler))
+        .route("/station/recent", get(amp::station_recent_handler))
+        .route("/station/license", post(amp::station_license_handler))
         .route("/mv/webplayback/:adam_id", get(ui::mv_webplayback_handler))
         .route("/mv/license", post(ui::mv_license_handler))
         .route("/lyrics/:adam_id", get(ui::lyrics_handler))

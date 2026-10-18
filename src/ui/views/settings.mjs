@@ -3,6 +3,7 @@
 import { prefs, OPTIONS, TAG_FIELDS, DEFAULTS } from '../prefs.mjs';
 import { formatPath, fitFolder, fitFile, TEMPLATE_VARS } from '../naming.mjs';
 import { downloads } from '../downloads.mjs';
+import { userToken, askToken, onTokenChange } from '../station.mjs';
 
 const { AmI18n, AmDecrypt } = window;
 const { t } = AmI18n;
@@ -33,6 +34,17 @@ export function mount({ root, signal, onLangChange, toast }) {
   const controls = [];
   let lastTemplate = null;
   let resetArmed = false;
+
+  // 电台的 media-user-token：显示是否已填写（只露出末尾几位），点击修改或清除
+  const tokenValue = root.querySelector('#user-token-value');
+  const renderToken = () => {
+    const token = userToken();
+    tokenValue.textContent = token ? t('set.tokenSet', { tail: token.slice(-6) }) : t('set.tokenUnset');
+  };
+  root.querySelector('#user-token').addEventListener('click', () => askToken());
+  signal.addEventListener('abort', onTokenChange(renderToken), { once: true });
+  signal.addEventListener('abort', AmI18n.onChange(renderToken), { once: true });
+  renderToken();
 
   const get = () => prefs.get('download');
   const set = (patch) => prefs.set('download', patch);

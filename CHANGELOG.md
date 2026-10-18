@@ -1,5 +1,19 @@
 # 更新日志
 
+## Unreleased
+
+### 新功能
+- ✨ 广播（`/radio`，侧边栏与手机菜单中「排行榜」与「设置」之间）：与 music.apple.com/{cc}/radio 相同的编辑区块，直播电台货架显示「直播」标记与正在播出的节目；填过 media-user-token 时最上面另有「你的电台」（个人电台与最近播放）
+- ✨ 电台页（`/https://music.apple.com/<cc>/station/<slug>/ra.<id>`），新发现、编辑页与广播中的电台链接都在站内打开：
+  - 个人电台与编辑电台：与歌单页相同的曲目列表，内容是电台接下来的几首，可换一批、加载更多，播放到队尾前自动续取（`AmPlayer.playQueue` 新增 `more`）
+  - 广播单集（音频或视频）：沿用 MV 页的布局，可播放、跳转并下载为 M4A / MP4（带标题、节目、播出日期与封面标签）
+  - 直播电台：沿用 MV 页的布局，从直播窗口末尾附近播放，显示当前歌曲（分片 emsg 中的 ID3）与节目表
+- ✨ 电台需要 Apple Music 账号的 media-user-token（wrapper-lite 暂不支持电台）：第一次打开电台页时提示填写（可粘贴整段 Cookie），检验后只保存在浏览器中；被拒绝时再次提示，设置中心可以修改或清除
+- ✨ 服务端（二进制与 serverless）新增电台接口：`/station/next-tracks/<id>`、`/station/assets`、`/station/catalog/...`、`/station/recent`、`/station/storefront` 带上 media-user-token 请求 amp-api（不缓存），`/station/license` 按 MusicKit 的格式把 Widevine / PlayReady license 请求直接发给 Apple 的 license 服务器
+
+### 变更
+- MV 引擎的下载拆出通用的 `downloadStreams`（MV 与广播单集共用；只有一条流时保留原来的轨道）
+
 ## v0.4.9 (2026-10-18)
 
 ### 修复

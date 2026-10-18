@@ -13,6 +13,12 @@
 //! - 响应缓存：成功的响应按 URL 缓存（目录 5 分钟、地区表 24 小时，按字节计量的 LRU）。同一 URL 的并发请求共享一次上游请求，
 //!   上游请求在独立任务中执行，浏览器中断后仍会完成并写入缓存，紧接着的相同请求直接命中。
 //! - 响应头 `Server-Timing` 标明缓存命中情况与上游耗时，可在浏览器开发者工具中查看。
+//!
+//! 电台（station）还需要用户的 media-user-token（wrapper-lite 没有这些接口），由页面经 `X-Media-User-Token` 请求头带来，
+//! 服务端只转发、不保存、不缓存（[`station_assets_handler`] 等）：
+//! - 个人 / 编辑电台（`playParams.format = tracks`）的接下来几首：`POST amp-api.music.apple.com/v1/me/stations/next-tracks/<id>`；
+//! - 直播电台与广播单集（`format = stream`）的 HLS 地址与 license 服务器：`GET amp-api.music.apple.com/v1/play/assets`；
+//! - 它们的 Widevine / PlayReady license：页面按 MusicKit 的格式构造请求体，由服务端带上两个 token 发往 Apple 的 license 服务器。
 
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -22,7 +28,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use axum::body::Body;
 use axum::extract::{Path, State};
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
-use axum::http::{StatusCode, Uri};
+use axum::http::{HeaderMap, StatusCode, Uri};
 use axum::response::Response;
 use base64::Engine;
 use bytes::Bytes;
@@ -38,6 +44,12 @@ use crate::state::AppState;
 
 const WEB_ORIGIN: &str = "https://music.apple.com";
 const API_ORIGIN: &str = "https://amp-api-edge.music.apple.com";
+/// 带用户 token 的接口（`/v1/me/...`、`/v1/play/assets`）与网页版 MusicKit 一样走 amp-api，不走 edge
+const USER_API_ORIGIN: &str = "https://amp-api.music.apple.com";
+/// 页面带来 media-user-token 的请求头
+pub const USER_TOKEN_HEADER: &str = "x-media-user-token";
+/// license 请求体（JSON，challenge 为 base64）的上限
+const MAX_LICENSE_BODY: usize = 256 * 1024;
 /// 网页版每次发布都会换 token，至少按此周期重新抓取；JWT 带 `exp` 时在过期前提前刷新
 const TOKEN_TTL: Duration = Duration::from_secs(12 * 3600);
 const TOKEN_EXPIRY_MARGIN: Duration = Duration::from_secs(3600);
@@ -60,6 +72,8 @@ static JWT_RE: LazyLock<Regex> =
 /// amp-api 代理：专用连接、developer token 与响应缓存
 pub struct Amp {
     client: Client,
+    /// 带用户 token 的请求：不跟随重定向（license 服务器地址来自页面，token 不能被带到别处）
+    user_client: Client,
     token: DeveloperToken,
     cache: ResponseCache,
     epoch: Instant,
@@ -80,8 +94,15 @@ impl Amp {
             .http2_keep_alive_while_idle(true)
             .build()
             .expect("Failed to build amp-api HTTP client");
+        let user_client = Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .tcp_nodelay(true)
+            .redirect(reqwest::redirect::Policy::none())
+            .build()
+            .expect("Failed to build amp-api user HTTP client");
         Self {
             client,
+            user_client,
             token: DeveloperToken::default(),
             cache: ResponseCache::new(cache_bytes),
             epoch: Instant::now(),
@@ -162,6 +183,53 @@ impl Amp {
                 version,
             });
         }
+    }
+}
+
+impl Amp {
+    /// 带 developer token 与用户的 media-user-token 请求（不缓存）。401 / 403 多半是 media-user-token 失效，
+    /// 不像目录请求那样换 developer token 重试（后台预热会在 developer token 过期前刷新）。
+    /// `license` 为 `Some(renewal)` 时按 MusicKit 的 license 请求发送（`X-Apple-Music-User-Token`，
+    /// Widevine 时另带 `X-Apple-Renewal: true`）
+    async fn user_request(
+        &self,
+        method: reqwest::Method,
+        url: &str,
+        user_token: &str,
+        body: Option<Bytes>,
+        license: Option<bool>,
+    ) -> Result<Upstream, String> {
+        let token = self.token.get(&self.client).await.map_err(|e| format!("developer token unavailable: {e}"))?;
+        let started = Instant::now();
+        let mut request = self
+            .user_client
+            .request(method, url)
+            .bearer_auth(&*token)
+            .header(reqwest::header::ORIGIN, WEB_ORIGIN)
+            .header(reqwest::header::REFERER, format!("{WEB_ORIGIN}/"))
+            .header(reqwest::header::ACCEPT, "application/json")
+            .timeout(UPSTREAM_TIMEOUT);
+        request = match license {
+            Some(renewal) => {
+                let request = request.header("x-apple-music-user-token", user_token);
+                if renewal { request.header("x-apple-renewal", "true") } else { request }
+            }
+            None => request.header("media-user-token", user_token),
+        };
+        if let Some(body) = body {
+            request = request.header(CONTENT_TYPE, "application/json").body(body);
+        }
+        let response = request.send().await.map_err(|e| format!("Apple request failed: {e}"))?;
+        let status = response.status();
+        let version = response.version();
+        let body = response.bytes().await.map_err(|e| format!("failed to read Apple response: {e}"))?;
+        Ok(Upstream {
+            status: StatusCode::from_u16(status.as_u16()).unwrap_or(StatusCode::BAD_GATEWAY),
+            body,
+            expires_at: Instant::now(),
+            elapsed: started.elapsed(),
+            version,
+        })
     }
 }
 
@@ -393,7 +461,11 @@ pub async fn run_warmer(amp: Arc<Amp>, keepalive: Duration) {
 }
 
 fn api_url(path: &str, query: &str) -> String {
-    let mut url = format!("{API_ORIGIN}{path}");
+    api_url_at(API_ORIGIN, path, query)
+}
+
+fn api_url_at(origin: &str, path: &str, query: &str) -> String {
+    let mut url = format!("{origin}{path}");
     if !query.is_empty() {
         url.push('?');
         url.push_str(query);
@@ -445,6 +517,168 @@ pub async fn storefronts_handler(State(state): State<Arc<AppState>>, uri: Uri) -
         return error(StatusCode::BAD_REQUEST, "Query too long");
     }
     forward(&state, api_url("/v1/storefronts", query), STOREFRONTS_TTL).await
+}
+
+/* ---------- 电台：需要 media-user-token 的接口 ---------- */
+
+/// 页面带来的 media-user-token；缺失或含非法字符时为 None
+fn user_token(headers: &HeaderMap) -> Option<&str> {
+    let token = headers.get(USER_TOKEN_HEADER)?.to_str().ok()?.trim();
+    (!token.is_empty() && token.len() <= 4096 && token.bytes().all(|b| b.is_ascii_graphic())).then_some(token)
+}
+
+/// 电台 ID：编辑 / 直播电台为 `ra.<数字>`，个人电台为 `ra.u-<…>` 等
+pub fn valid_station_id(id: &str) -> bool {
+    id.len() > 3
+        && id.len() <= 128
+        && id.starts_with("ra.")
+        && id.bytes().all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+
+fn missing_user_token() -> Response<Body> {
+    error(StatusCode::UNAUTHORIZED, "media-user-token required")
+}
+
+/// 原样返回上游的状态码与 JSON，不缓存
+async fn forward_user(
+    state: &AppState,
+    method: reqwest::Method,
+    url: String,
+    token: &str,
+    body: Option<Bytes>,
+    license: Option<bool>,
+) -> Response<Body> {
+    let upstream = match state.amp.user_request(method, &url, token, body, license).await {
+        Ok(upstream) => upstream,
+        Err(msg) => return error(StatusCode::BAD_GATEWAY, &msg),
+    };
+    let status = upstream.status;
+    let note = if status.is_success() { String::new() } else { api_error_summary(&upstream.body) };
+    let response = Response::builder()
+        .status(status)
+        .header(CONTENT_TYPE, "application/json; charset=utf-8")
+        .header(CACHE_CONTROL, "no-store")
+        .header("server-timing", format!("upstream;dur={:.1}", upstream.elapsed.as_secs_f64() * 1000.0))
+        .body(Body::from(upstream.body))
+        .unwrap();
+    log::note(response, note)
+}
+
+/// `GET /station/assets?<playParams>` → `amp-api.music.apple.com/v1/play/assets?<playParams>`：
+/// 直播电台与广播单集的 HLS 地址与 license 服务器（MusicKit 的 resolveRadioStationAsset，查询参数为 playParams 加 `keyFormat=web`）
+pub async fn station_assets_handler(State(state): State<Arc<AppState>>, headers: HeaderMap, uri: Uri) -> Response<Body> {
+    let Some(token) = user_token(&headers) else { return missing_user_token() };
+    let query = uri.query().unwrap_or_default();
+    if query.is_empty() || query.len() > MAX_QUERY_LEN {
+        return error(StatusCode::BAD_REQUEST, "Invalid play assets query");
+    }
+    let url = format!("{USER_API_ORIGIN}/v1/play/assets?{query}");
+    forward_user(&state, reqwest::Method::GET, url, token, None, None).await
+}
+
+/// `POST /station/next-tracks/<id>?<query>` → `amp-api.music.apple.com/v1/me/stations/next-tracks/<id>`：
+/// 个人 / 编辑电台接下来要播放的几首（MusicKit 的 loadStationNextTracks）
+pub async fn station_next_tracks_handler(
+    State(state): State<Arc<AppState>>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response<Body> {
+    let Some(token) = user_token(&headers) else { return missing_user_token() };
+    if !valid_station_id(&id) {
+        return error(StatusCode::BAD_REQUEST, "Invalid station id");
+    }
+    let query = uri.query().unwrap_or_default();
+    if query.len() > MAX_QUERY_LEN {
+        return error(StatusCode::BAD_REQUEST, "Query too long");
+    }
+    let url = api_url_at(USER_API_ORIGIN, &format!("/v1/me/stations/next-tracks/{id}"), query);
+    forward_user(&state, reqwest::Method::POST, url, token, None, None).await
+}
+
+/// `GET /station/catalog/<path>?<query>` → `amp-api.music.apple.com/v1/catalog/<path>`（带用户 token，不缓存）：
+/// 个人电台（`stations?filter[identity]=personal`，官网 /station/me）等因人而异的目录数据
+pub async fn station_catalog_handler(
+    State(state): State<Arc<AppState>>,
+    Path(path): Path<String>,
+    headers: HeaderMap,
+    uri: Uri,
+) -> Response<Body> {
+    let Some(token) = user_token(&headers) else { return missing_user_token() };
+    if !valid_catalog_path(&path) {
+        return error(StatusCode::BAD_REQUEST, "Invalid catalog path");
+    }
+    let query = uri.query().unwrap_or_default();
+    if query.len() > MAX_QUERY_LEN {
+        return error(StatusCode::BAD_REQUEST, "Query too long");
+    }
+    let url = api_url_at(USER_API_ORIGIN, &format!("/v1/catalog/{path}"), query);
+    forward_user(&state, reqwest::Method::GET, url, token, None, None).await
+}
+
+/// `GET /station/recent?<query>` → `amp-api.music.apple.com/v1/me/recent/radio-stations`：广播页的「最近播放」（官网 recently-played-radio-shelf）
+pub async fn station_recent_handler(State(state): State<Arc<AppState>>, headers: HeaderMap, uri: Uri) -> Response<Body> {
+    let Some(token) = user_token(&headers) else { return missing_user_token() };
+    let query = uri.query().unwrap_or_default();
+    if query.len() > MAX_QUERY_LEN {
+        return error(StatusCode::BAD_REQUEST, "Query too long");
+    }
+    let url = api_url_at(USER_API_ORIGIN, "/v1/me/recent/radio-stations", query);
+    forward_user(&state, reqwest::Method::GET, url, token, None, None).await
+}
+
+/// `GET /station/storefront` → `amp-api.music.apple.com/v1/me/storefront`：页面据此检验填入的 media-user-token，并显示账号地区
+pub async fn station_storefront_handler(State(state): State<Arc<AppState>>, headers: HeaderMap) -> Response<Body> {
+    let Some(token) = user_token(&headers) else { return missing_user_token() };
+    forward_user(&state, reqwest::Method::GET, format!("{USER_API_ORIGIN}/v1/me/storefront"), token, None, None).await
+}
+
+#[derive(serde::Deserialize)]
+pub struct StationLicense {
+    /// `/v1/play/assets` 返回的 `keyServerUrl`
+    url: String,
+    /// 原样发给 license 服务器的 JSON（challenge、uri、key-system 等，格式按服务器地址选择，见 station.mjs）
+    body: serde_json::Value,
+    /// Widevine 的请求（MusicKit 此时带 `X-Apple-Renewal: true`）
+    #[serde(default)]
+    renewal: bool,
+}
+
+/// 电台 license 服务器：Apple 的 HTTPS 地址，路径为 MusicKit 认识的几种 license 接口之一
+fn valid_license_url(raw: &str) -> bool {
+    const PATHS: [&str; 7] = [
+        "/WebObjects/MZPlay.woa/wa/acquireWebPlaybackLicense",
+        "/WebObjects/MZPlay.woa/web/radio/versions/1/license",
+        "/v1/radio/streaming-key-delivery",
+        "/v1/hls/streaming-key-delivery",
+        "/WebObjects/MZPlay.woa/wa/fpsRequest",
+        "/WebObjects/MZPlayLocal.woa/wa/fpsRequest",
+        "/WebObjects/MZPlay.woa/podcast/hls/license/streaming/start",
+    ];
+    reqwest::Url::parse(raw)
+        .ok()
+        .is_some_and(|url| crate::state::is_apple_https(&url) && PATHS.iter().any(|p| url.path().ends_with(p)))
+}
+
+/// `POST /station/license`：`{ url, body }` → 带 developer token 与 media-user-token 把 `body` POST 给 `url`，原样返回响应。
+/// wrapper-lite 的 `/license` 不支持电台的 license，由这里直接请求 Apple
+pub async fn station_license_handler(
+    State(state): State<Arc<AppState>>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response<Body> {
+    let Some(token) = user_token(&headers) else { return missing_user_token() };
+    if body.len() > MAX_LICENSE_BODY {
+        return error(StatusCode::PAYLOAD_TOO_LARGE, "License request too large");
+    }
+    let Ok(request) = serde_json::from_slice::<StationLicense>(&body) else {
+        return error(StatusCode::BAD_REQUEST, "Invalid license request");
+    };
+    if !valid_license_url(&request.url) || !request.body.is_object() {
+        return error(StatusCode::BAD_REQUEST, "Invalid license request");
+    }
+    let payload = Bytes::from(request.body.to_string());
+    forward_user(&state, reqwest::Method::POST, request.url, token, Some(payload), Some(request.renewal)).await
 }
 
 /// 原样返回 amp-api 的状态码与 JSON；成功响应的 `max-age` 为缓存剩余时间
@@ -526,6 +760,25 @@ mod tests {
         assert!(!valid_catalog_path("../me/library"));
         assert!(!valid_catalog_path("us/search?x"));
         assert!(!valid_catalog_path("us/%2e%2e/x"));
+    }
+
+    #[test]
+    fn test_station_validation() {
+        assert!(valid_station_id("ra.978194965"));
+        assert!(valid_station_id("ra.u-5e1a0b_x"));
+        assert!(!valid_station_id("ra."));
+        assert!(!valid_station_id("pl.123"));
+        assert!(!valid_station_id("ra.1/../x"));
+        assert!(valid_license_url("https://play.itunes.apple.com/WebObjects/MZPlay.woa/web/radio/versions/1/license"));
+        assert!(valid_license_url("https://play.itunes.apple.com/WebObjects/MZPlay.woa/wa/acquireWebPlaybackLicense"));
+        assert!(valid_license_url("https://play.music.apple.com/v1/radio/streaming-key-delivery"));
+        assert!(!valid_license_url("https://example.com/v1/radio/streaming-key-delivery"));
+        assert!(!valid_license_url("http://play.itunes.apple.com/WebObjects/MZPlay.woa/wa/acquireWebPlaybackLicense"));
+        assert!(!valid_license_url("https://play.itunes.apple.com/WebObjects/MZPlay.woa/wa/other"));
+        let mut headers = HeaderMap::new();
+        assert_eq!(user_token(&headers), None);
+        headers.insert(USER_TOKEN_HEADER, " 0.Abc+/= ".parse().unwrap());
+        assert_eq!(user_token(&headers), Some("0.Abc+/="));
     }
 
     fn jwt(payload: &str) -> String {

@@ -1322,6 +1322,8 @@
         if (this.queue) {
           this.queue.entries.splice(this.queue.pos + 1);
           if (this.queue.ordered) this.queue.ordered = this.queue.entries.slice();
+          // 清空后电台也不再续上
+          this.queue.more = null;
         }
         this.renderQueue(true);
         this.renderModes();
@@ -1702,13 +1704,14 @@
      * entries：按原顺序排列的曲目（见 resolveEntry）；从 pos 开始，播完一首自动播放下一首。
      * options.shuffle 同时开启 / 关闭随机播放（页面上的「随机播放」「播放」按钮），省略时沿用当前状态。
      * 随机播放时 pos 处的歌曲排在最前，其余打乱；原顺序记在 ordered 中，关闭随机时恢复。
+     * options.more：电台这类没有尽头的队列，async () => 下一批条目，剩下不到 2 首时取来接在队尾（见 extendQueue）。
      */
     playQueue(entries, pos = 0, options = {}) {
       if (typeof options.shuffle === 'boolean' && options.shuffle !== this.shuffle) {
         this.shuffle = options.shuffle;
         try { localStorage.setItem('am-hook:shuffle', this.shuffle ? '1' : '0'); } catch {}
       }
-      this.queue = { entries, pos, ordered: null };
+      this.queue = { entries, pos, ordered: null, more: options.more || null, extending: false };
       if (this.shuffle) {
         this.queue.ordered = entries.slice();
         entries.unshift(...entries.splice(pos, 1));
@@ -1716,6 +1719,25 @@
         this.queue.pos = 0;
       }
       return this.playAt(this.queue.pos);
+    }
+
+    /** 有 more 的队列（电台）：当前曲目之后不到 2 首时取下一批接在队尾；同时只取一次，取不到时下次换曲再试 */
+    extendQueue() {
+      const q = this.queue;
+      if (!q || !q.more || q.extending || q.entries.length - q.pos > 2) return;
+      q.extending = true;
+      Promise.resolve()
+        .then(() => q.more())
+        .then((entries) => {
+          if (this.queue !== q || !entries || !entries.length) return;
+          q.entries.push(...entries);
+          if (q.ordered) q.ordered.push(...entries);
+          this.renderQueue(true);
+          this.renderModes();
+          this.prepareNext();
+        })
+        .catch((err) => console.warn('[am-hook] 取不到电台的下一批歌曲', err))
+        .finally(() => { q.extending = false; });
     }
 
     clearQueue() {
@@ -1790,11 +1812,13 @@
       this.renderProgress();
       this.emit();
       this.prepareNext();
+      this.extendQueue();
     }
 
     async playAt(pos) {
       const entry = this.queue.entries[pos];
       this.queue.pos = pos;
+      this.extendQueue();
       const serial = ++this.queueSerial;
       this.pendingTrack = entry.track;
       this.emit();

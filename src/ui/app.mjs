@@ -35,10 +35,13 @@ const PAGES = [
   ['charts', /^https:\/\/music\.apple\.com\/[a-z]{2}\/new\/top-charts(?:\/(?:songs|playlists|albums|music-videos|city-charts|daily-global-top-charts))?\/?$/],
   ['editorial', /^https:\/\/music\.apple\.com\/[a-z]{2}\/(?:room|multi-room|grouping)\/[0-9]+(?:[/?#]|$)/],
   ['editorial', /^https:\/\/music\.apple\.com\/[a-z]{2}\/curator\/(?:[^/?#]+\/)?[0-9]+(?:[/?#]|$)/],
+  // 广播（官网 /{cc}/radio）与电台（编辑 / 直播电台 ra.<数字>，个人电台 ra.u-<…>）
+  ['radio', /^https:\/\/music\.apple\.com\/[a-z]{2}\/radio\/?(?:[?#]|$)/],
+  ['station', /^https:\/\/music\.apple\.com\/[a-z]{2}\/station\/(?:[^/?#]+\/)?ra\.[0-9A-Za-z._-]+?\/?(?:[?#]|$)/],
 ];
 
 /** 页面名 → 视图文件（/assets/views/<file>.html / .mjs）：新发现与各编辑页共用 browse 视图，其余同名 */
-const VIEW_FILES = { new: 'browse', charts: 'browse', editorial: 'browse', post: 'mv' };
+const VIEW_FILES = { new: 'browse', charts: 'browse', editorial: 'browse', radio: 'browse', post: 'mv' };
 /**
  * 视图文件 → [页面内容地址, 加载页面脚本]。地址逐个写全，不用模板拼接：服务端与 build-static 会把
  * 资源地址换成带内容哈希的地址（见 src/assets.rs），只能替换完整的字面量。
@@ -54,6 +57,7 @@ const VIEWS = {
   library: ['/assets/views/library.html', () => import('/assets/views/library.mjs')],
   'library-playlist': ['/assets/views/library-playlist.html', () => import('/assets/views/library-playlist.mjs')],
   settings: ['/assets/views/settings.html', () => import('/assets/views/settings.mjs')],
+  station: ['/assets/views/station.html', () => import('/assets/views/station.mjs')],
 };
 /** 跟随主地区的排行榜路径（与 src/links.rs 的 is_charts_path 相同） */
 const CHARTS_PATH = /^\/new\/top-charts(?:\/(?:songs|playlists|albums|music-videos|city-charts|daily-global-top-charts))?\/?$/;
@@ -68,6 +72,8 @@ function route(url) {
   if (url.pathname === '/') return 'home';
   // 「新发现」（跟随主地区）
   if (url.pathname === '/new') return 'new';
+  // 广播（跟随主地区，与 src/links.rs 的 is_radio_path 相同）
+  if (/^\/radio\/?$/.test(url.pathname)) return 'radio';
   // 设置中心（与 src/links.rs 的 is_settings_path 相同）
   if (/^\/settings\/?$/.test(url.pathname)) return 'settings';
   if (CHARTS_PATH.test(url.pathname)) return 'charts';
@@ -182,12 +188,13 @@ nav.addEventListener('click', (event) => {
 setNavExpanded(false);
 
 /**
- * 顶层页面（主页、新发现、排行榜首页、资料库与本地歌单）不显示「返回」，导航中对应的一项标为当前页；
- * 各榜单的「查看全部」仍标为排行榜；资料库按分类（library:songs 等），歌单与文件夹按地址（所在文件夹自动展开）
+ * 顶层页面（主页、新发现、排行榜首页、广播、资料库与本地歌单）不显示「返回」，导航中对应的一项标为当前页；
+ * 各榜单的「查看全部」仍标为排行榜，电台页标为广播；资料库按分类（library:songs 等），歌单与文件夹按地址（所在文件夹自动展开）
  */
 function syncNav(name, path) {
-  nav.classList.toggle('is-home', name === 'home' || name === 'new' || path === '/new/top-charts' || name === 'settings' || name === 'library' || name === 'library-playlist');
-  const key = name === 'library' || path.startsWith('/library/favorite-songs') ? `library:${path.split('/')[2] || 'recently-added'}` : name;
+  nav.classList.toggle('is-home', name === 'home' || name === 'new' || path === '/new/top-charts' || /^\/radio\/?$/.test(path) || name === 'settings' || name === 'library' || name === 'library-playlist');
+  // 电台页标为广播
+  const key = name === 'library' || path.startsWith('/library/favorite-songs') ? `library:${path.split('/')[2] || 'recently-added'}` : name === 'station' ? 'radio' : name;
   for (const link of nav.querySelectorAll('[data-nav]')) {
     if (link.dataset.nav === key) link.setAttribute('aria-current', 'page');
     else link.removeAttribute('aria-current');

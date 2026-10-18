@@ -226,6 +226,16 @@ const PREFETCH = 4;
 // tags: optional async () => Uint8Array of ilst items (mp4-tags.mjs), awaited before defragmenting;
 // crc: also compute the output's CRC-32 (for ZIP packaging). Returns { file, crc, dispose }.
 export async function downloadMV(id, video, audio, { signal, onProgress, onDefrag, tags, crc = false }) {
+  return downloadStreams({
+    prepare: (core) => preparePair(core, id, video, audio, signal),
+    bandwidth: Number(video['AVERAGE-BANDWIDTH'] || video.BANDWIDTH),
+    signal, onProgress, onDefrag, tags, crc,
+  });
+}
+// Shared by MV and radio episode downloads. prepare(core) resolves to the prepared streams ({ name, segments, keys,
+// init, firstRaw, duration }, see prepare above): video then audio are muxed into one file, a single stream (an
+// audio-only episode) keeps its own init. bandwidth (bits/s) only estimates the OPFS space needed.
+export async function downloadStreams({ prepare: prepareStreams, bandwidth, signal, onProgress, onDefrag, tags, crc = false }) {
   if (!navigator.storage?.getDirectory) throw new Error('OPFS requires HTTPS or localhost and a supported browser');
   await collectGarbage();
   const root = await navigator.storage.getDirectory();
@@ -238,13 +248,15 @@ export async function downloadMV(id, video, audio, { signal, onProgress, onDefra
   try {
     signal.throwIfAborted();
     writer = await handle.createWritable();
-    const streams = await preparePair(core, id, video, audio, signal);
+    const streams = await prepareStreams(core);
     const duration = Math.max(...streams.map(s => s.duration));
     // The fragmented file and the progressive copy coexist while defragmenting: about twice the output size.
-    const estimate = Number(video['AVERAGE-BANDWIDTH'] || video.BANDWIDTH) / 8 * duration;
+    const estimate = bandwidth / 8 * duration;
     const { quota, usage } = await navigator.storage.estimate?.() ?? {};
     if (quota && estimate && quota - (usage || 0) < estimate * 2.1) throw new Error('Not enough OPFS storage quota for this download');
-    const init = await core.call('muxInit', 'video', 'audio', duration);
+    // A single stream is not renumbered: its fragments keep the track IDs of its own init.
+    const mux = streams.length > 1;
+    const init = mux ? await core.call('muxInit', streams[0].name, streams[1].name, duration) : streams[0].init.slice();
     await writer.write(init);
     // The whole video track, then the whole audio track (as the reference writes them): defrag keeps
     // tracks one after another, so it then reads the fragmented file front to back.
@@ -263,8 +275,9 @@ export async function downloadMV(id, video, audio, { signal, onProgress, onDefra
       const raw = await pending.get(i); pending.delete(i);
       signal.throwIfAborted();
       const { stream, segment } = queue[i];
-      const data = await core.call('fragment', stream.name, raw, stream.keys.get(segment.key) || new Uint8Array(16), true, sequence);
-      sequence += moofCount(data); await writer.write(data); bytes += data.length;
+      const data = await core.call('fragment', stream.name, raw, stream.keys.get(segment.key) || new Uint8Array(16), mux, sequence);
+      if (mux) sequence += moofCount(data);
+      await writer.write(data); bytes += data.length;
       onProgress((i + 1) / queue.length, bytes);
     }
     signal.throwIfAborted(); await writer.close(); writer = null;

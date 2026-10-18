@@ -16,11 +16,13 @@
     { "source": "/lyrics/:__id", "destination": "/api/handler?__path=/lyrics/:__id" },
     { "source": "/status", "destination": "/api/handler?__path=/status" },
     { "source": "/key", "destination": "/api/handler?__path=/key" },
+    { "source": "/station/:__rest*", "destination": "/api/handler?__path=/station/:__rest*" },
     { "source": "/(https:/+music\\.apple\\.com/[a-z]{2}/.+)", "destination": "/index.html" },
     { "source": "/new", "destination": "/index.html" },
     { "source": "/new/top-charts", "destination": "/index.html" },
     { "source": "/new/top-charts/:kind", "destination": "/index.html" },
     { "source": "/settings", "destination": "/index.html" },
+    { "source": "/radio", "destination": "/index.html" },
     { "source": "/library", "destination": "/index.html" },
     { "source": "/library/:section", "destination": "/index.html" },
     { "source": "/library/:section/:__id", "destination": "/index.html" }

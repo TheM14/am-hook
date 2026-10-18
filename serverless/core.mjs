@@ -9,6 +9,10 @@
 
 const WEB_ORIGIN = 'https://music.apple.com';
 const API_ORIGIN = 'https://amp-api-edge.music.apple.com';
+/** 带用户 token 的接口（/v1/me/...、/v1/play/assets）与网页版 MusicKit 一样走 amp-api，不走 edge */
+const USER_API_ORIGIN = 'https://amp-api.music.apple.com';
+/** license 请求体（JSON，challenge 为 base64）的上限 */
+const MAX_LICENSE_BODY = 256 * 1024;
 /** 网页版每次发布都会换 token，至少按此周期重新抓取；JWT 带 `exp` 时在过期前提前刷新（秒） */
 const TOKEN_TTL = 12 * 3600;
 const TOKEN_EXPIRY_MARGIN = 3600;
@@ -32,11 +36,11 @@ const CHART_KINDS = 'songs|playlists|albums|music-videos|city-charts|daily-globa
 const SITE_PAGE_RE = new RegExp(
   '^https:/{1,2}music\\.apple\\.com/[a-z]{2}/(?:'
     + 'song/[^/]+/[0-9]+|music-video/[^/]+/[0-9]+|(?:post|album|artist|curator)/(?:[^/]+/)?[0-9]+'
-    + '|playlist/(?:[^/]+/)?pl\\.[0-9A-Za-z_-]+|(?:room|multi-room|grouping)/[0-9]+)(?:/|$)'
-    + `|^https:/{1,2}music\\.apple\\.com/[a-z]{2}/new(?:/top-charts(?:/(?:${CHART_KINDS}))?)?/?$`,
+    + '|playlist/(?:[^/]+/)?pl\\.[0-9A-Za-z_-]+|(?:room|multi-room|grouping)/[0-9]+|station/(?:[^/]+/)?ra\\.[0-9A-Za-z._-]+)(?:/|$)'
+    + `|^https:/{1,2}music\\.apple\\.com/[a-z]{2}/(?:new(?:/top-charts(?:/(?:${CHART_KINDS}))?)?|radio)/?$`,
 );
 const LOCAL_PAGE_RE = new RegExp(
-  `^(?:settings|new(?:/top-charts(?:/(?:${CHART_KINDS}))?)?`
+  `^(?:settings|radio|new(?:/top-charts(?:/(?:${CHART_KINDS}))?)?`
     + '|library(?:/(?:recently-added|albums|songs|music-videos|all-playlists|favorite-songs|artists(?:/[^/]+)?'
     + '|playlist/p\\.[0-9A-Za-z_-]+|playlist-folder/f\\.[0-9A-Za-z_-]+))?)/?$',
 );
@@ -208,6 +212,110 @@ function ampRoute(path, search, platform) {
   const rest = decode(match[2]);
   if (rest === null || !validCatalogPath(rest)) return fail(400, `Invalid ${match[1]} path`);
   return amp(`${API_ORIGIN}/v1/${match[1]}/${rest}${suffix}`, CATALOG_TTL, platform);
+}
+
+/* ---------- 电台：需要 media-user-token 的接口（同 src/amp.rs 的 station_*_handler） ---------- */
+
+/** 页面带来的 media-user-token（X-Media-User-Token）；缺失或含非法字符时为 null */
+function userToken(request) {
+  const token = (request.headers.get('x-media-user-token') ?? '').trim();
+  return token && token.length <= 4096 && /^[\x21-\x7e]+$/.test(token) ? token : null;
+}
+
+/** 电台 ID：编辑 / 直播电台为 `ra.<数字>`，个人电台为 `ra.u-<…>` 等 */
+export function validStationId(id) {
+  return id.length > 3 && id.length <= 128 && /^ra\.[0-9A-Za-z._-]+$/.test(id);
+}
+
+/** MusicKit 认识的几种 license 接口 */
+const LICENSE_PATHS = [
+  '/WebObjects/MZPlay.woa/wa/acquireWebPlaybackLicense',
+  '/WebObjects/MZPlay.woa/web/radio/versions/1/license',
+  '/v1/radio/streaming-key-delivery',
+  '/v1/hls/streaming-key-delivery',
+  '/WebObjects/MZPlay.woa/wa/fpsRequest',
+  '/WebObjects/MZPlayLocal.woa/wa/fpsRequest',
+  '/WebObjects/MZPlay.woa/podcast/hls/license/streaming/start',
+];
+
+/** 电台 license 服务器：Apple 的 HTTPS 地址，路径为上面几种之一 */
+export function validLicenseUrl(raw) {
+  let url = null;
+  try { url = new URL(raw); } catch {}
+  return !!url && isAppleHttps(url) && LICENSE_PATHS.some((path) => url.pathname.endsWith(path));
+}
+
+/**
+ * 带 developer token 与用户 token 请求，原样返回状态码与 JSON，不缓存。`license` 为 { renewal } 时按 MusicKit 的 license 请求发送。
+ * 401 / 403 多半是 media-user-token 失效，不换 developer token 重试；不跟随重定向，token 不会被带到别处
+ */
+async function userRequest(platform, url, user, { method = 'GET', body, license } = {}) {
+  try {
+    const token = await developerToken(platform).catch((error) => {
+      throw new Error(`developer token unavailable: ${error.message}`);
+    });
+    const headers = { authorization: `Bearer ${token}`, origin: WEB_ORIGIN, referer: `${WEB_ORIGIN}/`, accept: 'application/json' };
+    if (license) {
+      headers['x-apple-music-user-token'] = user;
+      if (license.renewal) headers['x-apple-renewal'] = 'true';
+    } else {
+      headers['media-user-token'] = user;
+    }
+    if (body !== undefined) headers['content-type'] = 'application/json';
+    const started = Date.now();
+    const upstream = await fetch(url, { method, headers, body, redirect: 'manual', signal: AbortSignal.timeout(UPSTREAM_TIMEOUT) });
+    const elapsed = Date.now() - started;
+    const text = await upstream.arrayBuffer();
+    const bodyless = [204, 205, 304].includes(upstream.status);
+    return new Response(bodyless ? null : text, {
+      status: upstream.status,
+      headers: { 'content-type': 'application/json; charset=utf-8', ...NO_STORE, 'server-timing': `upstream;dur=${elapsed}` },
+    });
+  } catch (error) {
+    return fail(502, error.message.startsWith('developer token') ? error.message : `Apple request failed: ${error.message}`);
+  }
+}
+
+async function stationLicense(platform, request, user) {
+  const raw = await request.text().catch(() => '');
+  if (raw.length > MAX_LICENSE_BODY) return fail(413, 'License request too large');
+  const value = parse(raw);
+  if (!value || typeof value.url !== 'string' || !validLicenseUrl(value.url)
+    || !value.body || typeof value.body !== 'object' || Array.isArray(value.body)) {
+    return fail(400, 'Invalid license request');
+  }
+  return userRequest(platform, value.url, user, { method: 'POST', body: JSON.stringify(value.body), license: { renewal: value.renewal === true } });
+}
+
+/** /station/...：不是电台接口时返回 null */
+function stationRoute(method, path, url, request, platform) {
+  let match;
+  let handler = null;
+  const query = url.search.replace(/^\?/, '');
+  if (method === 'GET' && path === '/station/assets') {
+    if (!query || query.length > MAX_QUERY_LEN) return fail(400, 'Invalid play assets query');
+    handler = (user) => userRequest(platform, `${USER_API_ORIGIN}/v1/play/assets?${query}`, user);
+  } else if (method === 'GET' && path === '/station/storefront') {
+    handler = (user) => userRequest(platform, `${USER_API_ORIGIN}/v1/me/storefront`, user);
+  } else if (method === 'GET' && path === '/station/recent') {
+    if (query.length > MAX_QUERY_LEN) return fail(400, 'Query too long');
+    handler = (user) => userRequest(platform, `${USER_API_ORIGIN}/v1/me/recent/radio-stations${query ? `?${query}` : ''}`, user);
+  } else if (method === 'GET' && (match = /^\/station\/catalog\/(.+)$/.exec(path))) {
+    const rest = decode(match[1]);
+    if (rest === null || !validCatalogPath(rest)) return fail(400, 'Invalid catalog path');
+    if (query.length > MAX_QUERY_LEN) return fail(400, 'Query too long');
+    handler = (user) => userRequest(platform, `${USER_API_ORIGIN}/v1/catalog/${rest}${query ? `?${query}` : ''}`, user);
+  } else if (method === 'POST' && path === '/station/license') {
+    handler = (user) => stationLicense(platform, request, user);
+  } else if (method === 'POST' && (match = /^\/station\/next-tracks\/([^/]+)$/.exec(path))) {
+    const id = decode(match[1]);
+    if (id === null || !validStationId(id)) return fail(400, 'Invalid station id');
+    if (query.length > MAX_QUERY_LEN) return fail(400, 'Query too long');
+    handler = (user) => userRequest(platform, `${USER_API_ORIGIN}/v1/me/stations/next-tracks/${id}${query ? `?${query}` : ''}`, user, { method: 'POST' });
+  }
+  if (!handler) return null;
+  const user = userToken(request);
+  return user ? handler(user) : fail(401, 'media-user-token required');
 }
 
 /* ---------- MV master ---------- */
@@ -475,6 +583,10 @@ export async function handle(request, env = {}, platform = {}) {
       if (response) return response;
     }
     if (path === '/parse/mv-master') return mvMasterByUrl(url.searchParams.get('url'));
+  }
+  if (path.startsWith('/station/')) {
+    const response = stationRoute(method, path, url, request, platform);
+    if (response) return response;
   }
   return wrapperRoute(method, path, url, request, wrapper);
 }

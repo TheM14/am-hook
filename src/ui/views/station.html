@@ -1,0 +1,113 @@
+<!--
+  电台页（views/station.mjs）：先取电台资源，再按种类换成下面两种模板之一。
+    tpl-tracks：个人 / 编辑电台，与歌单页相同的头部与曲目列表（接下来的几首，可以续取）；
+    tpl-stream：直播电台与广播单集，与 MV 页相同的布局（播放器、轨道选择、下载），直播另有当前歌曲与节目表。
+-->
+<div class="page station-boot" id="boot">
+  <main><div class="alert info" id="boot-alert" aria-live="polite" data-i18n="station.loading"></div></main>
+</div>
+
+<template id="tpl-tracks">
+  <div class="page">
+    <main>
+      <section class="detail-header" id="hero">
+        <div class="album-tall" aria-hidden="true"><div class="album-tall-inner" id="tall-art"><img alt=""></div></div>
+        <div class="detail-art">
+          <div class="detail-radiosity" id="radiosity" aria-hidden="true"></div>
+          <div class="album-art" id="art"></div>
+        </div>
+        <div class="detail-headings">
+          <p class="station-eyebrow" id="eyebrow"></p>
+          <h1 class="album-title" id="title">&nbsp;</h1>
+          <p class="album-artist" id="artist"></p>
+          <div class="detail-meta"><span class="album-sub" id="sub"></span></div>
+        </div>
+        <div class="album-notes" id="notes" hidden><p class="album-notes-text" id="notes-text"></p></div>
+        <div class="detail-actions">
+          <button class="detail-play-btn" id="play-all" type="button" disabled>
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z"/></svg>
+            <span data-i18n="album.play"></span>
+          </button>
+          <button class="detail-circle-btn" id="refresh" type="button" disabled data-i18n-attr="aria-label=station.refresh,title=station.refresh">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 11a8 8 0 1 0-2.34 5.66"/><path d="M20 4v7h-7"/></svg>
+          </button>
+          <span class="detail-extra" id="extra"></span>
+        </div>
+      </section>
+
+      <div class="alert info" id="alert" hidden aria-live="polite"></div>
+      <p class="station-hint" id="hint" data-i18n="station.tracksHint" hidden></p>
+      <section class="tracklist chart" id="tracks" hidden></section>
+      <div class="station-more-row"><button class="btn" id="more" type="button" hidden data-i18n="station.more"></button></div>
+    </main>
+  </div>
+</template>
+
+<template id="tpl-stream">
+  <div class="mv-ambient" id="ambient" aria-hidden="true"></div>
+  <div class="page mv-page">
+    <main class="mv-layout">
+      <div class="mv-stage">
+        <section class="mv-screen" aria-labelledby="title">
+          <video id="video" controls playsinline preload="none" data-i18n-attr="aria-label=mv.preview"></video>
+          <span class="station-live-badge" id="live-badge" hidden data-i18n="station.liveBadge"></span>
+          <button id="screen-play" class="mv-screen-play" type="button" disabled data-i18n-attr="aria-label=mv.play"><svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5.5v13a1 1 0 0 0 1.5.86l11-6.5a1 1 0 0 0 0-1.72l-11-6.5A1 1 0 0 0 8 5.5z"/></svg></button>
+        </section>
+        <section class="mv-info">
+          <div class="mv-thumb station-thumb"><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><circle cx="12" cy="12" r="2"/><path d="M16.2 7.8a6 6 0 0 1 0 8.4M7.8 16.2a6 6 0 0 1 0-8.4M19 5a10 10 0 0 1 0 14M5 19A10 10 0 0 1 5 5"/></svg><img id="artwork" alt="" hidden></div>
+          <div class="mv-info-text">
+            <p class="eyebrow" id="eyebrow"></p>
+            <h1 class="mv-title" id="title">&nbsp;</h1>
+            <p class="mv-artist" id="artist"></p>
+            <div class="song-meta" id="meta"></div>
+          </div>
+          <a id="apple-link" class="btn mv-apple" target="_blank" rel="noreferrer" hidden>Apple Music<svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M7 17 17 7M8 7h9v9"/></svg></a>
+        </section>
+        <p class="station-notes" id="notes" hidden></p>
+        <!-- 直播电台：emsg 里的当前歌曲（链接到歌曲页） -->
+        <section class="station-now" id="now" hidden>
+          <span class="station-now-label" data-i18n="station.nowPlaying"></span>
+          <span class="station-now-text" id="now-text"></span>
+        </section>
+        <!-- 直播电台的节目表（station-events） -->
+        <section class="station-schedule" id="schedule" hidden>
+          <h2 class="station-schedule-title" data-i18n="station.schedule"></h2>
+          <ol class="station-schedule-list" id="schedule-list"></ol>
+        </section>
+      </div>
+      <aside class="mv-panel" aria-labelledby="quality-title">
+        <div class="mv-panel-head">
+          <div><h2 id="quality-title" data-i18n="station.quality"></h2><p class="mv-selection" id="selection">—</p></div>
+          <span class="badge" id="kind-badge"></span>
+        </div>
+        <div id="error" class="alert error" role="alert" hidden></div>
+        <div class="station-token" id="token-box" hidden>
+          <p id="token-text"></p>
+          <button class="btn" id="token-edit" type="button" data-i18n="station.tokenSet"></button>
+        </div>
+        <div class="mv-tracks">
+          <fieldset id="video-tracks" class="mv-select" disabled><legend><span data-i18n="mv.video"></span><span class="mv-count" id="video-count">—</span></legend>
+            <button id="video-trigger" class="mv-trigger" type="button" aria-expanded="false" aria-controls="videos"><span class="mv-trigger-value" id="video-value"><span class="mv-trigger-empty" data-i18n="mv.loading"></span></span><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
+            <div class="mv-options" id="videos" hidden></div>
+          </fieldset>
+          <fieldset id="audio-tracks" class="mv-select" disabled><legend><span data-i18n="mv.audio"></span><span class="mv-count" id="audio-count">—</span></legend>
+            <button id="audio-trigger" class="mv-trigger" type="button" aria-expanded="false" aria-controls="audios"><span class="mv-trigger-value" id="audio-value"><span class="mv-trigger-empty" data-i18n="mv.loading"></span></span><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m6 9 6 6 6-6"/></svg></button>
+            <div class="mv-options" id="audios" hidden></div>
+          </fieldset>
+        </div>
+        <div class="mv-dock">
+          <div class="mv-actions">
+            <button id="play" class="btn btn-primary" type="button" disabled><svg aria-hidden="true" viewBox="0 0 24 24" fill="currentColor"><path d="m7 4 14 8-14 8z"/></svg><span data-i18n="station.play"></span></button>
+            <button id="download" class="btn" type="button" disabled><svg aria-hidden="true" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12m-5-5 5 5 5-5M5 21h14"/></svg><span id="download-label" data-i18n="mv.download"></span></button>
+          </div>
+          <div class="mv-feedback" id="feedback" data-state="loading">
+            <div class="mv-status-row"><span class="mv-state-dot" aria-hidden="true"></span><p id="status" role="status" aria-live="polite"></p><button id="cancel" class="btn" type="button" hidden data-i18n="mv.cancel"></button><a id="save" class="btn" hidden data-i18n="mv.save"></a></div>
+            <progress id="progress" max="1" value="0" hidden data-i18n-attr="aria-label=mv.download"></progress>
+          </div>
+          <p class="hint" id="hint"></p>
+        </div>
+      </aside>
+    </main>
+    <footer class="footer"><span data-i18n="footer.tagline"></span><span data-i18n="footer.note"></span></footer>
+  </div>
+</template>

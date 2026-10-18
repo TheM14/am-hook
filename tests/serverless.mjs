@@ -12,7 +12,8 @@ import { fileURLToPath } from 'node:url';
 import vercel from '../api/handler.mjs';
 import worker from '../serverless/cloudflare.mjs';
 import {
-  extractScriptPath, extractToken, handle, isAppleHttps, isPagePath, refreshDelay, resetTokenCache, validCatalogPath, wrapperConfig,
+  extractScriptPath, extractToken, handle, isAppleHttps, isPagePath, refreshDelay, resetTokenCache, validCatalogPath, validLicenseUrl,
+  validStationId, wrapperConfig,
 } from '../serverless/core.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -83,13 +84,66 @@ test('path checks match src/amp.rs, src/state.rs and src/links.rs', () => {
     '/https://music.apple.com/us/playlist/mix/pl.u-AkAmPlyUxqvoZ7', '/https://music.apple.com/us/artist/159260351',
     '/https://music.apple.com/cn/new', '/https://music.apple.com/cn/new/top-charts/songs', '/https://music.apple.com/us/multi-room/1532467784',
     '/https://music.apple.com/us/curator/1019400049', '/https:/music.apple.com/us/album/lover/1468058165',
+    '/radio', '/https://music.apple.com/cn/radio', '/https://music.apple.com/us/station/apple-music-1/ra.978194965',
+    '/https://music.apple.com/cn/station/ra.686227433',
   ]) assert(isPagePath(page), page);
   for (const other of [
     '/new/other', '/new/top-charts/x', '/top-charts', '/settings/x', '/library/other', '/library/playlist/pl.123', '/library/artists/a/b',
     '/https://music.apple.com/us/album/name/abc', '/https://music.apple.com/us/music-video/123', '/https://music.apple.com/us/room/abc',
     '/https://music.apple.com/cn/new/top-charts/stations', '/http://music.apple.com/us/song/name/123', '/https://example.com/us/song/name/123',
-    '/assets/missing.js', '/favicon.ico',
+    '/assets/missing.js', '/favicon.ico', '/radio/x', '/https://music.apple.com/us/station/apple-music-1',
   ]) assert(!isPagePath(other), other);
+
+  for (const ok of ['ra.978194965', 'ra.u-5e1a0b_x']) assert(validStationId(ok), ok);
+  for (const bad of ['ra.', 'pl.123', 'ra.1/../x']) assert(!validStationId(bad), bad);
+  assert(validLicenseUrl('https://play.itunes.apple.com/WebObjects/MZPlay.woa/web/radio/versions/1/license'));
+  for (const bad of ['https://example.com/v1/radio/streaming-key-delivery', 'http://play.itunes.apple.com/WebObjects/MZPlay.woa/wa/acquireWebPlaybackLicense',
+    'https://play.itunes.apple.com/WebObjects/MZPlay.woa/wa/other']) assert(!validLicenseUrl(bad), bad);
+});
+
+test('station endpoints relay the media-user-token without caching', async () => {
+  const token = jwt({ exp: Math.floor(Date.now() / 1000) + 86400 });
+  const base = apple({ token });
+  const calls = stub((url, init) => {
+    if (url.startsWith('https://amp-api.music.apple.com/') || url.startsWith('https://play.itunes.apple.com/')) return reply({ data: [], status: 0 });
+    return base(url, init);
+  });
+  const user = { 'x-media-user-token': '0.Abc+/=' };
+  const send = (pathAndQuery, init = {}) => handle(new Request(`https://site.test${pathAndQuery}`, { ...init, headers: { ...user, ...init.headers } }));
+
+  assert.equal((await handle(new Request('https://site.test/station/storefront'))).status, 401);
+  const next = await send('/station/next-tracks/ra.686227433?limit=10', { method: 'POST' });
+  assert.equal(next.status, 200);
+  assert.equal(next.headers.get('cache-control'), 'no-store');
+  let call = calls.at(-1);
+  assert.equal(call.url, 'https://amp-api.music.apple.com/v1/me/stations/next-tracks/ra.686227433?limit=10');
+  assert.equal(call.method, 'POST');
+  assert.equal(call.headers['media-user-token'], '0.Abc+/=');
+  assert.equal(call.headers.authorization, `Bearer ${token}`);
+  assert.equal(call.redirect, 'manual');
+
+  assert.equal((await send('/station/assets?id=ra.978194965&kind=radioStation&keyFormat=web')).status, 200);
+  assert.equal(calls.at(-1).url, 'https://amp-api.music.apple.com/v1/play/assets?id=ra.978194965&kind=radioStation&keyFormat=web');
+  assert.equal((await send('/station/next-tracks/pl.1', { method: 'POST' })).status, 400);
+  assert.equal((await send('/station/catalog/cn/stations?filter%5Bidentity%5D=personal')).status, 200);
+  assert.equal(calls.at(-1).url, 'https://amp-api.music.apple.com/v1/catalog/cn/stations?filter%5Bidentity%5D=personal');
+  assert.equal((await send('/station/catalog/us/a..b')).status, 400);
+  assert.equal((await send('/station/recent?limit=30')).status, 200);
+  assert.equal(calls.at(-1).url, 'https://amp-api.music.apple.com/v1/me/recent/radio-stations?limit=30');
+
+  const licenseUrl = 'https://play.itunes.apple.com/WebObjects/MZPlay.woa/web/radio/versions/1/license';
+  const body = { adamId: 'ra.978194965', challenge: 'AAAA', uri: 'data:;base64,AA==', 'key-system': 'com.widevine.alpha' };
+  const license = await send('/station/license', { method: 'POST', body: JSON.stringify({ url: licenseUrl, body, renewal: true }), headers: { 'content-type': 'application/json' } });
+  assert.equal(license.status, 200);
+  call = calls.at(-1);
+  assert.equal(call.url, licenseUrl);
+  assert.equal(call.headers['x-apple-music-user-token'], '0.Abc+/=');
+  assert.equal(call.headers['x-apple-renewal'], 'true');
+  assert.deepEqual(JSON.parse(call.body), body);
+  const count = calls.length;
+  const bad = await send('/station/license', { method: 'POST', body: JSON.stringify({ url: 'https://example.com/x', body }) });
+  assert.equal(bad.status, 400);
+  assert.equal(calls.length, count, 'no request for an invalid license server');
 });
 
 test('amp proxy sends the scraped developer token and reuses it', async () => {

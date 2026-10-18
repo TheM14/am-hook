@@ -40,7 +40,7 @@ For example: `http://127.0.0.1:8888/https://music.apple.com/cn/music-video/super
 
 ## Serverless Deployment (Vercel / Cloudflare)
 
-If you would rather not run the binary, the same pages can be deployed to a serverless platform: the platform hosts the static assets and the backend shrinks to a single function (the amp-api catalog proxy and the MV master fetch). Pick either platform:
+If you would rather not run the binary, the same pages can be deployed to a serverless platform: the platform hosts the static assets and the backend shrinks to a single function (the amp-api catalog proxy, the MV master fetch and the station endpoints). Pick either platform:
 
 | Platform | One click | CLI |
 |---|---|---|
@@ -155,6 +155,15 @@ File format (version 1):
 - Completion triggers a save and exposes a "Save MP4" link. Cancellation and failure remove temporary files. Leaving the MV page stops playback, cancels a running download and attempts to remove the finished file. Files left by a closed or crashed tab are removed the next time an MV page is opened (without Web Locks, once they are 24 hours old).
 - Artist-uploaded videos (music.apple.com `post` pages, amp-api `uploaded-videos`, linked from New and editorial pages) open in the same page. Like music.apple.com, they need neither wrapper-lite nor decryption: each entry of `assetTokens` is an unencrypted progressive MP4 (H.264 + AAC, `moov` first) that the `<video>` element plays directly. The page lists them by resolution with size and bitrate (from a `HEAD` request); there is no separate audio track. Downloads stream the file into OPFS unchanged (an in-memory Blob without OPFS).
 
+### Radio and Stations
+
+- **Radio** (`/radio`, between Top Charts and Settings in the sidebar and phone menu): the same editorial sections as music.apple.com/{cc}/radio (amp-api `editorial/{cc}/groupings?name=radio`) for the primary storefront; the live radio shelf shows each station's logo, a LIVE badge and the show on air. With a media-user-token, "Your Stations" comes first: the personal station (`stations?filter[identity]=personal`) and recently played stations (`me/recent/radio-stations`). Station links on New, editorial pages and Radio open the station page here.
+- **media-user-token**: wrapper-lite has no station endpoints yet, so stations use the media-user-token of your Apple Music account to call Apple directly. The first time a station page opens you are asked for it (sign in at music.apple.com and copy `media-user-token` from the developer tools → Application → Cookies; a whole Cookie header also works); it is checked against `/v1/me/storefront` before it is saved. The token stays in this browser's localStorage and goes to the server in `X-Media-User-Token` with each request; the server relays it without storing, caching or logging it. When Apple rejects it you are asked again; Settings can change or clear it.
+- **Station pages** (`/https://music.apple.com/<cc>/station/<slug>/ra.<id>`) come in three kinds, decided from `playParams` as MusicKit does:
+  - Personal and editorial stations (`format: tracks`, such as genre stations and the personal station `ra.u-…`): the playlist page's header and track list, holding the station's next songs (`POST /v1/me/stations/next-tracks/<id>`, 10 at a time), with a new batch or more on demand; playback fetches the next batch before the queue runs out, so it keeps going like a station. Track More menus are the song ones (download included), and the header More menu downloads the listed songs.
+  - Episodes (`format: stream`, `streamingRadioSubType: Episode`, audio or video): the music video page layout listing the HLS bitrates and tracks, with playback, seeking and downloads (`.m4a` for audio, `.mp4` for video, tagged with title, show, air date and artwork).
+  - Live radio (`isLive`: Apple Music 1, broadcasters, and video shows that aired live): also the music video layout, starting near the live edge, with a LIVE badge, the song on air (ID3 in the segments' `emsg`, linked to its song page when it maps to one) and the schedule; no downloads.
+
 ## How It Works
 
 ### Songs: browser-side decryption
@@ -188,6 +197,12 @@ Some songs (for example `1569279827`) have no master m3u8: wrapper-lite `/m3u8` 
 - Challenge building, license parsing, CENC/CBCS decryption, caption repair, fragmented MP4 muxing and conversion to a progressive MP4 run in a Worker with `media.wasm` (Rust, see [crates/am-media](crates/am-media/README.md)).
 - Live playlists, discontinuities and changing initialization segments are not supported.
 
+### Stations
+
+- Station resources come through `/amp` as usual. Account requests go from the server to `amp-api.music.apple.com` (not edge, never cached) with the developer token and the media-user-token from the page: `/station/next-tracks/<id>`, `/station/assets` (`/v1/play/assets?<playParams>&keyFormat=web`, giving the HLS URL and license server), `/station/catalog/...`, `/station/recent` and `/station/storefront`.
+- The browser fetches the HLS of live radio and episodes directly (`itsliveradio.apple.com` allows cross-origin requests); the fMP4 segments list FairPlay, PlayReady and Widevine `EXT-X-KEY`s. The media Worker shared with music videos and AAC-LC songs builds a Widevine license request (PlayReady if Widevine fails), shaped by the license server as MusicKit does (for example `{ adamId, challenge, uri, key-system, … }` for `linear.tv.apple.com/v1/radio/streaming-key-delivery`), and `/station/license` sends it to Apple with both tokens (plus `X-Apple-Renewal` for Widevine): wrapper-lite's `/license` does not support stations. With the content key the Worker decrypts the segments for MediaSource.
+- Live playlists have no `#EXT-X-ENDLIST`: playback starts 3 segments before the end of the window, the playlist is refreshed every `TARGETDURATION` and segments are appended by sequence number, jumping to the newest ones after falling out of the window. Downloads are for episodes only and work like MV downloads: segments go to OPFS and are rewritten as a progressive MP4 (an audio-only stream keeps its own track).
+
 ### Using a local wrapper-lite
 
 The "wrapper-lite" setting at the bottom of the navigation switches between two modes (saved in the browser):
@@ -215,14 +230,18 @@ The "wrapper-lite" setting at the bottom of the navigation switches between two 
 | `GET /https://music.apple.com/<cc>/playlist/<slug>/<pl.id>` | Playlist page (editorial and public user playlists: motion artwork like the album page, tracks with artwork / artist / album columns, playback queue, featured-artists and more-by-curator shelves; data from the same amp-api `playlists` request as music.apple.com, fetched through `/amp`) |
 | `GET /https://music.apple.com/<cc>/artist/<slug>/<id>` | Artist page (header like music.apple.com: motion video, wide image or circular portrait from the catalog data; latest release, top songs with a playback queue, album / music-video / playlist / similar-artist shelves with See All, bio; data from the same amp-api `artists` request as music.apple.com, fetched through `/amp`). Artist names on song, music-video and album pages (each artist of a multi-artist line separately) and artist shelves link here |
 | `GET /settings` | Settings (download settings and more). The server only returns the single-page app; settings live in the browser (`src/ui/prefs.mjs`) |
+| `GET /radio` | Radio (Radio in the sidebar): the same editorial sections as music.apple.com/{cc}/radio for the primary storefront, plus Your Stations with a media-user-token; `/https://music.apple.com/<cc>/radio` is for a fixed storefront |
+| `GET /https://music.apple.com/<cc>/station/<slug>/ra.<id>` | Station page: the next songs of personal and editorial stations, or the music video layout with playback and downloads for live radio and episodes (see [Radio and Stations](#radio-and-stations)) |
 | `GET /library[/<section>]`, `GET /library/artists/<name>`, `GET /library/playlist/p.<id>`, `GET /library/favorite-songs`, `GET /library/playlist-folder/f.<id>` | Library pages (sections `recently-added`, `artists`, `albums`, `songs`, `music-videos`, `all-playlists`), local playlists, Favorite Songs and playlist folders. The server only returns the single-page app; library data lives in the browser's IndexedDB (`src/ui/library.mjs`) |
 | `GET /new` | New (the sidebar's New entry): the same editorial sections as music.apple.com/{cc}/new (amp-api `editorial/{cc}/groupings?name=music`) for the primary storefront, reloaded when it changes — hero cards, four-row song shelves, album / playlist / radio / video shelves with the music.apple.com shelf-grid column counts, and the Explore More links; `/https://music.apple.com/<cc>/new` shows a fixed storefront |
 | `GET /new/top-charts[/<kind>]` | Top Charts, linked from New's Explore More like music.apple.com/{cc}/new/top-charts (amp-api `catalog/{cc}/charts`, primary storefront): ranked top songs (three rows), city charts, Daily Top 100, and ranked top playlists / albums / music videos. Each ranked chart's See All (`songs`, `playlists`, `albums`, `music-videos`, also `city-charts`, `daily-global-top-charts`) lists the whole chart, paged on scroll — songs as chart rows like the playlist page — and songs / albums / music videos can be filtered by genre (`?genreId=`, genres from `catalog/{cc}/genres`); `/https://music.apple.com/<cc>/new/top-charts[/<kind>]` shows a fixed storefront |
-| `GET /https://music.apple.com/<cc>/room/<id>`, `.../multi-room/<id>`, `.../grouping/<id>`, `.../curator/<slug>/<id>` | Editorial pages, routed like music.apple.com: a room is a section's See All (all contents in a grid, paged on scroll); multi-room (`editorial/{cc}/multirooms`, header art + sections), grouping (`editorial/{cc}/groupings/{id}`, e.g. Music Videos and genre pages) and curator (`catalog/{cc}?ids[apple-curators]=`: its grouping's sections, or its playlists) reuse the New layout. Legacy links in editorial data (`collection/...?fcId=`, `viewGrouping?id=`, `viewFeature?id=`) open these pages in app; stations and other content the site cannot open link to Apple Music. Pasting these links on the home page opens them too |
+| `GET /https://music.apple.com/<cc>/room/<id>`, `.../multi-room/<id>`, `.../grouping/<id>`, `.../curator/<slug>/<id>` | Editorial pages, routed like music.apple.com: a room is a section's See All (all contents in a grid, paged on scroll); multi-room (`editorial/{cc}/multirooms`, header art + sections), grouping (`editorial/{cc}/groupings/{id}`, e.g. Music Videos and genre pages) and curator (`catalog/{cc}?ids[apple-curators]=`: its grouping's sections, or its playlists) reuse the New layout. Legacy links in editorial data (`collection/...?fcId=`, `viewGrouping?id=`, `viewFeature?id=`) open these pages in app; stations open the station page here, and other content the site cannot open links to Apple Music. Pasting these links on the home page opens them too |
 | `GET /amp/v1/catalog/<path>?<query>` | Proxies Apple Music catalog API (`amp-api-edge.music.apple.com/v1/catalog/...`, used by home page search) with the music.apple.com web developer token; query passed through unchanged. Uses a dedicated HTTP/2 connection warmed at startup, caches successful responses, merges identical concurrent requests, and reports `Server-Timing` (`cache;desc=hit/miss/shared`, upstream time) |
 | `GET /amp/v1/editorial/<path>?<query>` | Proxies the editorial API (`amp-api-edge.music.apple.com/v1/editorial/...`: groupings, rooms, multirooms; used by New and the editorial pages) like `/amp/v1/catalog`, sharing its connection and cache |
 | `GET /amp/v1/storefronts` | All storefronts from amp-api (query passed through to follow `next` paging); pages fetch it once and keep it in localStorage (refreshed in the background after 30 days); it supplies the storefront picker and the catalog language choices (each storefront's `supportedLanguageTags`) (an unsupported `l` silently falls back to the storefront default, e.g. `cn` only supports `zh-Hans-CN` / `en-GB`) |
 | `GET /mv/webplayback/<adamId>`, `POST /mv/license` | Relays to wrapper-lite `/webplayback` and `/license`: MVs (PlayReady, `drm-type: pr`) and songs without a master m3u8 (AAC-LC media m3u8, Widevine without `drm-type`) |
+| `POST /station/next-tracks/ra.<id>`, `GET /station/assets?<playParams>`, `GET /station/catalog/<path>`, `GET /station/recent`, `GET /station/storefront` | Station endpoints: call `amp-api.music.apple.com` (`/v1/me/stations/next-tracks`, `/v1/play/assets`, `/v1/catalog`, `/v1/me/recent/radio-stations`, `/v1/me/storefront`) with the developer token and the media-user-token the page sends in `X-Media-User-Token`; responses are relayed as is and never cached; 401 without a token |
+| `POST /station/license` | `{ url, body, renewal }`: POSTs `body` with both tokens to the station's license server (`url` must be an Apple HTTPS URL on a license path MusicKit knows) and relays the response |
 | `/assets/...` | Client-side router, page views (`/assets/views/`), scripts, styles and on-demand WASM modules embedded in the binary. Pages load them by content-hashed URLs under `/assets/h/` (cached as `immutable`); the original URLs are served with `no-cache` + ETag. `/assets/host.js` tells the page whether the server can relay wrapper-lite (generated by the function on serverless deployments) |
 
 ## Command-Line Options
@@ -275,10 +294,10 @@ Browser-side tests are plain Node scripts:
 | Kind | Command |
 |---|---|
 | Offline, Node only | `node --test tests/player_*.cjs`, `node tests/mv_hls.cjs`, `node tests/mv_captions.cjs`, `node --test tests/serverless.mjs` (the serverless backend and the `dist/` layout; also run in CI), `node --test tests/download_core.mjs` (ZIP / ZIP64, iTunes tags, file name templates) |
-| Offline, Playwright + Chrome with local fixtures | `node tests/ui_layout.cjs <playwright>`, `node tests/lyrics_ui.cjs <playwright>`, `node tests/mv_ui.cjs <playwright>`, `node tests/library_ui.cjs <playwright>` (library and playlists: add, playlists, reorder, persistence, export / import and file validation, favorites, folders and drag-and-drop, database upgrade) |
-| Live (running am-hook, wrapper-lite, Apple CDN access) | `node tests/mv_live.cjs <playwright> [base]`, `node tests/mv_captions_live.cjs <playwright> [base]`, `node tests/alac_recovery.cjs <playwright>`, `node tests/alac_source_recovery.cjs <playwright>`, `node tests/aac_lc_live.cjs <playwright> [base]` (a song without a master: AAC-LC variant, Widevine license, playback and seeking in server and local modes, download to `target/`), `node tests/search_ui.cjs <playwright> [base]`, `node tests/album_ui.cjs <playwright> [base]`, `node tests/playlist_ui.cjs <playwright> [base]`, `node tests/artist_ui.cjs <playwright> [base]`, `node tests/browse_ui.cjs <playwright> [base]` (need access to music.apple.com), `node tests/app_ui.cjs <playwright> [base]` (single-page app: playback across navigation, queue, Back / Forward, lyrics), `node tests/download_ui.cjs <playwright> [base]` (batch downloads: settings, album ZIP tags / cover / lyrics, folder mode, playlists and .m3u8, music videos, cancel / retry; needs wrapper-lite with the cn region) |
+| Offline, Playwright + Chrome with local fixtures | `node tests/ui_layout.cjs <playwright>`, `node tests/lyrics_ui.cjs <playwright>`, `node tests/mv_ui.cjs <playwright>`, `node tests/library_ui.cjs <playwright>` (library and playlists: add, playlists, reorder, persistence, export / import and file validation, favorites, folders and drag-and-drop, database upgrade), `node tests/station_ui.cjs <playwright>` (Radio and station pages: nav position, live shelf and Your Stations, the first media-user-token prompt, next songs and refills, episode and live layouts, Settings) |
+| Live (running am-hook, wrapper-lite, Apple CDN access) | `node tests/mv_live.cjs <playwright> [base]`, `node tests/mv_captions_live.cjs <playwright> [base]`, `node tests/alac_recovery.cjs <playwright>`, `node tests/alac_source_recovery.cjs <playwright>`, `node tests/aac_lc_live.cjs <playwright> [base]` (a song without a master: AAC-LC variant, Widevine license, playback and seeking in server and local modes, download to `target/`), `node tests/search_ui.cjs <playwright> [base]`, `node tests/album_ui.cjs <playwright> [base]`, `node tests/playlist_ui.cjs <playwright> [base]`, `node tests/artist_ui.cjs <playwright> [base]`, `node tests/browse_ui.cjs <playwright> [base]` (need access to music.apple.com), `node tests/app_ui.cjs <playwright> [base]` (single-page app: playback across navigation, queue, Back / Forward, lyrics), `node tests/download_ui.cjs <playwright> [base]` (batch downloads: settings, album ZIP tags / cover / lyrics, folder mode, playlists and .m3u8, music videos, cancel / retry; needs wrapper-lite with the cn region), `node tests/radio_live.cjs <playwright> [base] [token-file]` (stations: needs a media-user-token from token-file, `AM_HOOK_MEDIA_USER_TOKEN` or `target/my-media-user-token.txt`; genre and personal stations, Widevine license / playback / seeking / M4A download of an episode from recently played radio, and live radio simulated over its segments) |
 
-`<playwright>` is the path to a Playwright package; when `[base]` is omitted, the MV live tests default to `http://127.0.0.1:18888` and the others to `AM_HOOK_URL` or `http://127.0.0.1:8888` (the ALAC tests only read `AM_HOOK_URL`).
+`<playwright>` is the path to a Playwright package; when `[base]` is omitted, the MV and radio live tests default to `http://127.0.0.1:18888` and the others to `AM_HOOK_URL` or `http://127.0.0.1:8888` (the ALAC tests only read `AM_HOOK_URL`).
 
 ## Project Layout
 
@@ -288,7 +307,7 @@ src/
   main.rs              Server startup
   lib.rs               Router construction
   assets.rs            Embedded front-end assets: one table (`ASSETS`) drives both the routes and the MIME types; add a browser file by adding one line
-  amp.rs               amp-api catalog proxy (fetches and refreshes the music.apple.com web developer token)
+  amp.rs               amp-api catalog proxy (fetches and refreshes the music.apple.com web developer token) and station endpoints (media-user-token and license relays)
   log.rs               Request log
   links.rs             Apple Music link parsing and page-path matching (shared regex fragments; log.rs reuses them to classify requests)
   state.rs             Configuration and shared clients
@@ -296,7 +315,7 @@ src/
   ui.rs                Web endpoints (status, parse, templates, lyrics, MV relays; fallback serves the single-page app for Apple Music page paths)
   ui/
     app.html / app.mjs Single-page app: persistent player bar and lyrics view; the client-side router takes over in-site links and swaps page views
-    views/             Page views: <name>.html markup, <name>.mjs script (home / song / mv / album / playlist / artist / browse: New and editorial pages, styles in browse.css)
+    views/             Page views: <name>.html markup, <name>.mjs script (home / song / mv / album / playlist / artist / browse: New, Radio and editorial pages, styles in browse.css; station: station pages)
     app.css / mv.css   Styles
     i18n.js            Chinese / English strings; primary storefront and catalog language settings
     settings.mjs       Primary storefront / catalog language picker
@@ -312,6 +331,8 @@ src/
     flac.wasm / flac-transcode-worker.js / flac-init.bin   ALAC-to-FLAC playback
     ec3.wasm / ec3-runtime.mjs / ec3-decode-worker.js      EC-3 PCM fallback
     lyrics/            Lyrics view (bundled AMLL, see browser/amll; ttml.mjs parses TTML, panel.mjs wires it to the player, backdrop*.mjs draw the classic background)
+    station.mjs        Station endpoints needing a media-user-token: storing and asking for the token, next tracks, play assets, license request formats
+    mv-radio.mjs       Station HLS playback and downloads (live radio and episodes, sharing the media Worker with MVs)
     mv-hls.mjs / mv-engine.mjs                            MV playlist parsing and track selection, playback, download
     media-worker.js / media.wasm                          Worker for MVs and song defragmentation; build output of crates/am-media-wasm
     mv-captions.mjs / mv-cea608.mjs                       CEA-608 captions
@@ -327,7 +348,7 @@ browser/
   cea608/              Vendored hls.js CEA-608 parser
   amll/                AMLL lyric player bundle entry and build notes
 serverless/
-  core.mjs             Serverless backend (amp-api proxy, MV master, optional wrapper-lite relay), the counterpart of amp.rs and ui.rs
+  core.mjs             Serverless backend (amp-api proxy, MV master, station endpoints, optional wrapper-lite relay), the counterpart of amp.rs and ui.rs
   cloudflare.mjs       Cloudflare Worker entry (wrangler.toml)
 api/handler.mjs        Vercel Edge Function entry (vercel.json)
 scripts/               WASM / asset build scripts; build-static.mjs builds dist/ for serverless deployments from the asset table in assets.rs

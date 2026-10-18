@@ -8,7 +8,7 @@ const assert = require('node:assert/strict');
 const { chromium } = require(process.argv[2] || 'playwright');
 
 const base = (process.argv[3] || process.env.AM_HOOK_URL || 'http://127.0.0.1:8888').replace(/\/$/, '');
-const localPage = /^\/https:\/\/music\.apple\.com\/[a-z]{2}\/(song|music-video|album|playlist|artist|room|multi-room|grouping|curator)\//;
+const localPage = /^\/https:\/\/music\.apple\.com\/[a-z]{2}\/(song|music-video|album|playlist|artist|room|multi-room|grouping|curator|station|post)\//;
 
 (async () => {
   const browser = await chromium.launch({ channel: 'chrome', headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
