@@ -1,7 +1,7 @@
 // 设置中心（/settings），由 app.mjs 挂载。通用设置（主地区、曲库语言、界面语言、wrapper-lite）沿用导航底部的选择面板；
 // 下载设置（音质、MV、保存方式、文件名、标签、封面、歌词）保存在 prefs.mjs，修改立即生效（进行中的下载沿用开始时的设置）。
 import { prefs, OPTIONS, TAG_FIELDS, DEFAULTS } from '../prefs.mjs';
-import { formatPath, TEMPLATE_VARS } from '../naming.mjs';
+import { formatPath, fitFolder, fitFile, TEMPLATE_VARS } from '../naming.mjs';
 import { downloads } from '../downloads.mjs';
 
 const { AmI18n, AmDecrypt } = window;
@@ -99,19 +99,22 @@ export function mount({ root, signal, onLangChange, toast }) {
     return group;
   }
 
-  function template(key, label, kind) {
+  // 预览与实际下载一致：按路径长度限制截断后的结果（文件名按其所在的专辑 / 歌单文件夹计算）
+  function template(key, label, kind, folderKey) {
     const input = el('input', { type: 'text', className: 'set-input set-template', spellcheck: false, autocomplete: 'off' });
     input.setAttribute('aria-label', label);
     const preview = el('div', { className: 'set-preview' });
+    let saved = {};
     const update = () => {
       const value = input.value.trim() || DEFAULTS.download[key];
-      const path = formatPath(value, SAMPLE);
+      const folder = () => fitFolder(formatPath(saved[folderKey] || DEFAULTS.download[folderKey], SAMPLE));
+      const path = kind === 'file' ? fitFile(folder(), formatPath(value, SAMPLE)) : fitFolder(formatPath(value, SAMPLE));
       preview.textContent = kind === 'file' ? `${path.join('/')}.m4a` : kind === 'zip' ? `${path.join(' - ')}.zip  ·  ${path.join('/')}/` : path.join('/');
     };
     input.addEventListener('focus', () => { lastTemplate = input; });
     input.addEventListener('input', update);
     input.addEventListener('change', () => { set({ [key]: input.value.trim() || DEFAULTS.download[key] }); });
-    controls.push((v) => { if (document.activeElement !== input) input.value = v[key]; update(); });
+    controls.push((v) => { saved = v; if (document.activeElement !== input) input.value = v[key]; update(); });
     const reset = el('button', { type: 'button', className: 'set-mini', textContent: t('set.default'), title: DEFAULTS.download[key] });
     reset.addEventListener('click', () => { input.value = DEFAULTS.download[key]; set({ [key]: DEFAULTS.download[key] }); });
     return el('div', { className: 'set-template-box' }, el('div', { className: 'set-template-line' }, input, reset), preview);
@@ -194,10 +197,10 @@ export function mount({ root, signal, onLangChange, toast }) {
     }));
     const naming = section('naming', 'set.naming',
       row(t('set.albumFolder'), t('set.albumFolderDesc'), template('albumFolder', t('set.albumFolder'), 'zip'), { wide: true }),
-      row(t('set.songFile'), t('set.songFileDesc'), template('songFile', t('set.songFile'), 'file'), { wide: true }),
+      row(t('set.songFile'), t('set.songFileDesc'), template('songFile', t('set.songFile'), 'file', 'albumFolder'), { wide: true }),
       row(t('set.playlistFolder'), '', template('playlistFolder', t('set.playlistFolder'), 'zip'), { wide: true }),
-      row(t('set.playlistFile'), '', template('playlistFile', t('set.playlistFile'), 'file'), { wide: true }),
-      row(t('set.singleFile'), t('set.singleFileDesc'), template('singleFile', t('set.singleFile'), 'file'), { wide: true }),
+      row(t('set.playlistFile'), '', template('playlistFile', t('set.playlistFile'), 'file', 'playlistFolder'), { wide: true }),
+      row(t('set.singleFile'), t('set.singleFileDesc'), template('singleFile', t('set.singleFile'), 'file', 'albumFolder'), { wide: true }),
       el('div', { className: 'set-row set-row-wide set-vars-row' },
         el('span', { className: 'set-label' }, el('span', { textContent: t('set.vars') }), el('span', { className: 'set-desc', textContent: t('set.varsDesc') })),
         chips));

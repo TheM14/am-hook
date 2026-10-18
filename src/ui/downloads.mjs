@@ -21,7 +21,7 @@
 import { prefs } from './prefs.mjs';
 import { buildIlst, imageType } from './mp4-tags.mjs';
 import { buildZip, crc32 } from './zip.mjs';
-import { formatPath, formatName } from './naming.mjs';
+import { formatPath, formatName, fitFolder, fitFile } from './naming.mjs';
 import { ttmlToLrc } from './lrc.mjs';
 import { parseMaster, pickMvVideo, pickMvAudio, mvQualityVars } from './mv/hls.mjs';
 
@@ -491,6 +491,10 @@ function nameVars(job, task, info, quality) {
 
 /** 任务的文件夹（ZIP 名）：专辑 / 歌单按模板；单曲保存到文件夹时放进其专辑文件夹（同参考实现），单独的 MV 不放 */
 function folderPath(job) {
+  return fitFolder(templateFolder(job));
+}
+
+function templateFolder(job) {
   const o = job.options;
   if (job.kind === 'playlist') return formatPath(o.playlistFolder, { playlist: job.collection.name, playlist_id: job.cid, curator: job.collection.artist });
   if (job.kind === 'music-video') return [];
@@ -505,7 +509,7 @@ function folderPath(job) {
 function filePath(job, task, info, quality) {
   const o = job.options;
   const template = job.kind === 'album' ? o.songFile : job.kind === 'playlist' ? o.playlistFile : o.singleFile;
-  const path = formatPath(template, nameVars(job, task, info, quality));
+  const path = fitFile(job.folder, formatPath(template, nameVars(job, task, info, quality)));
   path[path.length - 1] += task.mv ? '.mp4' : '.m4a';
   return path;
 }
@@ -807,7 +811,7 @@ async function extras(job) {
     const cover = await fetchCover(job.covers, coverUrl(art, o), job.ctl.signal).catch(() => null);
     if (cover) out.push({ path: [`cover.${cover.type === 'png' ? 'png' : 'jpg'}`], data: cover.bytes });
   }
-  if (job.kind === 'playlist' && o.m3u) out.push({ path: [`${formatName(o.playlistFolder, { playlist: job.collection.name, playlist_id: job.cid, curator: job.collection.artist })}.m3u8`], data: m3u(job) });
+  if (job.kind === 'playlist' && o.m3u) out.push({ path: [`${fitFile(job.folder, [formatName(o.playlistFolder, { playlist: job.collection.name, playlist_id: job.cid, curator: job.collection.artist })])[0]}.m3u8`], data: m3u(job) });
   return out;
 }
 

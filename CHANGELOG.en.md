@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## Unreleased
+
+### Bug Fixes
+- 🐛 Saving to a folder failed for names that start or end with `~` (e.g. the album "A COMPLETE ~ALL SINGLES~": `Failed to execute 'getDirectoryHandle'`): name sanitizing now follows Chrome's rules, replacing a leading or trailing `~` with the full-width `～` and removing leading and trailing dots and whitespace (including the ideographic space), C1 control characters, format characters (zero-width spaces, direction marks, etc.), noncharacters and lone surrogates; `.lnk` / `.local` / `.{…}` extensions and reserved names such as `clock$`, `desktop.ini`, `thumbs.db` and `COM¹` are renamed too
+- 🐛 Saving failed for overly long names: each name is capped at 240 bytes (UTF-8; macOS / Linux allow 255 bytes, which long Japanese titles used to exceed), and the path below the chosen folder at 150 characters with album / playlist folders at 90, to stay within the 260-character Windows path limit (including Chrome's `.crswap` temporary suffix); when over, the longest segment is shortened first
+- 🐛 The file name previews in Settings show the shortened result actually used
+
 ## v0.4.8 (2026-10-18)
 
 ### Bug Fixes

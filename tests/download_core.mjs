@@ -4,7 +4,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { buildZip, zipParts, crc32, crc32Blob } from '../src/ui/zip.mjs';
 import { buildIlst } from '../src/ui/mp4-tags.mjs';
-import { formatPath, formatName, sanitize } from '../src/ui/naming.mjs';
+import { formatPath, formatName, sanitize, fitFolder, fitFile } from '../src/ui/naming.mjs';
 import { pickMvVideo, pickMvAudio, mvQualityVars } from '../src/ui/mv-hls.mjs';
 
 const enc = new TextEncoder();
@@ -176,5 +176,28 @@ test('file name templates: padding, subfolders, sanitizing', () => {
   assert.deepEqual(formatPath('../{title}', { title: '' }), ['_']);
   assert.equal(sanitize('CON'), '_CON');
   assert.equal(sanitize('name. . '), 'name');
-  assert.equal([...sanitize('长'.repeat(300))].length, 180);
+  assert.equal(sanitize('A COMPLETE ~ALL SINGLES~'), 'A COMPLETE ~ALL SINGLES～');
+  assert.equal(sanitize('..hidden\u200b name'), 'hidden name');
+  assert.equal([...sanitize('a'.repeat(300))].length, 180);
+  assert.equal([...sanitize('长'.repeat(300))].length, 80);
+  assert.equal(sanitize('x\u0085y\ufffe\ud800z'), 'x_yz');
+  assert.equal(sanitize('COM\u00b9'), '_COM\u00b9');
+  assert.equal(sanitize('Thumbs.db'), '_Thumbs.db');
+  assert.equal(sanitize('Live.Local'), 'Live_Local');
+  assert.equal(sanitize('\u3000Title\u3000'), 'Title');
+});
+
+test('file name templates: total path length stays within the Windows limit', () => {
+  const length = (segments) => segments.join('/').length;
+  assert.deepEqual(fitFolder(['Artist', 'Album']), ['Artist', 'Album']);
+  assert.deepEqual(fitFile(['Artist', 'Album'], ['01 Title']), ['01 Title']);
+  const folder = fitFolder(['A'.repeat(120), 'B'.repeat(60) + ' ~x~']);
+  assert.ok(length(folder) <= 90);
+  assert.equal(folder[1].length, 44);  // 最长的一段先截
+  assert.ok(!/[.~ ]$/.test(folder[1]));
+  const file = fitFile(folder, ['Disc 1', '01 ' + '长'.repeat(170)]);
+  assert.deepEqual(file[0], 'Disc 1');
+  assert.ok(length([...folder, ...file]) + '.ttml.crswap'.length <= 150);
+  // 截断不会拆开代理对
+  assert.ok([...fitFile([], ['😀'.repeat(100)])[0]].every((c) => c === '😀'));
 });
