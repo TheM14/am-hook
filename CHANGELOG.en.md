@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.5.0 (2026-10-18)
 
 ### New
 - ✨ Radio (`/radio`, between Top Charts and Settings in the sidebar and phone menu): the editorial sections of music.apple.com/{cc}/radio, with a LIVE badge and the show on air on the live radio shelf; with a media-user-token, Your Stations (the personal station and recently played) comes first
