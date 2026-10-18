@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.5.1 (2026-10-19)
 
 ### New
 - ✨ `--local-wrapper-only`: the binary no longer relays wrapper-lite; pages only connect from the browser (as on a serverless deployment without `AM_HOOK_WRAPPER_URL`), and `--wrapper-url` / `--wrapper-rate` / `--wrapper-concurrency` become the page's local-mode defaults

@@ -1,6 +1,6 @@
 # 更新日志
 
-## 未发布
+## v0.5.1 (2026-10-19)
 
 ### 新功能
 - ✨ `--local-wrapper-only`：二进制不再转发 wrapper-lite，页面只用浏览器直连（与 serverless 部署没有设置 `AM_HOOK_WRAPPER_URL` 时相同）；`--wrapper-url` / `--wrapper-rate` / `--wrapper-concurrency` 改为页面本地模式的默认值
