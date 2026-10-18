@@ -1,5 +1,15 @@
 # 更新日志
 
+## 未发布
+
+### 新功能
+- ✨ `--local-wrapper-only`：二进制不再转发 wrapper-lite，页面只用浏览器直连（与 serverless 部署没有设置 `AM_HOOK_WRAPPER_URL` 时相同）；`--wrapper-url` / `--wrapper-rate` / `--wrapper-concurrency` 改为页面本地模式的默认值
+- ✨ `--wrapper-hint`（serverless 为 `AM_HOOK_WRAPPER_HINT`）：在本地 wrapper-lite 设置上方显示部署方的提示，其中的网址显示为链接
+- ✨ 命令行显示 wrapper-lite 排队情况：排队期间每秒一行 `wrapper-lite THROTTLED`（最近 1 秒发出数 / 上限、进行中、排队数），队列清空时输出汇总；排队的请求在请求日志中标出 `QUEUED … by rate limit / concurrency limit`
+
+### 修复
+- 🐛 wrapper-lite 限速：排队等待中的请求被取消（浏览器中止、断开）时会多放行一个请求，这一秒内可能超过 `--wrapper-rate`
+
 ## v0.5.0 (2026-10-18)
 
 ### 新功能

@@ -60,6 +60,7 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
 |---|---|
 | `AM_HOOK_WRAPPER_URL` | wrapper-lite 地址。设置后页面默认使用「服务端」模式，与二进制相同；可带用户信息（`https://<token>@host`） |
 | `AM_HOOK_WRAPPER_AUTH` | 可选，wrapper-lite 请求的 `Authorization`，规则与 `--wrapper-auth` 相同 |
+| `AM_HOOK_WRAPPER_HINT` | 可选，显示在本地 wrapper-lite 设置上方的提示，同 `--wrapper-hint` |
 
 > 设置 `AM_HOOK_WRAPPER_URL` 后，能打开站点的人都能使用你的 wrapper-lite（也就是你的 Apple 账号）。请用平台的访问控制（Vercel Deployment Protection、Cloudflare Access）限制访问。函数实例之间不共享状态，这里没有 `--wrapper-rate` / `--wrapper-concurrency` 那样的限速与限并发。
 
@@ -207,7 +208,7 @@ box 处理：FairPlay 元数据 box（`sinf`、`senc`、`saiz`、`saio`、`pssh`
 
 导航底部的「wrapper-lite」设置可以在两种方式间切换（保存在浏览器中）：
 
-- **服务端**（默认）：wrapper-lite 请求经 am-hook 转发，限速、限并发与 `Authorization` 由 `--wrapper-*` 参数决定。[Serverless 部署](#serverless-部署vercel--cloudflare)没有设置 `AM_HOOK_WRAPPER_URL` 时没有这一项。
+- **服务端**（默认）：wrapper-lite 请求经 am-hook 转发，限速、限并发与 `Authorization` 由 `--wrapper-*` 参数决定。[Serverless 部署](#serverless-部署vercel--cloudflare)没有设置 `AM_HOOK_WRAPPER_URL`、或二进制以 `--local-wrapper-only` 启动时没有这一项。
 - **本地**：浏览器直接请求你自己的 wrapper-lite（`/status`、`/m3u8`、`/key`、`/lyrics`、`/webplayback`、`/license`），在面板中填写地址、每秒请求数上限、同时请求数上限与 `Authorization`（规则与 `--wrapper-auth` 相同）。限制只作用于当前页面。地址可以带用户信息（如 `https://<token>@host`），与 `--wrapper-url` 相同，转为 `Authorization: Basic …` 发送；单独填写的 `Authorization` 优先。
   - 请求是跨源的：wrapper-lite 需允许跨源请求（返回 `Access-Control-Allow-Origin`，填了 `Authorization` 时还需在预检中允许该请求头），或在浏览器中安装解除跨域限制的插件。
   - MV 的 master 播放列表仍由 am-hook 以 `User-Agent: AM` 获取，其余 MV 请求（`/webplayback`、`/license`）直连本地 wrapper-lite。
@@ -254,6 +255,8 @@ box 处理：FairPlay 元数据 box（`sinf`、`senc`、`saiz`、`saio`、`pssh`
 | `--wrapper-rate <N>` | `24` | 每秒发往 wrapper-lite 的最大请求数（任意 1 秒内，超出的请求按顺序排队）。0 不限 |
 | `--wrapper-concurrency <N>` | `24` | 同时进行的 wrapper-lite 请求上限。0 不限。wrapper-lite 运行在 QEMU 中、负载高时请求超时的话可调低（如 `8`） |
 | `--wrapper-auth <VALUE>` | 不发送 | wrapper-lite 请求的 `Authorization` 头。只填 token 时自动加 `Bearer ` 前缀；已带认证方案（`Bearer …`、`Basic …`）则原样发送。也可用环境变量 `AM_HOOK_WRAPPER_AUTH` 设置（不会出现在进程列表中）。以上三项只作用于服务端转发；页面切换为本地 wrapper-lite 时在页面中另行设置 |
+| `--local-wrapper-only` | 关闭 | 不转发 wrapper-lite 请求：页面只有本地模式（与 serverless 部署没有设置 `AM_HOOK_WRAPPER_URL` 时相同），转发接口一律返回 501。`--wrapper-url`、`--wrapper-rate`、`--wrapper-concurrency` 改为页面的默认值（只作用于没有保存过设置的访客）；不使用 `--wrapper-auth`，也不会把它交给页面 |
+| `--wrapper-hint <TEXT>` | 无 | 显示在本地 wrapper-lite 设置上方的提示，如去哪里申请公共 wrapper-lite 的 token，其中的网址显示为链接。也可用环境变量 `AM_HOOK_WRAPPER_HINT` 设置 |
 | `--amp-keepalive <SECONDS>` | `30` | amp-api 连接保活：空闲达到该时长时发送一个轻量请求（0 关闭）。无论是否开启，启动时都会先获取 token 并建立连接 |
 | `--amp-cache-mb <MB>` | `32` | amp-api 响应缓存（目录 5 分钟、地区表 24 小时；0 关闭）。相同的并发请求始终只请求一次上游 |
 

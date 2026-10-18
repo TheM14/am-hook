@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## Unreleased
+
+### New
+- ✨ `--local-wrapper-only`: the binary no longer relays wrapper-lite; pages only connect from the browser (as on a serverless deployment without `AM_HOOK_WRAPPER_URL`), and `--wrapper-url` / `--wrapper-rate` / `--wrapper-concurrency` become the page's local-mode defaults
+- ✨ `--wrapper-hint` (`AM_HOOK_WRAPPER_HINT` on serverless): an operator note above the local wrapper-lite settings; URLs in it become links
+- ✨ wrapper-lite queueing in the console: while requests wait, a `wrapper-lite THROTTLED` line every second (sent in the last second / limit, in flight, queued), and a summary when the queue empties; queued requests are marked `QUEUED … by rate limit / concurrency limit` in the request log
+
+### Fixes
+- 🐛 wrapper-lite rate limit: a queued request cancelled while waiting (browser abort or disconnect) let one extra request through, which could exceed `--wrapper-rate` within that second
+
 ## v0.5.0 (2026-10-18)
 
 ### New

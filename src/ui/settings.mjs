@@ -262,6 +262,25 @@ export function mountSettings({ picker, scrim, checkStatus }) {
     return row;
   }
 
+  /** 部署方的提示：文本节点拼接，其中的 http(s) 网址显示为新窗口打开的链接 */
+  function hostHint(text) {
+    const node = el('p', 'picker-tip');
+    let at = 0;
+    for (const m of text.matchAll(/https?:\/\/[^\s<>"'）)】，。]+/g)) {
+      // 句末的标点不算网址
+      const url = m[0].replace(/[.,;:!?]+$/, '');
+      node.append(text.slice(at, m.index));
+      const link = el('a', null, url);
+      link.href = url;
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      node.append(link);
+      at = m.index + url.length;
+    }
+    node.append(text.slice(at));
+    return node;
+  }
+
   function renderWrapper() {
     title.textContent = t('settings.wrapper');
     hint.textContent = t('wrapper.hint');
@@ -297,6 +316,7 @@ export function mountSettings({ picker, scrim, checkStatus }) {
     };
     const form = el('form', 'picker-form');
     form.noValidate = true;
+    if (AmWrapper.hint) form.append(hostHint(AmWrapper.hint));
     form.append(
       field(t('wrapper.url'), input('url', 'url', { placeholder: AmWrapper.DEFAULTS.url })),
       field(t('wrapper.rate'), input('number', 'rate', { min: 0, step: 1, inputMode: 'numeric' }), t('wrapper.zero')),

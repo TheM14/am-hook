@@ -130,8 +130,8 @@ pub static ASSETS: &[Asset] = &[
     asset!("/assets/views/download-dialog.mjs", JS, "views/download-dialog.mjs"),
 ];
 
-/// 由部署环境生成的资源（serverless 部署见 serverless/core.mjs）：不加哈希，也不改写
-const HOST_JS: &str = "/assets/host.js";
+/// 由部署环境生成的资源（二进制见 ui::host_js_handler，serverless 部署见 serverless/core.mjs）：不加哈希，也不改写
+pub const HOST_JS: &str = "/assets/host.js";
 /// 内容哈希地址的前缀；其下的资源内容永不改变，可长期缓存（serverless 部署由 vercel.json / dist/_headers 设置）
 pub const HASHED_PREFIX: &str = "/assets/h/";
 const IMMUTABLE: &str = "public, max-age=31536000, immutable";

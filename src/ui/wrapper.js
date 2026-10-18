@@ -9,6 +9,7 @@
  *         wrapper-lite 须允许跨源请求（带 Authorization 时还要允许该请求头），或安装解除跨域限制的浏览器插件。
  *
  *   settings                 当前设置 { local, url, rate, concurrency, auth }
+ *   hint                     部署方给出的提示（host.js），显示在本地设置上方
  *   save(next)               保存设置（auth 规范化，非法时抛出错误）并通知 onChange
  *   onChange(fn)             设置变化后回调
  *   status()                 { regions }，不可用时抛出错误
@@ -24,9 +25,21 @@
   'use strict';
 
   const STORAGE_KEY = 'am-hook-wrapper';
+  const HOST = global.AM_HOOK_HOST || {};
   /** 服务端能否转发 wrapper-lite（见 host.js） */
-  const SERVER = !(global.AM_HOOK_HOST && global.AM_HOOK_HOST.serverWrapper === false);
-  const DEFAULTS = { local: !SERVER, url: 'http://127.0.0.1:12340', rate: 24, concurrency: 24, auth: '' };
+  const SERVER = HOST.serverWrapper !== false;
+  /** 部署方给出的本地模式默认值（见 host.js），只作用于没有保存过设置的页面 */
+  const HOST_DEFAULTS = HOST.wrapper && typeof HOST.wrapper === 'object' ? HOST.wrapper : {};
+  const hostCount = (n, fallback) => (Number.isInteger(n) && n >= 0 ? n : fallback);
+  const DEFAULTS = {
+    local: !SERVER,
+    url: typeof HOST_DEFAULTS.url === 'string' && HOST_DEFAULTS.url ? HOST_DEFAULTS.url : 'http://127.0.0.1:12340',
+    rate: hostCount(HOST_DEFAULTS.rate, 24),
+    concurrency: hostCount(HOST_DEFAULTS.concurrency, 24),
+    auth: '',
+  };
+  /** 部署方的提示（见 host.js），没有时为空 */
+  const HINT = typeof HOST.hint === 'string' ? HOST.hint.trim() : '';
   const RATE_WINDOW = 1000;
 
   const t = (key, vars) => (global.AmI18n ? global.AmI18n.t(key, vars) : key);
@@ -221,6 +234,7 @@
     get settings() { return { ...settings }; },
     DEFAULTS,
     serverAvailable: SERVER,
+    hint: HINT,
     normalizeAuth,
     parseSongMaster,
 

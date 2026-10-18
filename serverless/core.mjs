@@ -562,7 +562,7 @@ function wrapperRoute(method, path, url, request, wrapper) {
 /**
  * 处理后端接口请求；不是后端接口时返回 null，由平台入口决定（页面外壳或 404）。
  *
- * `env`：环境变量（AM_HOOK_WRAPPER_URL、AM_HOOK_WRAPPER_AUTH）。
+ * `env`：环境变量（AM_HOOK_WRAPPER_URL、AM_HOOK_WRAPPER_AUTH、AM_HOOK_WRAPPER_HINT）。
  * `platform.tokenStore`（可选）：跨实例共享 developer token，`{ get(): Promise<string|null>, put(token, ttlSeconds) }`。
  */
 export async function handle(request, env = {}, platform = {}) {
@@ -572,9 +572,12 @@ export async function handle(request, env = {}, platform = {}) {
   const wrapper = wrapperConfig(env);
 
   if (method === 'GET') {
-    // 部署环境，页面在 wrapper.js 之前加载（二进制里是静态文件 src/ui/host.js）
+    // 部署环境，页面在 wrapper.js 之前加载（二进制由 src/ui.rs 的 host_js_handler 生成）
     if (path === '/assets/host.js') {
-      return new Response(`window.AM_HOOK_HOST = ${JSON.stringify({ serverWrapper: wrapper !== null })};\n`, {
+      const host = { serverWrapper: wrapper !== null };
+      const hint = String(env?.AM_HOOK_WRAPPER_HINT ?? '').trim();
+      if (hint) host.hint = hint;
+      return new Response(`window.AM_HOOK_HOST = ${JSON.stringify(host)};\n`, {
         headers: { 'content-type': 'text/javascript; charset=utf-8', 'cache-control': 'public, max-age=300' },
       });
     }

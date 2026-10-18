@@ -14,6 +14,11 @@ pub struct Config {
     pub wrapper_concurrency: usize,
     /// wrapper-lite 请求的 `Authorization` 头（已规范化），None 表示不发送
     pub wrapper_auth: Option<String>,
+    /// 服务端是否转发 wrapper-lite；否则页面只用浏览器直连（本地模式），
+    /// `wrapper_url` / `wrapper_rate` / `wrapper_concurrency` 作为页面的默认值
+    pub wrapper_relay: bool,
+    /// 页面本地 wrapper-lite 设置上方的提示（如去哪里申请公共 wrapper-lite 的 token）
+    pub wrapper_hint: Option<String>,
 }
 
 pub struct AppState {
@@ -37,6 +42,8 @@ impl AppState {
             wrapper_rate: 24,
             wrapper_concurrency: 24,
             wrapper_auth: None,
+            wrapper_relay: true,
+            wrapper_hint: None,
         })
     }
 

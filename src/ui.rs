@@ -51,6 +51,47 @@ pub async fn fallback_handler(uri: Uri, headers: HeaderMap) -> Response<Body> {
     log::note(response, "not found")
 }
 
+/// 部署环境（window.AM_HOOK_HOST，见 src/ui/host.js）：服务端是否转发 wrapper-lite、不转发时页面本地模式的默认值，
+/// 以及本地设置上方的提示。`--wrapper-auth` 只用于服务端转发，从不交给页面
+pub async fn host_js_handler(State(state): State<Arc<AppState>>) -> Response<Body> {
+    let config = &state.config;
+    let mut host = json!({ "serverWrapper": config.wrapper_relay });
+    if !config.wrapper_relay {
+        host["wrapper"] = json!({
+            "url": config.wrapper_url,
+            "rate": config.wrapper_rate,
+            "concurrency": config.wrapper_concurrency,
+        });
+    }
+    if let Some(hint) = &config.wrapper_hint {
+        host["hint"] = json!(hint);
+    }
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/javascript; charset=utf-8")
+        .header(axum::http::header::CACHE_CONTROL, "no-cache")
+        .body(Body::from(format!("window.AM_HOOK_HOST = {host};\n")))
+        .unwrap()
+}
+
+/// `--local-wrapper-only` 时转发 wrapper-lite 的接口一律返回 501（与 serverless 部署没有设置 AM_HOOK_WRAPPER_URL 时相同）
+pub async fn require_relay(
+    State(state): State<Arc<AppState>>,
+    request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response<Body> {
+    if state.config.wrapper_relay {
+        return next.run(request).await;
+    }
+    let msg = "Server-side wrapper-lite relaying is disabled; use a local wrapper-lite (Settings > wrapper-lite)";
+    let body = if request.uri().path() == "/status" {
+        json!({ "code": 1, "msg": msg, "regions": [] })
+    } else {
+        json!({ "code": 1, "msg": msg })
+    };
+    log::note(json_response(StatusCode::NOT_IMPLEMENTED, body), "wrapper-lite relaying disabled")
+}
+
 /// Relay the original wrapper-lite webplayback response.
 pub async fn mv_webplayback_handler(
     State(state): State<Arc<AppState>>,

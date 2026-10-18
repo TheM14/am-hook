@@ -194,8 +194,28 @@ const cors = { 'access-control-allow-origin': '*', 'access-control-allow-headers
     assert.equal(await page.locator('[data-setting-value="wrapper"]').textContent(), 'Server');
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('am-hook-wrapper')).local), false);
 
+    // am-hook --local-wrapper-only (host.js from the server): only Local, the operator's defaults and hint
+    const hosted = await context.newPage();
+    hosted.on('pageerror', (e) => errors.push(e.message));
+    await hosted.addInitScript(() => localStorage.removeItem('am-hook-wrapper'));
+    const host = { serverWrapper: false, wrapper: { url: WRAPPER, rate: 4, concurrency: 1 }, hint: 'Get a token at https://token.test/apply.\nThen paste it below.' };
+    await hosted.route('**/assets/host.js', (route) => route.fulfill({ contentType: 'text/javascript', body: `window.AM_HOOK_HOST = ${JSON.stringify(host)};\n` }));
+    serverRequests.length = 0;
+    await hosted.goto('http://am.test/');
+    await hosted.locator('#nav-status.ok').waitFor();
+    assert.equal(await hosted.locator('[data-setting-value="wrapper"]').textContent(), 'Local · wrapper.test:12340');
+    assert(!serverRequests.includes('/status'), 'the server is never asked for wrapper-lite');
+    await hosted.locator('[data-picker="wrapper"]').click();
+    assert.equal(await hosted.locator('.picker-option', { hasText: 'Server' }).count(), 0);
+    const tip = hosted.locator('.picker-tip');
+    assert.equal(await tip.textContent(), 'Get a token at https://token.test/apply.\nThen paste it below.');
+    assert.equal(await tip.locator('a').getAttribute('href'), 'https://token.test/apply');
+    assert.equal(await tip.locator('a').getAttribute('target'), '_blank');
+    assert.deepEqual(await hosted.locator('.picker-input').evaluateAll((nodes) => nodes.map((n) => n.value)), [WRAPPER, '4', '1', '']);
+    await hosted.close();
+
     assert.deepEqual(errors, []);
-    console.log('Passed local wrapper-lite: panel validation, persistence, direct requests with Authorization, limits, song master parsing, MV master via am-hook.');
+    console.log('Passed local wrapper-lite: panel validation, persistence, direct requests with Authorization, limits, song master parsing, MV master via am-hook, local-only host with defaults and hint.');
   } finally {
     await browser.close();
   }

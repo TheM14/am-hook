@@ -16,9 +16,22 @@ pub struct Cli {
     #[arg(short, long)]
     pub port: Option<u16>,
 
-    /// URL of wrapper-lite key server
+    /// URL of wrapper-lite key server. With --local-wrapper-only, the address
+    /// pre-filled in the page instead (users can change it)
     #[arg(short, long, default_value = "http://127.0.0.1:12340")]
     pub wrapper_url: String,
+
+    /// Do not relay wrapper-lite requests: pages only use a wrapper-lite the browser
+    /// connects to directly (Settings > wrapper-lite > Local), like a serverless deployment
+    /// without AM_HOOK_WRAPPER_URL. --wrapper-url / --wrapper-rate / --wrapper-concurrency
+    /// become the page defaults; --wrapper-auth is not used
+    #[arg(long)]
+    pub local_wrapper_only: bool,
+
+    /// Note shown above the local wrapper-lite settings in the page, e.g. where to get a
+    /// token for a public wrapper-lite. URLs in it become links
+    #[arg(long, env = "AM_HOOK_WRAPPER_HINT")]
+    pub wrapper_hint: Option<String>,
 
     /// Max requests per second sent to wrapper-lite (any 1-second window); 0 = unlimited
     #[arg(long, default_value_t = 24)]
@@ -77,6 +90,8 @@ impl Cli {
             wrapper_rate: self.wrapper_rate,
             wrapper_concurrency: self.wrapper_concurrency,
             wrapper_auth,
+            wrapper_relay: !self.local_wrapper_only,
+            wrapper_hint: self.wrapper_hint.as_deref().map(str::trim).filter(|h| !h.is_empty()).map(str::to_owned),
         })
     }
 }

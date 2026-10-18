@@ -3,7 +3,9 @@
 //! 每个请求在响应后输出一行：`状态码 方法 分类 要点 · 备注 · 耗时`。
 //! 高频且无信息量的请求（静态资源、页面轮询的 /status、输入联想）降为 debug，
 //! 需要时用 `RUST_LOG=am_hook=debug` 查看。
+//! 请求因 wrapper-lite 限速 / 限并发排队时，该行附上排队时间；排队期间每秒另有一行队列状态。
 
+use std::cell::Cell;
 use std::net::{IpAddr, SocketAddr, UdpSocket};
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
@@ -20,6 +22,7 @@ use crate::links::{new_section, page_kinds};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 use crate::state::{AppState, Config};
+use crate::wrapper::{QueueWait, QUEUED_MIN, QUEUE_WAIT};
 
 pub fn init() {
     tracing_subscriber::registry()
@@ -49,7 +52,12 @@ pub async fn access_log(request: Request, next: Next) -> Response {
     let query = request.uri().query().unwrap_or_default().to_owned();
     let started = Instant::now();
 
-    let mut response = next.run(request).await;
+    let (mut response, wait) = QUEUE_WAIT
+        .scope(Cell::new(QueueWait::default()), async {
+            let response = next.run(request).await;
+            (response, QUEUE_WAIT.with(Cell::get))
+        })
+        .await;
 
     let elapsed = started.elapsed();
     let status = response.status();
@@ -60,6 +68,10 @@ pub async fn access_log(request: Request, next: Next) -> Response {
         line.push_str(" · ");
         line.push_str(&note);
     }
+    if let Some(queued) = describe_wait(wait) {
+        line.push_str(" · ");
+        line.push_str(&queued);
+    }
     line.push_str(" · ");
     line.push_str(&format_elapsed(elapsed));
 
@@ -69,6 +81,19 @@ pub async fn access_log(request: Request, next: Next) -> Response {
         _ => debug!("{line}"),
     }
     response
+}
+
+/// 排队说明，如 `queued 850 ms by rate limit`；没有明显排队时为 None
+fn describe_wait(wait: QueueWait) -> Option<String> {
+    if wait.total() < QUEUED_MIN {
+        return None;
+    }
+    let by = match (wait.concurrency >= QUEUED_MIN, wait.rate >= QUEUED_MIN) {
+        (true, true) => format!("concurrency {} + rate {}", format_elapsed(wait.concurrency), format_elapsed(wait.rate)),
+        (true, false) => "concurrency limit".to_owned(),
+        _ => "rate limit".to_owned(),
+    };
+    Some(format!("QUEUED {} by {by}", format_elapsed(wait.total())))
 }
 
 /// 5xx 与非 404 的 4xx 为 warn；quiet 请求（含 favicon 等无关路径）的 4xx 仍只在 debug 输出
@@ -259,18 +284,26 @@ pub fn print_banner(listen: SocketAddr, config: &Config) {
     for url in &urls[1..] {
         lines.push(format!("                {url}"));
     }
-    lines.push(format!("  wrapper-lite  {}", config.wrapper_url));
     let limit = |n: usize, unit: &str| if n == 0 { format!("unlimited {unit}") } else { format!("{n} {unit}") };
-    // 只显示认证方案，不输出凭据
-    let auth = match config.wrapper_auth.as_deref() {
-        Some(value) => format!("{} ***", value.split_whitespace().next().unwrap_or_default()),
-        None => "none".to_owned(),
-    };
-    lines.push(format!(
-        "                limit {}, {} · auth {auth}",
-        limit(config.wrapper_rate as usize, "req/s"),
-        limit(config.wrapper_concurrency, "concurrent")
-    ));
+    let limits = format!("{}, {}", limit(config.wrapper_rate as usize, "req/s"), limit(config.wrapper_concurrency, "concurrent"));
+    if config.wrapper_relay {
+        lines.push(format!("  wrapper-lite  {}", config.wrapper_url));
+        // 只显示认证方案，不输出凭据
+        let auth = match config.wrapper_auth.as_deref() {
+            Some(value) => format!("{} ***", value.split_whitespace().next().unwrap_or_default()),
+            None => "none".to_owned(),
+        };
+        lines.push(format!("                limit {limits} · auth {auth}"));
+    } else {
+        lines.push("  wrapper-lite  not relayed: browsers connect to their own (local mode only)".into());
+        lines.push(format!("                page defaults {} · {limits}", config.wrapper_url));
+        if config.wrapper_auth.is_some() {
+            lines.push("                --wrapper-auth ignored (never sent to pages)".into());
+        }
+    }
+    if let Some(hint) = &config.wrapper_hint {
+        lines.push(format!("                hint {hint}"));
+    }
     let keepalive = match config.amp_keepalive.as_secs() {
         0 => "keep-alive off".to_owned(),
         secs => format!("keep-alive {secs}s"),
@@ -338,6 +371,40 @@ pub async fn check_wrapper(state: Arc<AppState>) {
     }
 }
 
+/// 有请求在排队（或这一秒内有请求被延迟）时每秒输出一行 wrapper-lite 队列状态，队列清空时输出本轮汇总
+pub async fn report_wrapper_queue(state: Arc<AppState>) {
+    let config = &state.config;
+    let limit = |n: usize| if n == 0 { "unlimited".to_owned() } else { n.to_string() };
+    let (rate, concurrency) = (limit(config.wrapper_rate as usize), limit(config.wrapper_concurrency));
+    let mut tick = tokio::time::interval(Duration::from_secs(1));
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // 本轮排队：开始时间、被延迟的请求数、最长排队时间
+    let mut episode: Option<(Instant, u64, Duration)> = None;
+    loop {
+        tick.tick().await;
+        let s = state.wrapper.queue_snapshot();
+        if s.queued() > 0 || s.delayed > 0 {
+            let (_, delayed, longest) = episode.get_or_insert((Instant::now(), 0, Duration::ZERO));
+            *delayed += s.delayed;
+            *longest = (*longest).max(s.longest_wait);
+            warn!(
+                "wrapper-lite THROTTLED · sent {}/{rate} in last 1 s · in flight {}/{concurrency} · queued {} ({} for concurrency, {} for rate)",
+                s.sent_last_second,
+                s.in_flight,
+                s.queued(),
+                s.waiting_concurrency,
+                s.waiting_rate,
+            );
+        } else if let Some((started, delayed, longest)) = episode.take() {
+            info!(
+                "wrapper-lite queue cleared · {delayed} requests delayed over {}, longest wait {}",
+                format_elapsed(started.elapsed()),
+                format_elapsed(longest),
+            );
+        }
+    }
+}
+
 /// wrapper-lite `/status` 中的账号地区，如 `CN, US`
 pub fn regions_summary(status: &serde_json::Value) -> String {
     let regions: Vec<String> = status
@@ -355,6 +422,18 @@ pub fn regions_summary(status: &serde_json::Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_describe_wait() {
+        let ms = Duration::from_millis;
+        assert_eq!(describe_wait(QueueWait { concurrency: ms(2), rate: ms(3) }), None);
+        assert_eq!(describe_wait(QueueWait { concurrency: ms(0), rate: ms(850) }).as_deref(), Some("QUEUED 850 ms by rate limit"));
+        assert_eq!(describe_wait(QueueWait { concurrency: ms(1200), rate: ms(1) }).as_deref(), Some("QUEUED 1.20 s by concurrency limit"));
+        assert_eq!(
+            describe_wait(QueueWait { concurrency: ms(1200), rate: ms(420) }).as_deref(),
+            Some("QUEUED 1.62 s by concurrency 1.20 s + rate 420 ms")
+        );
+    }
 
     #[test]
     fn test_query_param() {
