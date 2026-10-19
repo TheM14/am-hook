@@ -1,7 +1,7 @@
 // 专辑页、歌单页「下载」按钮打开的对话框：选择音质与要下载的曲目（默认全部），开始后交给下载管理器（downloads.mjs），
 // 进度显示在页面底部的下载中心。MV 也可以下载（是否默认勾选见设置中心），尚未发行的曲目不能下载。
 import { downloads } from '../downloads.mjs';
-import { prefs, OPTIONS } from '../prefs.mjs';
+import { prefs, CODEC_GROUPS } from '../prefs.mjs';
 
 const { AmI18n } = window;
 const { t } = AmI18n;
@@ -32,7 +32,8 @@ export function openDownloadDialog({ kind, resource, tracks, country, navigate, 
   const dialog = el('dialog', { className: 'dl-dialog' });
   dialog.setAttribute('aria-labelledby', 'dl-dialog-title');
 
-  const codec = el('select', {}, ...OPTIONS.download.codec.map((c) => el('option', { value: c, textContent: t(`set.codec.${c}`), selected: c === options.codec })));
+  const codec = el('select', {}, ...CODEC_GROUPS.map(([group, list]) => el('optgroup', { label: t(`set.codecGroup.${group}`) },
+    ...list.map((c) => el('option', { value: c, textContent: t(`set.codec.${c}`), selected: c === options.codec })))));
   const mode = options.saveMode === 'folder' && !downloads.folder.supported ? 'zip' : options.saveMode;
   const modeText = mode === 'folder' ? `${t('set.mode.folder')}${downloads.folder.name() ? ` · ${downloads.folder.name()}` : ''}` : t(`set.mode.${mode}`);
   const settingsLink = el('a', { href: '/settings', textContent: t('dlc.changeSettings') });

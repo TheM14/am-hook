@@ -7,6 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/itouakirai/am-hook)](https://github.com/itouakirai/am-hook/releases/latest)
 [![Build Test](https://github.com/itouakirai/am-hook/actions/workflows/build-test.yml/badge.svg)](https://github.com/itouakirai/am-hook/actions/workflows/build-test.yml)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
+[![Telegram](https://img.shields.io/badge/Telegram-apple__music__alac-26A5E4?logo=telegram)](https://t.me/apple_music_alac)
 
 [中文](README.zh-CN.md) | English
 
@@ -46,6 +47,7 @@ By default **decryption happens entirely in the browser**. The server only talks
   - [Building](#building)
   - [Testing](#testing)
   - [Project Layout](#project-layout)
+- [Community](#community)
 - [License](#license)
 
 ## Highlights
@@ -280,7 +282,7 @@ Like music.apple.com's Library and Playlists, but **stored only in your browser*
 ### Batch Downloads and Settings
 
 - **Settings** (`/settings`, "Settings" below Top Charts in the sidebar and the phone menu): general settings (storefront, catalog language, UI language, wrapper-lite, same as at the bottom of the navigation) and download settings, stored in localStorage and applied immediately (running downloads keep the settings they started with); there is room for playback settings later. The download settings follow [apple-music-downloader](https://github.com/itouakirai/apple-music-downloader) and [amd.wol.moe](https://amd.wol.moe/):
-  - Quality: preferred quality (Lossless ALAC / Dolby Atmos / AAC / AAC Binaural / AAC Downmix / HE-AAC), max ALAC sample rate, max Atmos (2768 / 2448), and whether to fall back when a track lacks it
+  - Quality: preferred quality, grouped in the menu: Lossless ALAC / Dolby Atmos; AAC stereo 256 / 128 kbps and HE-AAC 64 kbps; AAC Binaural and AAC Downmix (from Atmos masters) at the same three bitrates. Also max ALAC sample rate, max Atmos (2768 / 2448), and whether to fall back when a track lacks it
   - Music videos: whether albums and playlists download their music videos too, max video resolution (the reference `mv-max`: the highest average bitrate at or below it) and audio (the reference `mv-audio-type`: Dolby Atmos → AC-3 → AAC, AC-3 → AAC, or AAC only)
   - Performance: tracks at once, retry attempts, OPFS staging
   - Save as: **ZIP** (one uncompressed file per album / playlist, ZIP64 above 4 GiB), **Folder** (written straight into a local folder through the File System Access API, with subfolders and optional skipping of existing files; desktop Chrome / Edge), or **Files**; playlists can include an `.m3u8`
@@ -529,6 +531,10 @@ docs/                  Release guide (RELEASE.md) and README screenshots
 ```
 
 </details>
+
+## Community
+
+Questions, feedback and discussion: the Telegram group [@apple_music_alac](https://t.me/apple_music_alac). Bug reports and feature requests are still welcome in [Issues](https://github.com/itouakirai/am-hook/issues).
 
 ## License
 

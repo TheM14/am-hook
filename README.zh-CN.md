@@ -7,6 +7,7 @@
 [![Release](https://img.shields.io/github/v/release/itouakirai/am-hook)](https://github.com/itouakirai/am-hook/releases/latest)
 [![Build Test](https://github.com/itouakirai/am-hook/actions/workflows/build-test.yml/badge.svg)](https://github.com/itouakirai/am-hook/actions/workflows/build-test.yml)
 [![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
+[![Telegram](https://img.shields.io/badge/Telegram-apple__music__alac-26A5E4?logo=telegram)](https://t.me/apple_music_alac)
 
 中文 | [English](README.md)
 
@@ -46,6 +47,7 @@
   - [构建](#构建)
   - [测试](#测试)
   - [项目结构](#项目结构)
+- [交流群](#交流群)
 - [许可证](#许可证)
 
 ## 亮点
@@ -280,7 +282,7 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
 ### 批量下载与设置中心
 
 - **设置中心**（`/settings`，侧边栏与手机菜单中「排行榜」下方的「设置」）：通用设置（主地区、曲库语言、界面语言、wrapper-lite，与导航底部相同）与下载设置，保存在 localStorage，修改立即生效（进行中的下载沿用开始时的设置），也为之后的播放设置预留了位置。下载设置参考 [apple-music-downloader](https://github.com/itouakirai/apple-music-downloader) 与 [amd.wol.moe](https://amd.wol.moe/)：
-  - 音质：首选音质（无损 ALAC / 杜比全景声 / AAC / AAC 双耳 / AAC 缩混 / HE-AAC）、ALAC 最高采样率、全景声上限（2768 / 2448）、没有首选音质时是否降级
+  - 音质：首选音质（下拉框分组列出：无损 ALAC / 杜比全景声；AAC 立体声 256 / 128 kbps 与 HE-AAC 64 kbps；AAC 双耳、AAC 缩混（来自全景声母带）同样有这三种码率）、ALAC 最高采样率、全景声上限（2768 / 2448）、没有首选音质时是否降级
   - MV：下载专辑、歌单时是否一起下载其中的 MV，MV 最高分辨率（同参考实现的 `mv-max`：不超过该高度、平均码率最高的视频）与音轨（同 `mv-audio-type`：杜比全景声 → AC-3 → AAC、AC-3 → AAC 或只用 AAC）
   - 性能：同时下载的曲目数、失败重试次数、是否用 OPFS 暂存
   - 保存方式：**ZIP**（整张专辑 / 歌单一个文件，不压缩，超过 4 GiB 时为 ZIP64）、**文件夹**（File System Access API 直接写入选定的本地文件夹，可建子文件夹，可跳过已存在的文件；需要 Chrome / Edge 桌面版）、**逐个文件**；歌单可附带 `.m3u8` 播放列表
@@ -529,6 +531,10 @@ docs/                  发布指南（RELEASE.md）与 README 截图
 ```
 
 </details>
+
+## 交流群
+
+使用问题、反馈与讨论：Telegram 群组 [@apple_music_alac](https://t.me/apple_music_alac)。Bug 与功能建议仍欢迎提交到 [Issues](https://github.com/itouakirai/am-hook/issues)。
 
 ## 许可证
 

@@ -74,13 +74,25 @@ function classify(v) {
   return { kind: he ? 'aac-he' : 'aac', rank: kbps };
 }
 
+/** 带码率上限的首选音质（master 有 audio-stereo-128[-binaural|-downmix]）；其余取值就是 classify 的种类 */
+const CAPPED = {
+  'aac-128': { kind: 'aac', kbps: 128 },
+  'aac-binaural-128': { kind: 'aac-binaural', kbps: 128 },
+  'aac-downmix-128': { kind: 'aac-downmix', kbps: 128 },
+};
+
 const FALLBACK = {
   alac: ['alac', 'aac', 'aac-he'],
   atmos: ['atmos', 'alac', 'aac', 'aac-he'],
   aac: ['aac', 'aac-he', 'alac'],
+  'aac-128': ['aac-128', 'aac-he', 'aac', 'alac'],
+  'aac-he': ['aac-he', 'aac-128', 'aac', 'alac'],
   'aac-binaural': ['aac-binaural', 'aac', 'aac-he', 'alac'],
+  'aac-binaural-128': ['aac-binaural-128', 'he-binaural', 'aac-128', 'aac-he', 'aac', 'alac'],
+  'he-binaural': ['he-binaural', 'aac-binaural-128', 'aac-he', 'aac-128', 'aac', 'alac'],
   'aac-downmix': ['aac-downmix', 'aac', 'aac-he', 'alac'],
-  'aac-he': ['aac-he', 'aac', 'alac'],
+  'aac-downmix-128': ['aac-downmix-128', 'he-downmix', 'aac-128', 'aac-he', 'aac', 'alac'],
+  'he-downmix': ['he-downmix', 'aac-downmix-128', 'aac-he', 'aac-128', 'aac', 'alac'],
 };
 
 /**
@@ -90,13 +102,15 @@ const FALLBACK = {
 export function pickVariant(variants, { codec, alacMax, atmosMax, fallback }) {
   if (variants.length === 1 && variants[0].widevine) return { variant: variants[0], fallback: codec !== 'aac' };
   const order = fallback ? FALLBACK[codec] || [codec] : [codec];
-  for (const kind of order) {
+  for (const choice of order) {
+    const { kind, kbps } = CAPPED[choice] || { kind: choice };
     const list = variants.map((v) => ({ v, c: classify(v) })).filter(({ v, c }) => c.kind === kind
       && (kind !== 'alac' || !v.sample_rate || v.sample_rate <= alacMax)
-      && (kind !== 'atmos' || c.rank <= atmosMax));
+      && (kind !== 'atmos' || c.rank <= atmosMax)
+      && (!kbps || c.rank <= kbps));
     if (!list.length) continue;
     list.sort((a, b) => b.c.rank - a.c.rank || (b.v.bandwidth || 0) - (a.v.bandwidth || 0));
-    return { variant: list[0].v, fallback: kind !== codec };
+    return { variant: list[0].v, fallback: choice !== codec };
   }
   return null;
 }

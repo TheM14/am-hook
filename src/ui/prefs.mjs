@@ -15,10 +15,18 @@ export const TAG_FIELDS = [
   'lyrics', 'cover', 'copyright', 'record_company', 'upc', 'isrc', 'rtng', 'song_id', 'album_id', 'artist_id',
 ];
 
+/** 首选音质按下拉框的分组排列（set.codecGroup.*）；取值见 downloads.mjs 的 pickVariant */
+export const CODEC_GROUPS = [
+  ['hires', ['alac', 'atmos']],
+  ['stereo', ['aac', 'aac-128', 'aac-he']],
+  ['binaural', ['aac-binaural', 'aac-binaural-128', 'he-binaural']],
+  ['downmix', ['aac-downmix', 'aac-downmix-128', 'he-downmix']],
+];
+
 export const OPTIONS = {
   download: {
     // 首选音质；没有时按 fallback 降级
-    codec: ['alac', 'atmos', 'aac', 'aac-binaural', 'aac-downmix', 'aac-he'],
+    codec: CODEC_GROUPS.flatMap(([, list]) => list),
     alacMax: [192000, 96000, 48000, 44100],
     atmosMax: [2768, 2448],
     saveMode: ['zip', 'folder', 'files'],

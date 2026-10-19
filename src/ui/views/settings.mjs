@@ -1,6 +1,6 @@
 // 设置中心（/settings），由 app.mjs 挂载。通用设置（主地区、曲库语言、界面语言、wrapper-lite）沿用导航底部的选择面板；
 // 下载设置（音质、MV、保存方式、文件名、标签、封面、歌词）保存在 prefs.mjs，修改立即生效（进行中的下载沿用开始时的设置）。
-import { prefs, OPTIONS, TAG_FIELDS, DEFAULTS } from '../prefs.mjs';
+import { prefs, OPTIONS, CODEC_GROUPS, TAG_FIELDS, DEFAULTS } from '../prefs.mjs';
 import { formatPath, fitFolder, fitFile, TEMPLATE_VARS } from '../naming.mjs';
 import { downloads } from '../downloads.mjs';
 import { userToken, askToken, onTokenChange } from '../station.mjs';
@@ -57,8 +57,12 @@ export function mount({ root, signal, onLangChange, toast }) {
     return node;
   }
 
+  /** options：[value, label]，或 [组名, [[value, label]…]] 表示一个 optgroup */
   function select(key, options) {
-    const node = el('select', { className: 'set-select' }, ...options.map(([value, label]) => el('option', { value: String(value), textContent: label })));
+    const option = ([value, label]) => Array.isArray(label)
+      ? el('optgroup', { label: value }, ...label.map(option))
+      : el('option', { value: String(value), textContent: label });
+    const node = el('select', { className: 'set-select' }, ...options.map(option));
     node.addEventListener('change', () => set({ [key]: typeof DEFAULTS.download[key] === 'number' ? Number(node.value) : node.value }));
     controls.push((v) => { node.value = String(v[key]); });
     return node;
@@ -143,7 +147,7 @@ export function mount({ root, signal, onLangChange, toast }) {
     const opfs = AmDecrypt.opfsSupported();
 
     const quality = section('quality', 'set.quality',
-      row(t('set.codec'), t('set.codecDesc'), select('codec', o.codec.map((c) => [c, t(`set.codec.${c}`)]))),
+      row(t('set.codec'), t('set.codecDesc'), select('codec', CODEC_GROUPS.map(([group, list]) => [t(`set.codecGroup.${group}`), list.map((c) => [c, t(`set.codec.${c}`)])]))),
       row(t('set.alacMax'), t('set.alacMaxDesc'), select('alacMax', o.alacMax.map((n) => [n, `${n / 1000} kHz`]))),
       row(t('set.atmosMax'), t('set.atmosMaxDesc'), select('atmosMax', o.atmosMax.map((n) => [n, `${n} (${n % 1000} kbps)`]))),
       row(t('set.fallback'), t('set.fallbackDesc'), toggle('fallback', t('set.fallback'))));
