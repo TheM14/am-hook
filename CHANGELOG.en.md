@@ -1,5 +1,19 @@
 # CHANGELOG
 
+## v0.5.5 (2026-10-19)
+
+### Changed
+- 💄 The player bar is rebuilt after music.apple.com as a floating glass pill (56px tall, at most 720px wide): playback controls, an LCD, and actions
+  - The LCD has 34px artwork, a two-line marquee and a 2px progress line that expands to 7px with times on hover or drag
+  - Volume becomes a speaker button with a slide-out slider; click to mute
+  - Playback notices (FLAC transcoding, multichannel PCM) move into a popover behind the mode badge, shown automatically only the first time; playback errors float above the bar
+  - Compact mini-player layout at 760px and below
+- 💄 The song page is rebuilt after music.apple.com
+  - Header: 208px artwork (300px at 1260px and up) with a glow, centred on phones; title, linked artists, album · year · genre and audio-trait badges; the page is tinted with the artwork colour like the album page
+  - The Play button turns into Pause while the song plays; a favourite button and a More menu (library, playlists, download, copy links, open in Apple Music) replace the row of buttons
+  - The quality list is grouped by format in rounded cards, with rows styled like album track rows; each row has a download button whose progress ring cancels on click; the More menu adds "Copy m3u8 link"; skeleton rows while loading
+  - New Credits, Information, Music Videos and More By sections
+
 ## v0.5.4 (2026-10-19)
 
 ### New
