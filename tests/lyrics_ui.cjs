@@ -298,8 +298,7 @@ const amllTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
           return library.isFavorite('song', '123456789') && library.inLibrary('song', '123456789');
         }), 'the playing song is favorited and added to the library');
         await page.locator('.lyrics-more').click();
-        // 条目菜单（actions.mjs）没有 id，#menu 是页面上的另一个菜单
-        const moreMenu = page.locator('.menu:not(#menu)');
+        const moreMenu = page.locator('.menu');
         await moreMenu.waitFor();
         const menuText = await moreMenu.textContent();
         assert(menuText.includes('Undo Favorite') && menuText.includes('Delete from Library') && menuText.includes('Add to Playlist'), menuText);

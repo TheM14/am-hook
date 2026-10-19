@@ -333,7 +333,7 @@ async function targetTracks(target) {
 }
 
 /* ---------- 复制 ---------- */
-function copyText(text, done) {
+export function copyText(text, done) {
   const fallback = () => {
     const area = el('textarea', { value: text });
     area.style.cssText = 'position:fixed;opacity:0';

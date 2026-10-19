@@ -281,8 +281,8 @@ async function pickTracks(page, indexes) {
       await page.waitForTimeout(400);
       await row.locator('.more-btn').click();
       let download = nextDownload(page);
-      await page.click('#menu .menu-item');
-      await row.locator('.dl:not([hidden])').waitFor({ timeout: 20000 });
+      await page.click('.menu .menu-item');
+      await row.locator('.variant-progress:not([hidden])').waitFor({ timeout: 20000 });
       assert.equal((await download).suggestedFilename(), "Taylor Swift - Welcome To New York (Taylor's Version).m4a");
 
       // 站内跳转：下载在页面之间不中断

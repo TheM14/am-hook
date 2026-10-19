@@ -484,56 +484,8 @@ body.home-page {
 .footer-credits { margin: 0; display: flex; flex-wrap: wrap; gap: 4px 14px; line-height: 1.8; }
 .footer-credits a { color: var(--muted); text-decoration: none; white-space: nowrap; }
 
-/* ---------- 歌曲页 ---------- */
-/* 与官网专辑页相同的头部：左侧大封面，右侧标题、艺人与操作按钮，不再使用卡片外框 */
-.song { margin-top: 36px; display: grid; grid-template-columns: 270px minmax(0, 1fr); gap: 36px; align-items: end; }
-.cover { width: 270px; aspect-ratio: 1; border-radius: 8px; background: var(--surface-3); box-shadow: 0 6px 28px rgba(0, 0, 0, .22); outline: 1px solid color-mix(in srgb, var(--text) 8%, transparent); outline-offset: -1px; overflow: hidden; }
-.song-sub a { color: var(--accent); text-decoration: none; }
-.song-sub a:hover { text-decoration: underline; }
-.cover:empty::before { content: '♫'; height: 100%; display: grid; place-items: center; color: var(--muted); font-size: 64px; }
-.cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.song-info { min-width: 0; }
-.song-title { margin: 0; font-size: clamp(24px, 3vw, 32px); line-height: 1.15; font-weight: 700; letter-spacing: -.01em; overflow-wrap: anywhere; }
-.song-sub { margin: 6px 0 0; color: var(--muted); font-size: 17px; overflow-wrap: anywhere; }
+/* ---------- 歌曲页：样式在 views/song.css；.song-meta 也用于 MV 页 ---------- */
 .song-meta { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
-.song-actions { margin-top: 18px; display: flex; flex-wrap: wrap; gap: 8px; }
-.song-source { margin: 14px 0 0; color: var(--faint); font-size: 12px; font-family: var(--mono); overflow-wrap: anywhere; }
-.song-title.skeleton { width: min(360px, 80%); height: 40px; }
-.song-sub.skeleton { width: min(240px, 60%); height: 20px; }
-
-.variants { margin-top: 36px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--surface); overflow: hidden; }
-.variants[hidden] { display: none; }
-.variants-head { padding: 22px 24px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px 12px; border-bottom: 1px solid var(--line); background: var(--surface-2); }
-.variants-title { margin: 0; font-size: 15px; font-weight: 750; }
-.variants-count { color: var(--muted); font-size: 12px; }
-.variant {
-  padding: 20px 24px; display: grid; grid-template-columns: 44px minmax(0, 1fr) auto; gap: 16px; align-items: center;
-  border-bottom: 1px solid var(--line); transition: background .15s ease;
-}
-.variant:last-child { border-bottom: 0; }
-.variant:hover { background: var(--surface-2); }
-.variant.playing { background: var(--accent-soft); }
-.play-btn {
-  width: 44px; height: 44px; display: grid; place-items: center; border: 0; border-radius: 50%;
-  background: var(--surface-3); color: var(--text); transition: background .15s ease, transform .15s ease;
-}
-.play-btn:hover:not(:disabled) { background: var(--accent); color: #fff; transform: scale(1.05); }
-.play-btn:disabled { opacity: .35; cursor: not-allowed; }
-.variant.playing .play-btn { background: var(--accent); color: #fff; }
-.play-btn svg { width: 16px; height: 16px; }
-.variant-name { display: flex; align-items: center; flex-wrap: wrap; gap: 6px 8px; font-size: 15px; font-weight: 700; }
-.variant-detail { margin-top: 3px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
-.variant-detail code { font-family: var(--mono); font-size: 11px; color: var(--faint); }
-.variant-actions { display: flex; gap: 6px; }
-/* 浏览器端下载进度 */
-.dl { margin-top: 8px; display: grid; grid-template-columns: minmax(60px, 180px) minmax(0, 1fr) auto; align-items: center; gap: 10px; }
-.dl[hidden] { display: none; }
-.dl-bar { height: 4px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
-.dl-fill { width: 0; height: 100%; background: var(--accent); transition: width .2s ease; }
-.dl-text { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
-.dl-cancel { width: 44px; height: 44px; }
-.dl-cancel svg { width: 13px; height: 13px; }
-.variant-group { padding: 8px 18px; background: var(--surface-2); color: var(--faint); font-size: 11px; font-weight: 700; letter-spacing: .06em; border-bottom: 1px solid var(--line); }
 
 /* ---------- 专辑页 / 歌单页（官网 container-detail-header 与 songs-list） ---------- */
 body.album-page { overflow-x: clip; }
@@ -1106,8 +1058,6 @@ html[dir="rtl"] .volume-pop { transform-origin: left center; }
   .mv-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .album-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .song-grid.preview > :nth-child(n+9), .album-grid.preview > :nth-child(n+5), .mv-grid.preview > :nth-child(n+4) { display: none; }
-  .song { grid-template-columns: 200px minmax(0, 1fr); gap: 28px; }
-  .cover { width: 200px; }
   .shelf { grid-auto-columns: calc((100% - 3 * 20px) / 4); }
   .shelf:has(.shelf-item.mv) { grid-auto-columns: calc((100% - 2 * 20px) / 3); }
 }
@@ -1145,9 +1095,6 @@ html[dir="rtl"] .volume-pop { transform-origin: left center; }
   .home-footer { gap: 10px; }
   .footer-github { margin-left: 0; }
   .footer-credits > span { flex-basis: 100%; }
-  .song { grid-template-columns: 1fr; gap: 24px; margin-top: 24px; }
-  .cover { width: min(240px, 70%); margin: 0 auto; }
-  .song-title { font-size: 26px; }
   .track { grid-template-columns: 32px minmax(0, 1fr) auto 36px; gap: 8px; padding-left: 4px; min-height: 52px; }
   .track + .track::before { left: 44px; }
   .track-play { opacity: 1; }
@@ -1162,20 +1109,10 @@ html[dir="rtl"] .volume-pop { transform-origin: left center; }
   }
   .shelf:has(.shelf-item.mv) { grid-auto-columns: 220px; }
   .shelf::-webkit-scrollbar { display: none; }
-  .song-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .song-actions .btn { padding: 0 8px; font-size: 12px; }
-  .song-source { font-size: 10px; }
-  .variants { margin-top: 24px; }
-  .variants-head { padding: 18px 16px; }
-  .variant { grid-template-columns: 44px minmax(0, 1fr) 44px; gap: 10px; padding: 16px 12px; }
-  .variant-name { font-size: 14px; }
-  .dl { grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
-  .dl-bar { grid-column: 1 / -1; }
 }
 @media (max-width: 380px) {
   .search-field > svg, .search .btn-lg svg { display: none; }
   .search .btn-lg { padding: 0 16px; }
-  .variant { gap: 8px; padding-inline: 10px; }
 }
 
 /* ---------- 歌单页：曲目行带封面（官网 songs-list-row--playlist：54px 行高、40px 封面、歌名 / 艺人两行、专辑列、时长） ---------- */

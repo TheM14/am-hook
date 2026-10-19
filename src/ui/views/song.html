@@ -1,41 +1,51 @@
-
 <div class="page">
   <main>
-    <section class="song">
-      <div class="cover" id="cover"></div>
-      <div class="song-info">
-        <p class="eyebrow">SONG</p>
+    <!-- 头部（官网 song-header-page）：封面（背后为模糊光晕）、歌名、艺人、专辑 · 年份 · 流派、音质标志与播放按钮 -->
+    <section class="song-header" id="hero">
+      <div class="detail-art song-art">
+        <div class="detail-radiosity" id="radiosity" aria-hidden="true"></div>
+        <div class="album-art" id="art"></div>
+      </div>
+      <div class="song-details">
         <h1 class="song-title skeleton" id="title">&nbsp;</h1>
-        <p class="song-sub skeleton" id="subtitle">&nbsp;</p>
-        <div class="song-meta" id="meta"></div>
-        <div class="song-actions">
-          <button class="btn btn-primary" id="play-best" type="button" disabled>
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z"/></svg>
-            <span data-i18n="song.play"></span>
+        <p class="song-artist skeleton" id="subtitle">&nbsp;</p>
+        <p class="song-album" id="meta"></p>
+        <div class="song-badges" id="badges"></div>
+        <div class="song-buttons" id="buttons">
+          <button class="detail-play-btn" id="play-best" type="button" disabled>
+            <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M7 4.5v15a1 1 0 0 0 1.5.86l12.5-7.5a1 1 0 0 0 0-1.72L8.5 3.64A1 1 0 0 0 7 4.5Z"/></svg>
+            <span id="play-label"></span>
           </button>
-          <button class="btn" id="reparse" type="button">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>
-            <span data-i18n="song.reparse"></span>
-          </button>
-          <a class="btn" id="apple-link" target="_blank" rel="noreferrer">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 3h6v6"/><path d="M10 14 21 3"/><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/></svg>
-            Apple Music
-          </a>
         </div>
-        <p class="song-source" id="source"></p>
       </div>
     </section>
 
     <div class="alert info" id="alert" hidden aria-live="polite"></div>
 
-    <section class="variants" id="variants" hidden>
-      <div class="variants-head">
-        <h2 class="variants-title" data-i18n="song.variants"></h2>
-        <span class="variants-count" id="count"></span>
+    <!-- 音质：master m3u8 中的全部音频变体，按格式分组；可在线播放、下载解密文件 -->
+    <section class="song-section" id="variants" aria-labelledby="variants-title">
+      <div class="song-section-head">
+        <div class="song-section-heading">
+          <h2 class="song-section-title" id="variants-title" data-i18n="song.variants"></h2>
+          <p class="song-section-sub" id="count"></p>
+        </div>
+        <button class="song-reparse" id="reparse" type="button" data-i18n-attr="title=song.reparse">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12a9 9 0 1 1-2.64-6.36L21 8"/><path d="M21 3v5h-5"/></svg>
+          <span data-i18n="song.reparse"></span>
+        </button>
       </div>
-      <div id="variant-list"></div>
+      <div class="quality-list" id="variant-list"></div>
     </section>
+
+    <!-- 制作人员（官网 credits：演唱艺人、词曲创作、制作与工程） -->
+    <div id="credits"></div>
+
+    <!-- 信息：发行日期、时长、流派、作曲、ISRC 等 -->
+    <section class="song-section" id="info" hidden aria-labelledby="info-title">
+      <h2 class="song-section-title" id="info-title" data-i18n="song.info"></h2>
+      <dl class="song-facts" id="facts"></dl>
+    </section>
+
+    <div id="shelves"></div>
   </main>
 </div>
-
-<div class="menu" id="menu" role="menu" hidden></div>

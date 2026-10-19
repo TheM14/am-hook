@@ -148,7 +148,7 @@ const localPage = (kind) => new RegExp(`^/https://music\\.apple\\.com/[a-z]{2}/$
       frame = await openPage(page, base + '/https://music.apple.com/cn/song/_/6796864754');
       await frame.locator('#subtitle a[href*="/artist/"]').first().waitFor({ timeout: 20000 });
       assert.deepEqual(await frame.locator('#subtitle a[href*="/artist/"]').evaluateAll((links) => links.map((a) => a.textContent)), ['KAROL G', 'Judeline', 'rusowsky']);
-      assert.match(await frame.locator('#subtitle').textContent(), /^KAROL G, Judeline & rusowsky — /);
+      assert.match(await frame.locator('#subtitle').textContent(), /^KAROL G, Judeline & rusowsky$/);
       frame = await openPage(page, base + '/https://music.apple.com/us/music-video/born-again-feat-doja-cat-raye/1794822079');
       await frame.locator('#artist a').first().waitFor({ timeout: 20000 });
       assert.match(await frame.locator('#artist a').first().getAttribute('href'), localPage('artist'));

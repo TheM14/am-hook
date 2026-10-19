@@ -1,0 +1,192 @@
+/* 歌曲页（views/song.html）：头部照官网 song-header-page，下面依次为音质列表、制作人员、信息与货架 */
+body.song-page { overflow-x: clip; }
+
+/* ---------- 头部：窄屏居中纵排；≥1000px 封面在左、文字垂直居中（官网 208px，≥1260px 300px，间距 34 / 40px） ---------- */
+.song-header { position: relative; z-index: 0; margin: 8px 0 36px; display: flex; flex-direction: column; align-items: center; text-align: center; }
+/* .detail-art（app.css）为专辑页网格设了 align-self: start，在这里的纵向 flex 中会靠左，改回居中（官网 align-self: center） */
+.song-header .song-art { width: 220px; margin: 15px 0 0; flex: none; align-self: center; }
+.song-art .album-art:empty::before { content: "♫"; height: 100%; display: grid; place-items: center; color: var(--faint); font-size: 56px; }
+@media (min-width: 1000px) {
+  .song-header { margin-bottom: 44px; flex-direction: row; gap: 34px; text-align: start; }
+  .song-header .song-art { width: 208px; margin: 0; }
+}
+@media (min-width: 1260px) {
+  .song-header { gap: 40px; }
+  .song-header .song-art { width: 300px; }
+}
+/* 手机上头部滚出视口时封面模糊、淡出并下沉（与专辑页相同，关键帧见 app.css art-scroll-exit） */
+@supports (animation-timeline: view()) {
+  @media (prefers-reduced-motion: no-preference) and (max-width: 483px) {
+    .song-header { view-timeline: --song-header block; }
+    .song-header .song-art {
+      animation: art-scroll-exit linear both; animation-timeline: --song-header; animation-range: exit;
+      will-change: transform, opacity, filter;
+    }
+  }
+}
+
+.song-details { width: 100%; min-width: 0; margin-top: 18px; display: flex; flex-direction: column; align-items: center; }
+@media (min-width: 1000px) { .song-details { margin-top: 0; align-items: flex-start; } }
+.song-title {
+  max-width: 100%; margin: 0; font-size: 24px; line-height: 1.2; font-weight: 700; letter-spacing: -.01em;
+  overflow-wrap: anywhere; text-wrap: balance;
+}
+.song-title .explicit { width: 16px; height: 16px; margin-left: 8px; vertical-align: 3px; font-size: 11px; }
+.song-title.skeleton { width: min(360px, 80%); height: 30px; }
+.song-artist { max-width: 100%; margin: 4px 0 0; color: var(--text); font-size: 20px; line-height: 1.25; overflow-wrap: anywhere; }
+.song-artist a { color: inherit; text-decoration: none; }
+.song-artist a:hover { text-decoration: underline; }
+.song-artist.skeleton { width: min(220px, 50%); height: 24px; }
+/* 专辑 · 年份 · 流派（官网 subhead-emphasized：600 字重、systemSecondary） */
+.song-album { max-width: 100%; margin: 8px 0 0; color: var(--muted); font-size: 12px; line-height: 1.35; font-weight: 600; text-transform: uppercase; letter-spacing: .02em; overflow-wrap: anywhere; }
+.song-album:empty { display: none; }
+.song-album a { color: inherit; text-decoration: none; }
+.song-album a:hover { color: var(--text); text-decoration: underline; }
+.song-badges { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.song-badges:empty { display: none; }
+.song-badges .q-icon { height: 18px; }
+@media (min-width: 1000px) {
+  .song-title { font-size: 30px; line-height: 1.15; }
+  .song-title .explicit { width: 19px; height: 19px; vertical-align: 4px; font-size: 12px; }
+  .song-title.skeleton { height: 36px; }
+  .song-artist { font-size: 24px; }
+}
+/* 播放胶囊（与专辑页相同）在前，喜爱与「更多」圆形按钮在后 */
+.song-buttons { margin-top: 20px; display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 10px; }
+.song-buttons .detail-play-btn { min-width: 146px; }
+@media (min-width: 1000px) { .song-buttons { justify-content: flex-start; } }
+
+/* ---------- 分区 ---------- */
+.song-section { margin-top: 40px; }
+.song-section[hidden] { display: none; }
+.song-section-head { margin-bottom: 12px; display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: 8px 16px; }
+.song-section-heading { min-width: 0; }
+.song-section-title { margin: 0 0 12px; font-size: 20px; line-height: 1.25; font-weight: 700; letter-spacing: -.01em; }
+.song-section-head .song-section-title { margin: 0; }
+.song-section-sub { margin: 3px 0 0; color: var(--muted); font-size: 13px; }
+.song-section-sub:empty { display: none; }
+.song-reparse {
+  height: 30px; padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; border-radius: 15px;
+  border: .75px solid color-mix(in srgb, var(--text) 10%, transparent); background: color-mix(in srgb, var(--text) 6%, transparent);
+  color: var(--text); font-size: 12px; font-weight: 600; white-space: nowrap; transition: background .15s ease;
+}
+.song-reparse:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 11%, transparent); }
+.song-reparse:disabled { opacity: .6; cursor: default; }
+.song-reparse svg { width: 14px; height: 14px; }
+.song-reparse.busy svg { animation: spin .9s linear infinite; }
+
+/* ---------- 音质：按格式分组的圆角卡片，行的样式接近专辑页曲目行（播放 / 均衡器 · 名称与规格 · 下载 · 更多） ---------- */
+.quality-list { display: grid; gap: 14px; }
+.quality-group { padding: 2px 6px 6px; border-radius: 14px; background: color-mix(in srgb, var(--text) 4%, transparent); }
+.quality-group-title { margin: 0; padding: 12px 10px 6px; color: var(--muted); font-size: 11px; line-height: 1.3; font-weight: 700; letter-spacing: .06em; text-transform: uppercase; }
+.quality-empty { margin: 0; padding: 18px 16px; border-radius: 14px; background: color-mix(in srgb, var(--text) 4%, transparent); color: var(--muted); font-size: 13px; }
+.variant, .variant-skeleton {
+  position: relative; min-height: 60px; padding: 8px 4px 8px 8px; display: grid; grid-template-columns: 36px minmax(0, 1fr) auto auto;
+  gap: 4px 12px; align-items: center; border-radius: 10px; transition: background .12s ease;
+}
+/* 行间细分隔线，悬停时整行圆角高亮 */
+.variant + .variant::before { content: ""; position: absolute; top: 0; left: 56px; right: 10px; height: 1px; background: var(--line); }
+.variant:hover, .variant:focus-within { background: color-mix(in srgb, var(--text) 6%, transparent); }
+.variant:hover::before, .variant:hover + .variant::before, .variant:focus-within::before, .variant:focus-within + .variant::before { opacity: 0; }
+.variant-num { width: 36px; height: 36px; display: grid; place-items: center; }
+.variant-num > * { grid-area: 1 / 1; }
+.variant-num .eq { display: none; }
+.variant-play {
+  width: 36px; height: 36px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 50%;
+  background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--text); transition: background .15s ease, color .15s ease, transform .15s ease;
+}
+.variant-play svg { width: 14px; height: 14px; }
+.variant-play:hover:not(:disabled) { background: var(--accent); color: #fff; transform: scale(1.06); }
+.variant-play:disabled { opacity: .35; cursor: not-allowed; }
+/* 正在播放：序号位显示均衡器，悬停时换回播放 / 暂停按钮 */
+.variant.playing .variant-play { background: var(--accent); color: #fff; }
+.variant.playing:not(.paused) .eq { display: inline-flex; }
+.variant.playing:not(.paused) .variant-play { opacity: 0; }
+.variant.playing:not(.paused):is(:hover, :focus-within) .eq { display: none; }
+.variant.playing:not(.paused):is(:hover, :focus-within) .variant-play { opacity: 1; }
+.variant.playing .variant-label { color: var(--accent); }
+.variant-main { min-width: 0; }
+.variant-name { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 14px; line-height: 1.3; font-weight: 600; }
+.variant-name .q-icon { height: 14px; }
+.variant-tag {
+  height: 18px; padding: 0 6px; display: inline-flex; align-items: center; border-radius: 5px;
+  background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .02em; white-space: nowrap;
+}
+.variant-tag.warn { background: var(--warn-soft); color: var(--warn); }
+.variant-spec { margin-top: 2px; color: var(--muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.variant-spec code { color: var(--faint); font-family: var(--mono); font-size: 11px; }
+.variant-progress { margin-top: 3px; color: var(--accent); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.variant-progress[hidden] { display: none; }
+/* 下载：箭头；下载中外圈为进度环（--dl 由 song.mjs 写入，0–1），中间换成停止方块，点击取消 */
+.variant-dl, .variant-more {
+  position: relative; width: 36px; height: 36px; padding: 0; display: grid; place-items: center; border: 0; border-radius: 50%;
+  background: none; color: var(--muted); transition: background .15s ease, color .15s ease;
+}
+.variant-dl > svg { grid-area: 1 / 1; }
+.variant-dl:hover, .variant-more:hover, .variant-more[aria-expanded="true"] { background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--accent); }
+.variant-more svg { width: 17px; height: 17px; }
+.dl-arrow { width: 18px; height: 18px; }
+.dl-stop { display: none; width: 14px; height: 14px; }
+.dl-ring { width: 32px; height: 32px; opacity: 0; transition: opacity .15s ease; }
+.dl-ring circle { fill: none; stroke-width: 2.5; }
+.dl-ring-track { stroke: color-mix(in srgb, var(--text) 14%, transparent); }
+.dl-ring-fill {
+  stroke: var(--accent); stroke-linecap: round; stroke-dasharray: 100; stroke-dashoffset: calc(100 - var(--dl, 0) * 100);
+  transform: rotate(-90deg); transform-origin: center; transform-box: fill-box; transition: stroke-dashoffset .25s ease;
+}
+.variant.downloading .variant-dl { color: var(--accent); }
+.variant.downloading .dl-ring { opacity: 1; }
+.variant.downloading .dl-arrow { display: none; }
+.variant.downloading .dl-stop { display: block; }
+.variant.dl-waiting .dl-ring { animation: spin 1s linear infinite; }
+.variant.dl-waiting .dl-ring-fill { stroke-dashoffset: 72; }
+/* 载入中的骨架行 */
+.variant-skeleton .variant-num { border-radius: 50%; background: color-mix(in srgb, var(--text) 8%, transparent); }
+.variant-skeleton .sk-name { width: min(220px, 50%); height: 14px; }
+.variant-skeleton .sk-spec { width: min(360px, 80%); height: 11px; margin-top: 7px; }
+
+/* ---------- 制作人员（官网 grid--credit-lockups：三列，44px 圆形头像，间距 13px，行间分隔线从文字处开始） ---------- */
+.credit-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 34px; }
+.credit {
+  position: relative; min-height: 64px; padding: 10px 0; display: grid; grid-template-columns: 44px minmax(0, 1fr); gap: 13px;
+  align-items: center; color: inherit; text-decoration: none;
+}
+.credit::after { content: ""; position: absolute; right: 0; bottom: 0; width: calc(100% - 57px); border-bottom: 1px solid var(--line); }
+.credit:nth-last-child(-n+3)::after { display: none; }
+.credit-avatar { width: 44px; height: 44px; display: grid; place-items: center; overflow: hidden; border-radius: 50%; background: color-mix(in srgb, var(--text) 10%, transparent); }
+.credit-avatar img { width: 100%; height: 100%; display: block; object-fit: cover; }
+.credit-initial { color: var(--muted); font-size: 17px; font-weight: 600; }
+.credit-text { min-width: 0; }
+.credit-name { display: block; overflow: hidden; font-size: 13px; line-height: 1.3; font-weight: 500; text-overflow: ellipsis; white-space: nowrap; }
+.credit-roles { display: -webkit-box; overflow: hidden; -webkit-box-orient: vertical; -webkit-line-clamp: 2; color: var(--muted); font-size: 12px; line-height: 1.3; }
+a.credit:hover .credit-name { text-decoration: underline; }
+
+/* ---------- 信息 ---------- */
+.song-facts {
+  margin: 0; padding: 20px 22px; display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 16px 24px;
+  border-radius: 16px; background: color-mix(in srgb, var(--text) 4%, transparent);
+}
+.song-fact { min-width: 0; }
+.song-fact dt { color: var(--muted); font-size: 11px; line-height: 1.3; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; }
+.song-fact dd { margin: 3px 0 0; font-size: 14px; line-height: 1.35; font-weight: 500; overflow-wrap: anywhere; }
+.song-fact dd.mono { font-family: var(--mono); font-size: 13px; }
+
+@media (max-width: 1000px) {
+  .credit-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .credit:nth-last-child(-n+3)::after { display: block; }
+  .credit:nth-last-child(-n+2)::after { display: none; }
+}
+@media (max-width: 760px) {
+  .song-section { margin-top: 32px; }
+  .song-section-title { font-size: 18px; }
+  .quality-group { margin-inline: -6px; }
+  .variant { grid-template-columns: 32px minmax(0, 1fr) auto auto; gap: 4px 8px; padding-left: 6px; }
+  .variant + .variant::before { left: 46px; }
+  .variant-num, .variant-play { width: 32px; height: 32px; }
+  .variant-dl, .variant-more { width: 34px; height: 34px; }
+  .variant-spec { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .credit-grid { grid-template-columns: minmax(0, 1fr); }
+  .credit:nth-last-child(-n+2)::after { display: block; }
+  .credit:last-child::after { display: none; }
+  .song-facts { padding: 16px 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px 16px; }
+}

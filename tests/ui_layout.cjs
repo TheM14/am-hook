@@ -102,7 +102,7 @@ async function checkNav(page, width) {
         assert.equal(await page.locator('#subtitle a[href="/https://music.apple.com/us/artist/artist/42"]').textContent(), 'Artist', 'artist name links to the artist page');
         await fits('song');
         await page.locator('.more-btn').first().click();
-        const bounds = await page.locator('#menu').boundingBox();
+        const bounds = await page.locator('.menu').boundingBox();
         assert(bounds.x >= 0 && bounds.x + bounds.width <= width && bounds.y >= 0 && bounds.y + bounds.height <= 844, 'menu must fit viewport');
         await page.keyboard.press('Escape');
         assert(await page.locator('.more-btn').first().evaluate(el => el === document.activeElement));

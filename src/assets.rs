@@ -96,6 +96,7 @@ pub static ASSETS: &[Asset] = &[
     asset!("/assets/views/home.mjs", JS, "views/home.mjs"),
     asset!("/assets/views/song.html", HTML, "views/song.html"),
     asset!("/assets/views/song.mjs", JS, "views/song.mjs"),
+    asset!("/assets/views/song.css", CSS, "views/song.css"),
     asset!("/assets/views/mv.html", HTML, "views/mv.html"),
     asset!("/assets/views/mv.mjs", JS, "views/mv.mjs"),
     asset!("/assets/views/album.html", HTML, "views/album.html"),
