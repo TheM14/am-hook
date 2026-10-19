@@ -67,6 +67,25 @@ async fn relayed_requests_are_limited_per_client_ip() {
     }
 }
 
+/// /status 不计入按 IP 限流，改由共用缓存挡住：多少客户端、刷得多快都只请求一次 wrapper-lite
+#[tokio::test]
+async fn status_is_shared_across_clients() {
+    let calls = Arc::new(AtomicUsize::new(0));
+    let app = serve_app(AppState::with_config(config(fake_wrapper(calls.clone()).await, Some("x-real-ip")))).await;
+    let client = reqwest::Client::new();
+    let status = |i: usize| client.get(format!("{app}/status")).header("x-real-ip", format!("198.51.100.{i}")).send();
+
+    let burst = futures::future::join_all((0..30).map(status)).await;
+    for _ in 0..5 {
+        assert_eq!(status(99).await.unwrap().status(), 200);
+    }
+    for response in burst {
+        let body: serde_json::Value = response.unwrap().json().await.unwrap();
+        assert_eq!(body["regions"], serde_json::json!(["us"]));
+    }
+    assert_eq!(calls.load(Ordering::SeqCst), 1, "one wrapper-lite /status for all clients");
+}
+
 #[tokio::test]
 async fn without_ip_header_the_peer_address_is_used() {
     let calls = Arc::new(AtomicUsize::new(0));

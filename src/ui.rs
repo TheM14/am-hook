@@ -286,7 +286,21 @@ pub async fn key_handler(
     }
 }
 
+/// `/status` 的结果在所有客户端间共用这么久：页面定时轮询它，不计入按 IP 限流（见 limit.rs），
+/// 缓存后不论有多少客户端、刷得多快，wrapper-lite 每个周期最多收到一次 `/status`
+const STATUS_TTL: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// 最近一次 `/status` 的结果：取得时间、状态码、响应体与日志备注
+#[derive(Default)]
+pub struct StatusCache(tokio::sync::Mutex<Option<(tokio::time::Instant, StatusCode, serde_json::Value, String)>>);
+
 pub async fn status_handler(State(state): State<Arc<AppState>>) -> Response<Body> {
+    // 持锁请求上游：缓存过期时同时到达的请求等同一次结果
+    let mut cached = state.status_cache.0.lock().await;
+    if let Some((_, status, body, note)) = cached.as_ref().filter(|(at, ..)| at.elapsed() < STATUS_TTL) {
+        return log::note(json_response(*status, body.clone()), format!("{note} · cached"));
+    }
+
     let mut body = json!({
         "code": 1,
         "msg": "wrapper-lite unavailable",
@@ -296,7 +310,7 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Response<Body
     let mut status = StatusCode::BAD_GATEWAY;
     let mut note = String::from("wrapper-lite unavailable");
 
-    match state.wrapper.send(state.wrapper.get("/status")).await {
+    match state.wrapper.send(state.wrapper.get("/status").timeout(std::time::Duration::from_secs(10))).await {
         Ok(reply) => {
             if let Ok(value) = reply.json::<serde_json::Value>() {
                 if value.get("code").and_then(serde_json::Value::as_i64) == Some(0) {
@@ -318,6 +332,7 @@ pub async fn status_handler(State(state): State<Arc<AppState>>) -> Response<Body
         Err(error) => note = format!("wrapper-lite request failed: {error}"),
     }
 
+    *cached = Some((tokio::time::Instant::now(), status, body.clone(), note.clone()));
     log::note(json_response(status, body), note)
 }
 

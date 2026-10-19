@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## Unreleased
+
+### Fixes
+- 🐛 `/status` is not counted by `--client-rate`, yet a client could keep requesting it and every request reached wrapper-lite, using up `--wrapper-rate` and concurrency permits: all clients now share one result for 10 s and simultaneous requests are merged, so wrapper-lite gets at most one `/status` per 10 s; the upstream `/status` also has a 10 s timeout
+
 ## v0.5.2 (2026-10-19)
 
 ### New

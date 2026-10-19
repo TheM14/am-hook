@@ -221,7 +221,7 @@ The "wrapper-lite" setting at the bottom of the navigation switches between two 
 | `GET /https://music.apple.com/<cc>/song/<slug>/<id>` | Song page |
 | `GET /https://music.apple.com/<cc>/music-video/<slug>/<id>` | MV page |
 | `GET /https://music.apple.com/<cc>/post/<id>` | Artist-uploaded video (MV page) |
-| `GET /status` | wrapper-lite status and available regions |
+| `GET /status` | wrapper-lite status and available regions (one result shared by all clients for 10 s) |
 | `GET /parse/song/<adamId>` | Song master m3u8 URL from wrapper-lite `/m3u8` (`{"code":0,"data":{"masterUrl":…}}`); the browser fetches and parses the master |
 | `GET /key?adamId=<adamId>&uri=<skd-uri>` | Song track decryption template JSON from wrapper-lite `/key` |
 | `GET /lyrics/<adamId>?language=<tag>` | TTML lyrics from wrapper-lite `/lyrics`, XML unchanged; 404 when the song has none. Optional `language` is the catalog language of the song's storefront (the chosen one, or the storefront default such as `zh-Hans-CN`) |
@@ -255,7 +255,7 @@ The "wrapper-lite" setting at the bottom of the navigation switches between two 
 | `--wrapper-rate <N>` | `24` | Max requests per second to wrapper-lite (any 1-second window; extra requests wait in order). 0 = unlimited |
 | `--wrapper-concurrency <N>` | `24` | Max concurrent requests to wrapper-lite. 0 = unlimited. Lower it (e.g. `8`) if wrapper-lite runs in QEMU and requests time out under load |
 | `--wrapper-auth <VALUE>` | not sent | `Authorization` header for wrapper-lite requests. A bare token is sent as `Bearer <token>`; a value with a scheme (`Bearer …`, `Basic …`) is sent as is. Also read from `AM_HOOK_WRAPPER_AUTH` (keeps it out of the process list). These three apply to server relaying only; a page switched to a local wrapper-lite sets its own |
-| `--client-rate <N>` | `0` | Max relayed wrapper-lite requests per client IP in any 60 seconds (`/status` not counted), so one visitor cannot use up a shared wrapper-lite; further requests get HTTP 429 with `Retry-After`. A played song takes about 3 (master, key, lyrics). 0 = unlimited |
+| `--client-rate <N>` | `0` | Max relayed wrapper-lite requests per client IP in any 60 seconds (`/status` not counted: it is shared by all clients and asks wrapper-lite at most once per 10 s), so one visitor cannot use up a shared wrapper-lite; further requests get HTTP 429 with `Retry-After`. A played song takes about 3 (master, key, lyrics). 0 = unlimited |
 | `--client-ip-header <NAME>` | TCP peer | Header holding the client IP, set by the reverse proxy in front (e.g. `X-Real-IP`, `CF-Connecting-IP`; the first entry of a list is used). Needed behind a proxy, where every peer is the proxy. Only set it when all requests pass through that proxy, otherwise clients can spoof it |
 | `--local-wrapper-only` | off | Never relay wrapper-lite requests: pages only offer the local mode, as on a serverless deployment without `AM_HOOK_WRAPPER_URL`, and the relaying endpoints return 501. `--wrapper-url`, `--wrapper-rate` and `--wrapper-concurrency` become the page defaults for visitors who have not saved their own; `--wrapper-auth` is not used and never sent to pages |
 | `--wrapper-hint <TEXT>` | none | Note shown above the local wrapper-lite settings, e.g. where to get a token for a public wrapper-lite. URLs in it become links. Also read from `AM_HOOK_WRAPPER_HINT` |

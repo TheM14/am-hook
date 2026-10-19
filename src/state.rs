@@ -36,6 +36,8 @@ pub struct AppState {
     pub amp: Arc<crate::amp::Amp>,
     /// 按客户端 IP 限流（见 [`crate::limit`]）
     pub client_limit: crate::limit::ClientLimit,
+    /// `/status` 的共用缓存（见 [`crate::ui::status_handler`]）
+    pub status_cache: crate::ui::StatusCache,
 }
 
 impl AppState {
@@ -82,7 +84,7 @@ impl AppState {
         let amp = Arc::new(crate::amp::Amp::new(config.amp_cache_mb * 1024 * 1024));
         let wrapper = crate::wrapper::Wrapper::new(&config);
         let client_limit = crate::limit::ClientLimit::new(config.client_rate, config.client_ip_header.as_deref());
-        Self { config, http_client, apple_client, wrapper, amp, client_limit }
+        Self { config, http_client, apple_client, wrapper, amp, client_limit, status_cache: Default::default() }
     }
 }
 
