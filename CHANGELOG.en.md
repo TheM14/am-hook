@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v0.5.4 (2026-10-19)
+
+### New
+- ✨ Preferred quality adds AAC 128 kbps, AAC Binaural 128 kbps, HE-AAC Binaural 64 kbps, AAC Downmix 128 kbps and HE-AAC Downmix 64 kbps (Apple's masters already carry them; previously the highest bitrate of a kind was always taken), 11 choices in all. The menu in Settings and the download dialog is grouped as Lossless & Dolby Atmos / AAC Stereo / AAC Binaural / AAC Downmix, and the description gives rough file sizes per minute. Each new choice has its own fallback order, e.g. a stereo-only song asked for Binaural 128 gets HE Binaural, then Stereo 128 (#4)
+- 📝 README links the Telegram group [@apple_music_alac](https://t.me/apple_music_alac)
+
+### Fixes
+- 🐛 Some older music videos (e.g. 1175186184) have media playlists without `EXT-X-KEY` and failed with "No PlayReady media found"; they now play and download
+
 ## v0.5.3 (2026-10-19)
 
 ### New

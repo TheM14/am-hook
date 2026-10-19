@@ -1,5 +1,14 @@
 # 更新日志
 
+## v0.5.4 (2026-10-19)
+
+### 新功能
+- ✨ 首选音质新增 AAC 128 kbps、AAC 双耳 128 kbps、HE-AAC 双耳 64 kbps、AAC 缩混 128 kbps、HE-AAC 缩混 64 kbps（Apple 的 master 本来就有这些版本，之前同类中总是取最高码率），共 11 项；设置中心与下载对话框的下拉框按「无损与全景声 / AAC 立体声 / AAC 双耳 / AAC 缩混」分组，说明中给出每分钟的大致文件大小。新选项各有降级顺序，例如普通歌曲没有双耳 128 时依次改用 HE 双耳、立体声 128（#4）
+- 📝 README 加入 Telegram 交流群 [@apple_music_alac](https://t.me/apple_music_alac)
+
+### 修复
+- 🐛 部分较早的 MV（如 1175186184）的 media playlist 没有 `EXT-X-KEY`，之前报错 “No PlayReady media found”，现在可以播放与下载
+
 ## v0.5.3 (2026-10-19)
 
 ### 新功能
