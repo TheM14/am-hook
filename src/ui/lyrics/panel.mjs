@@ -855,7 +855,7 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
   toggle.addEventListener('click', onToggle);
   // 点击播放条展开界面，按上次的选择显示或隐藏歌词；歌词随后取回
   bar.addEventListener('click', (event) => {
-    if (open || !adamId || event.target.closest('button, input, a, [role="slider"], .player-msg, .player-notice')) return;
+    if (open || !adamId || event.target.closest('button, input, a, [role="slider"], .player-volume, .player-msg, .player-notice')) return;
     show();
     fetchLyrics();
   });

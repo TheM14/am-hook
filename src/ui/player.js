@@ -1069,6 +1069,7 @@
   const ICON_PAUSE = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>';
   const ICON_LOADING = '<svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9"/></svg>';
   const ICON_QUEUE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h11M4 11h11M4 16h7"/><path d="M16 14.5v5.5"/><circle cx="14" cy="20" r="2"/><path d="M16 14.5 20 13"/></svg>';
+  const ICON_INFO = '<svg viewBox="0 0 16 16" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13ZM8 4a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm-1.25 3.2v1h.65v2.6h-.65v1h2.5v-1H8.6V7.2Z"/></svg>';
   const ICON_GRIP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 8h14M5 12h14M5 16h14"/></svg>';
   const ICON_REMOVE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M7 12h10"/></svg>';
   const ICON_SHUFFLE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h3c2.2 0 3.4 1 4.5 2.8l3 4.4C14.6 16 15.8 17 18 17h2.5"/><path d="M3 17h3c1.6 0 2.7-.6 3.6-1.6M14.4 8.6C15.3 7.6 16.4 7 18 7h2.5"/><path d="m18 4 3 3-3 3M18 14l3 3-3 3"/></svg>';
@@ -1125,13 +1126,14 @@
         const v = parseFloat(localStorage.getItem('am-hook:volume'));
         if (v >= 0 && v <= 1) this.audio.volume = v;
       } catch {}
-      this.$('.volume').value = this.audio.volume;
+      this.renderVolume();
       if (global.AmI18n) global.AmI18n.onChange(() => this.renderLang());
     }
 
     /** 切换界面语言后重绘播放条上的文字 */
     renderLang() {
       this.renderToggle();
+      this.renderVolume();
       if (this.current) {
         this.renderMode();
         this.renderTrackText();
@@ -1169,17 +1171,85 @@
       }
     }
 
+    /**
+     * 播放方式标志（LCD 右侧的小胶囊）。FLAC 转码、EC-3 解码为 PCM 时标志带 ⓘ，点击弹出说明（.player-notice）；
+     * 同一种说明只在第一次遇到时自动弹出（记在本地），之后不再打扰
+     */
     renderMode() {
       if (!this.current) return;
       const ec3 = this.current.mode === 'ec3';
       const channels = this.pcm && this.pcm.channels;
-      this.$('.player-mode').textContent = ec3 && channels
-        ? t('player.pcmChannels', { n: channels - 1 }) : modeLabel(this.current.mode);
-      const notice = this.$('.player-notice');
+      const badge = this.$('.player-mode');
+      const label = ec3 && channels ? t('player.pcmChannels', { n: channels - 1 }) : modeLabel(this.current.mode);
       const noticeKey = ec3 ? 'player.pcmNotice'
         : this.current.mode === 'flac' ? 'player.flacNotice' : null;
-      notice.textContent = noticeKey ? t(noticeKey) : '';
-      notice.hidden = !noticeKey;
+      badge.textContent = label;
+      if (noticeKey) badge.insertAdjacentHTML('beforeend', ICON_INFO);
+      badge.hidden = false;
+      badge.disabled = !noticeKey;
+      badge.title = t(noticeKey ? 'player.modeInfo' : 'player.mode');
+      badge.setAttribute('aria-label', `${t('player.mode')}: ${label}`);
+      this.$('.player-notice').textContent = noticeKey ? t(noticeKey) : '';
+      if (!noticeKey) { this.closeNotice(); return; }
+      this.placeNotice();
+      if (this.root.closest('.lyrics-controls')) return;
+      let seen = [];
+      try { seen = JSON.parse(localStorage.getItem('am-hook:seen-notices')) || []; } catch {}
+      if (seen.includes(noticeKey)) return;
+      try { localStorage.setItem('am-hook:seen-notices', JSON.stringify([...seen, noticeKey])); } catch {}
+      this.openNotice(true);
+    }
+
+    /** auto：自动弹出的说明 8 秒后收起（鼠标停在上面时等移开） */
+    openNotice(auto = false) {
+      const notice = this.$('.player-notice');
+      clearTimeout(this.noticeTimer);
+      notice.hidden = false;
+      this.$('.player-mode').setAttribute('aria-expanded', 'true');
+      this.placeNotice();
+      if (!auto) return;
+      const later = (ms) => {
+        this.noticeTimer = setTimeout(() => (notice.matches(':hover') ? later(1500) : this.closeNotice()), ms);
+      };
+      later(8000);
+    }
+
+    closeNotice() {
+      clearTimeout(this.noticeTimer);
+      this.$('.player-notice').hidden = true;
+      this.$('.player-mode').setAttribute('aria-expanded', 'false');
+    }
+
+    /** 说明气泡水平居中对准标志，不超出视口（左右各留 16px） */
+    placeNotice() {
+      const notice = this.$('.player-notice');
+      const badge = this.$('.player-mode').getBoundingClientRect();
+      if (notice.hidden || !badge.width) return;
+      const bar = this.root.getBoundingClientRect();
+      const width = notice.offsetWidth;
+      const max = this.root.ownerDocument.documentElement.clientWidth - 16 - width;
+      const x = Math.max(16, Math.min(badge.left + badge.width / 2 - width / 2, max));
+      notice.style.left = `${x - bar.left}px`;
+    }
+
+    /** 音量 0–1，记在本地；喇叭图标的声波按音量显示 0–3 条 */
+    setVolume(volume) {
+      this.audio.volume = volume;
+      if (this.pcm) this.pcm.gain.gain.value = volume;
+      try { localStorage.setItem('am-hook:volume', String(volume)); } catch {}
+      this.renderVolume();
+    }
+
+    renderVolume() {
+      const volume = this.audio.volume;
+      const input = this.$('.volume');
+      input.value = volume;
+      input.style.setProperty('--volume', `${volume * 100}%`);
+      this.$('.player-volume').dataset.level = volume === 0 ? 0 : Math.min(3, Math.ceil(volume * 3));
+      const label = t(volume === 0 ? 'player.unmute' : 'player.mute');
+      const button = this.$('.volume-toggle');
+      button.setAttribute('aria-label', label);
+      button.title = label;
     }
 
     transport() { return this.current && this.current.mode === 'ec3' && this.pcm ? this.pcm : this.clock; }
@@ -1205,10 +1275,27 @@
       this.$('.skip-next').addEventListener('click', () => this.next());
       this.$('.player-shuffle').addEventListener('click', () => this.setShuffle(!this.shuffle));
       this.$('.player-repeat').addEventListener('click', () => this.cycleRepeat());
-      this.$('.volume').addEventListener('input', (e) => {
-        a.volume = Number(e.target.value);
-        if (this.pcm) this.pcm.gain.gain.value = a.volume;
-        try { localStorage.setItem('am-hook:volume', String(a.volume)); } catch {}
+      this.$('.volume').addEventListener('input', (e) => this.setVolume(Number(e.target.value)));
+      this.$('.player-mode').addEventListener('click', () => (this.$('.player-notice').hidden ? this.openNotice() : this.closeNotice()));
+
+      // 音量：鼠标移入、键盘聚焦时展开滑块；点喇叭静音 / 恢复，触屏上第一下只展开
+      const volume = this.$('.player-volume');
+      const volumeButton = this.$('.volume-toggle');
+      const expand = (on) => volume.classList.toggle('expanded', on);
+      let tapExpands = false;
+      volume.addEventListener('pointerenter', (e) => { if (e.pointerType === 'mouse') expand(true); });
+      volume.addEventListener('pointerleave', (e) => { if (e.pointerType === 'mouse' && !volume.querySelector(':focus-visible')) expand(false); });
+      volume.addEventListener('focusin', () => expand(true));
+      volume.addEventListener('focusout', (e) => { if (!volume.contains(e.relatedTarget)) expand(false); });
+      volumeButton.addEventListener('pointerdown', (e) => { tapExpands = e.pointerType !== 'mouse' && !volume.classList.contains('expanded'); });
+      volumeButton.addEventListener('click', () => {
+        if (tapExpands) { tapExpands = false; expand(true); return; }
+        if (a.volume > 0) {
+          this.unmuteVolume = a.volume;
+          this.setVolume(0);
+        } else {
+          this.setVolume(this.unmuteVolume || 0.5);
+        }
       });
 
       const seek = this.$('.seek');
@@ -1267,12 +1354,15 @@
 
     /** 空格播放 / 暂停，左右方向键快退 / 快进 */
     bindKeys(doc) {
-      // 待播清单面板：按 Esc 或点击面板与播放条以外的地方时收起
+      // 待播清单面板：按 Esc 或点击面板与播放条以外的地方时收起；播放方式说明、音量滑块同样点别处收起
       doc.addEventListener('pointerdown', (e) => {
+        if (!this.$('.player-notice').hidden && !e.target.closest('.player-mode, .player-notice')) this.closeNotice();
+        if (!this.$('.player-volume').contains(e.target)) this.$('.player-volume').classList.remove('expanded');
         if (this.queuePanel.hidden || this.queuePanel.contains(e.target) || this.root.contains(e.target)) return;
         this.closeQueue();
       });
       doc.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !this.$('.player-notice').hidden) { e.preventDefault(); this.closeNotice(); this.$('.player-mode').focus(); return; }
         // preventDefault：歌词界面里打开清单时，Esc 只收起清单（见 lyrics/panel.mjs）
         if (e.key === 'Escape' && !this.queuePanel.hidden) { e.preventDefault(); this.closeQueue(true); return; }
         if (!this.current || e.defaultPrevented || e.target.closest('input, textarea, button, a, [role="slider"]')) return;
@@ -1297,7 +1387,7 @@
       button.className = 'player-queue';
       button.innerHTML = ICON_QUEUE;
       button.setAttribute('aria-expanded', 'false');
-      this.$('.player-right').insertBefore(button, this.$('.player-mode'));
+      this.$('.player-right').insertBefore(button, this.$('.player-volume'));
 
       const panel = doc.createElement('section');
       panel.className = 'queue-panel';
@@ -1653,11 +1743,15 @@
     }
 
     layout() {
-      const height = `${this.root.getBoundingClientRect().height}px`;
+      // 播放错误浮在播放条上方，页面底部同样给它留出空间
+      const bar = this.root.getBoundingClientRect();
+      const msg = this.$('.player-msg');
+      const top = msg.hidden || this.root.closest('.lyrics-controls') ? bar.top : Math.min(bar.top, msg.getBoundingClientRect().top);
       const { body } = this.root.ownerDocument;
-      body.style.setProperty('--player-height', height);
+      body.style.setProperty('--player-height', `${bar.bottom - top}px`);
       body.classList.toggle('has-player', !this.root.hidden);
       this.placeQueue();
+      this.placeNotice();
     }
 
     /** 页面视图使用的接口：用法与 AmPlayer 相同，视图卸载（signal 中止）时注册的回调随之移除 */
@@ -2052,6 +2146,8 @@
       const msg = this.errorMsg;
       el.textContent = typeof msg === 'function' ? msg() : (msg || '');
       el.hidden = !msg;
+      if (msg) this.closeNotice();
+      this.layout();
     }
   }
 

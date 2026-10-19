@@ -72,7 +72,9 @@ async function checkNav(page, width) {
           if (url.href === 'https://example.com/master.m3u8') return route.fulfill({ body: master, contentType: 'application/vnd.apple.mpegurl' });
           if (url.pathname.startsWith('/lyrics/')) return route.fulfill({ status: 404, json: { code: 1, msg: 'lyrics not found' } });
           // 单页应用：页面地址返回 app.html，页面视图在 /assets/views/
-          const file = url.pathname.startsWith('/assets/lyrics/') ? path.join('lyrics', path.basename(url.pathname))
+          const file = url.pathname === '/assets/mv/style.css' ? 'mv.css'
+            : url.pathname.startsWith('/assets/mv/') ? 'mv-' + path.basename(url.pathname)
+            : url.pathname.startsWith('/assets/lyrics/') ? path.join('lyrics', path.basename(url.pathname))
             : url.pathname.startsWith('/assets/views/') ? path.join('views', path.basename(url.pathname))
             : url.pathname.startsWith('/assets/') ? path.basename(url.pathname) : 'app.html';
           const type = file.endsWith('.css') ? 'text/css' : /\.m?js$/.test(file) ? 'text/javascript' : 'text/html';
@@ -107,19 +109,30 @@ async function checkNav(page, width) {
         await checkNav(page, width);
         await toggleLang(page);
         await fits('language switch');
-        // Exercise the real fixed player layout with a multiline codec notice.
+        // Exercise the real fixed player layout: the codec notice pops up from the mode badge, errors float above the bar
         await page.evaluate(() => {
-          const p = document.getElementById('player');
-          p.hidden = false;
-          document.body.classList.add('has-player');
-          p.querySelector('.player-title').textContent = 'Long song title '.repeat(10);
-          p.querySelector('.player-notice').hidden = false;
-          p.querySelector('.player-notice').textContent = AmI18n.t('player.pcmNotice');
+          const { player } = window.AmApp;
+          player.current = { id: 'x', track: '1', mode: 'ec3', title: 'Long song title '.repeat(10) };
+          player.show();
+          player.renderTrackText();
+          player.renderMode();
         });
+        await page.locator('.player-notice:not([hidden])').waitFor();
+        assert.equal(await page.locator('.player-notice').textContent(), await page.evaluate(() => AmI18n.t('player.pcmNotice')), 'the notice opens by itself the first time');
+        const notice = await page.locator('.player-notice').boundingBox();
+        assert(notice.x >= 0 && notice.x + notice.width <= width, 'the notice fits the viewport');
+        await page.mouse.click(5, 5);
+        assert(await page.locator('.player-notice').isHidden(), 'clicking elsewhere closes the notice');
+        await page.locator('.player-mode').click();
+        assert(await page.locator('.player-notice').isVisible(), 'the mode badge reopens the notice');
+        await page.evaluate(() => window.AmApp.player.showError(AmI18n.t('player.pcmNotice')));
         await page.waitForTimeout(100);
         await fits('player');
         if (width === 390 && lang === 'en') await page.screenshot({ path: 'target/ui-mobile.png', fullPage: true });
-        assert(await page.evaluate(() => parseFloat(getComputedStyle(document.body).paddingBottom) > document.getElementById('player').getBoundingClientRect().height), 'player clearance must include notices');
+        assert(await page.evaluate(() => {
+          const top = document.querySelector('.player-msg').getBoundingClientRect().top;
+          return innerHeight - parseFloat(getComputedStyle(document.body).paddingBottom) <= top;
+        }), 'player clearance must include the error message');
         await page.locator('.more-btn').last().click();
         await fits('menu with player');
         await page.keyboard.press('Escape');

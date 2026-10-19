@@ -70,7 +70,9 @@ const amllTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
               : route.fulfill({ status: 404, json: { code: 1, msg: 'lyrics not found' } });
           }
           // 单页应用：页面地址返回 app.html，页面视图在 /assets/views/
-          const file = url.pathname.startsWith('/assets/lyrics/') ? path.join('lyrics', path.basename(url.pathname))
+          const file = url.pathname === '/assets/mv/style.css' ? 'mv.css'
+            : url.pathname.startsWith('/assets/mv/') ? 'mv-' + path.basename(url.pathname)
+            : url.pathname.startsWith('/assets/lyrics/') ? path.join('lyrics', path.basename(url.pathname))
             : url.pathname.startsWith('/assets/views/') ? path.join('views', path.basename(url.pathname))
             : url.pathname.startsWith('/assets/') ? path.basename(url.pathname) : 'app.html';
           const type = file.endsWith('.css') ? 'text/css' : /\.m?js$/.test(file) ? 'text/javascript' : 'text/html';
@@ -279,7 +281,8 @@ const amllTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
         const panel = await page.locator('.lyric-panel').boundingBox();
         const bar = await page.locator('#player').boundingBox();
         const overlaps = (a, b) => a.x < b.x + b.width - 1 && b.x < a.x + a.width - 1 && a.y < b.y + b.height - 1 && b.y < a.y + a.height - 1;
-        assert(!overlaps(panel, bar), 'lyrics and the player controls must not overlap');
+        // 手机上歌词区延伸到底部，控件叠在其下部（歌词在控件上方渐隐，见 app.css），只在宽屏检查
+        if (width >= 484) assert(!overlaps(panel, bar), 'lyrics and the player controls must not overlap');
         assert(bar.y + bar.height <= 844, 'player controls stay on screen');
         assert(await page.locator('#lyrics-overlay .lyrics-controls #player').count(), 'the player moves into the lyrics view');
         assert(await page.locator('.player-notice').isHidden(), 'playback notices are hidden in the lyrics view');
