@@ -1,4 +1,4 @@
-// HLS parsing stays in the browser. Only PlayReady key declarations are used.
+// HLS parsing stays in the browser. Only PlayReady key declarations are used; some older MVs are unencrypted.
 export function attributes(value) {
   const result = {};
   const re = /([A-Z0-9-]+)=(?:"([^"]*)"|([^,]*))(?:,|$)/g;
@@ -83,7 +83,7 @@ export function mvQualityVars(video, audio) {
 }
 export function parseMedia(text, url) {
   if (!text.trimStart().startsWith('#EXTM3U')) throw new Error('Invalid HLS media playlist');
-  const segments = []; let init, key, duration, range, time = 0, previous;
+  const segments = []; let init, key, encrypted = false, duration, range, time = 0, previous;
   function resource(uri, spec) {
     const r = { url: absolute(uri, url) };
     if (spec) {
@@ -100,7 +100,8 @@ export function parseMedia(text, url) {
     const line = raw.trim();
     if (line.startsWith('#EXT-X-KEY:')) {
       const a = attributes(line.slice(11));
-      if (a.METHOD === 'NONE') key = null;
+      encrypted = a.METHOD !== 'NONE';
+      if (!encrypted) key = null;
       else if (a.KEYFORMAT === 'com.microsoft.playready') {
         if (!a.URI?.startsWith('data:') || !a.URI.includes(';base64,')) throw new Error('Unsupported PlayReady key URI');
         key = a.URI;
@@ -112,11 +113,12 @@ export function parseMedia(text, url) {
     else if (line === '#EXT-X-DISCONTINUITY') throw new Error('Discontinuous MV playlists are not supported');
     else if (line && !line.startsWith('#')) {
       if (!init || !Number.isFinite(duration) || duration <= 0) throw new Error('Missing init or segment duration');
+      if (encrypted && !key) throw new Error('No PlayReady key for encrypted MV media');
       segments.push({ ...resource(line, range), init, key, start: time, duration });
       time += duration; duration = undefined; range = undefined;
     }
   }
-  if (!segments.length || !segments.some(s => s.key)) throw new Error('No PlayReady media found');
+  if (!segments.length) throw new Error('No MV media segments found');
   if (!text.includes('#EXT-X-ENDLIST')) throw new Error('Only completed MV playlists are supported');
   return { segments, duration: time, init: segments[0].init };
 }

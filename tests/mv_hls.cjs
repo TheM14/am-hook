@@ -47,5 +47,18 @@ next.m4s
   assert.throws(() => parseMedia(playlist.replace('#EXT-X-ENDLIST', ''), base), /completed/);
   assert.throws(() => parseMedia(playlist.replace('20\nmedia.mp4', '20\nother.mp4'), base), /offset/);
   assert.throws(() => parseMedia(playlist.replace('#EXTINF:4,', '#EXT-X-DISCONTINUITY\n#EXTINF:4,'), base), /Discontinuous/);
+  // Some older MVs are unencrypted: no EXT-X-KEY at all.
+  const clear = parseMedia(`#EXTM3U
+#EXT-X-MAP:URI="clear-0.mp4"
+#EXTINF:9.5,
+clear-1.m4s
+#EXTINF:8,
+clear-2.m4s
+#EXT-X-ENDLIST`, base);
+  assert.deepEqual(clear.segments.map(s => s.key), [undefined, undefined]);
+  assert.equal(clear.duration, 17.5);
+  // Encrypted without a PlayReady key cannot be decrypted.
+  assert.throws(() => parseMedia(playlist.replace(/KEYFORMAT="com\.microsoft\.playready"/g, 'KEYFORMAT="other"'), base), /No PlayReady key/);
+  assert.equal(parseMedia(playlist.replace('#EXTINF:4,', '#EXT-X-KEY:METHOD=NONE\n#EXTINF:4,'), base).segments[2].key, null);
   console.log('MV HLS: link validation, variants, defaults, key rotation, byte ranges and malformed input passed.');
 })().catch(e => { console.error(e); process.exitCode = 1; });
