@@ -1,14 +1,81 @@
+<div align="center">
+
 # am-hook
 
+**在浏览器里听 Apple Music：无损、杜比全景声与 MV，全部由 WebAssembly 在本地解密。**
+
+[![Release](https://img.shields.io/github/v/release/itouakirai/am-hook)](https://github.com/itouakirai/am-hook/releases/latest)
+[![Build Test](https://github.com/itouakirai/am-hook/actions/workflows/build-test.yml/badge.svg)](https://github.com/itouakirai/am-hook/actions/workflows/build-test.yml)
+[![License: AGPL-3.0-only](https://img.shields.io/badge/license-AGPL--3.0--only-blue)](LICENSE)
+
 中文 | [English](README.md)
+
+![am-hook：桌面端的新发现页与手机上的专辑页](docs/home.zh-CN.png)
+
+</div>
 
 一个用 Rust 编写的 Apple Music 解密工具，支持歌曲（FairPlay HLS）和 MV（PlayReady HLS）。
 
 **解密完全在浏览器中完成**：服务端只与 wrapper-lite 通信（master 播放列表、解密模板、许可证），媒体数据由浏览器直接从 Apple CDN 获取，并在 Web Worker 中用 WebAssembly 解密，不消耗服务器流量。
 
-![am-hook 首页](docs/home.zh-CN.png)
+## 目录
+
+- [亮点](#亮点)
+- [截图](#截图)
+- [快速开始](#快速开始)
+  - [环境要求](#环境要求)
+  - [打开 Apple Music 链接](#打开-apple-music-链接)
+- [部署](#部署)
+  - [Serverless 部署（Vercel / Cloudflare）](#serverless-部署vercel--cloudflare)
+  - [使用本地 wrapper-lite](#使用本地-wrapper-lite)
+- [使用指南](#使用指南)
+  - [界面与导航](#界面与导航)
+  - [播放器](#播放器)
+  - [页面一览](#页面一览)
+  - [歌曲](#歌曲)
+  - [歌词与全屏播放界面](#歌词与全屏播放界面)
+  - [MV](#mv)
+  - [广播与电台](#广播与电台)
+  - [资料库与歌单](#资料库与歌单)
+  - [批量下载与设置中心](#批量下载与设置中心)
+- [工作原理](#工作原理)
+- [参考](#参考)
+  - [命令行参数](#命令行参数)
+  - [服务端接口](#服务端接口)
+- [开发](#开发)
+  - [构建](#构建)
+  - [测试](#测试)
+  - [项目结构](#项目结构)
+- [许可证](#许可证)
+
+## 亮点
+
+- **全部音质**：无损 ALAC（最高 24-bit / 192 kHz）、杜比全景声、AAC、HE-AAC、双耳与缩混版本，以及最高 4K 杜比视界、全景声音轨的 MV。
+- **浏览器内解密**：Web Worker 中的 WebAssembly 完成解密，媒体数据不经过服务器。
+- **到处都能播**：内置无缝衔接的播放器与播放队列，ALAC 转 FLAC、EC-3 转 PCM 兜底，支持系统媒体控制。
+- **与 music.apple.com 一样的体验**：搜索、新发现、排行榜、广播，专辑 / 歌单 / 艺人 / 编辑页，以及由 [AMLL](https://github.com/amll-dev/applemusic-like-lyrics) 渲染的逐字歌词。
+- **完整的下载**：单曲或整张专辑 / 歌单，写入 iTunes 标签、封面与歌词，可保存为 ZIP / 文件夹 / 逐个文件，支持文件名模板。
+- **本地资料库**：资料库、歌单、喜爱与文件夹保存在浏览器的 IndexedDB 中，可导入 / 导出。
+- **部署方式随意**：单个二进制，或一键部署到 Vercel / Cloudflare Workers。
+
+## 截图
+
+<table>
+  <tr>
+    <td width="33%"><img src="docs/screenshots/album.zh-CN.png" alt="专辑页"></td>
+    <td width="33%"><img src="docs/screenshots/artist.zh-CN.png" alt="艺人页"></td>
+    <td width="33%"><img src="docs/screenshots/charts.zh-CN.png" alt="排行榜"></td>
+  </tr>
+  <tr>
+    <td align="center">专辑</td>
+    <td align="center">艺人</td>
+    <td align="center">排行榜</td>
+  </tr>
+</table>
 
 ## 快速开始
+
+从 [Releases](https://github.com/itouakirai/am-hook/releases/latest) 下载 Windows / Linux / macOS 的预编译二进制，或自行构建：
 
 ```sh
 cargo build --release
@@ -17,7 +84,20 @@ cargo build --release
 am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
 ```
 
-浏览器打开 `http://127.0.0.1:8888/` 粘贴链接即可。也可以把 Apple Music 链接直接拼在服务地址后面打开对应页面：
+浏览器打开 `http://127.0.0.1:8888/`，粘贴链接或搜索即可。
+
+### 环境要求
+
+- 运行中的 [wrapper-lite](https://github.com/WorldObservationLog/wrapper) 密钥服务（默认 `http://127.0.0.1:12340`）
+- 支持 Web Worker 和 WebAssembly 的现代浏览器。播放使用 MediaSource（EC-3 PCM 回退使用 Web Audio）；MV 下载需要 OPFS。
+- Rust 2021 edition 工具链（仅从源码构建时需要）
+
+> [!NOTE]
+> OPFS 只在安全上下文中可用，也就是 HTTPS 或 `localhost` / `127.0.0.1`。通过 `http://<局域网 IP>` 访问时，歌曲下载退回内存 Blob（大文件占用较多内存），MV 无法下载；播放不受影响。
+
+### 打开 Apple Music 链接
+
+也可以把 Apple Music 链接直接拼在服务地址后面打开对应页面：
 
 | 首页输入 | 打开的页面 |
 |---|---|
@@ -28,17 +108,13 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
 | `https://music.apple.com/cn/playlist/<slug>/<pl.id>` | `/https://music.apple.com/cn/playlist/<slug>/<pl.id>` |
 | `https://music.apple.com/cn/artist/<slug>/<id>` | `/https://music.apple.com/cn/artist/<slug>/<id>` |
 
-例如：`http://127.0.0.1:8888/https://music.apple.com/cn/music-video/super-bowl-lix-halftime-show-live/1836358807`。链接中的国家代码决定获取展示信息时使用的地区。
+例如：`http://127.0.0.1:8888/https://music.apple.com/cn/music-video/super-bowl-lix-halftime-show-live/1836358807`。链接中的国家代码决定获取展示信息时使用的地区。电台、编辑页与排行榜的链接同样可以打开，见[页面一览](#页面一览)。
 
-### 环境要求
+## 部署
 
-- Rust 2021 edition 工具链
-- 运行中的 [wrapper-lite](https://github.com/WorldObservationLog/wrapper) 密钥服务（默认 `http://127.0.0.1:12340`）
-- 支持 Web Worker 和 WebAssembly 的现代浏览器。播放使用 MediaSource（EC-3 PCM 回退使用 Web Audio）；MV 下载需要 OPFS。
+[快速开始](#快速开始)中的二进制功能最完整：转发 wrapper-lite 时可以限速限并发（见[命令行参数](#命令行参数)），通过普通的 `http://<局域网 IP>` 也能使用。下面的方式不需要二进制。
 
-> OPFS 只在安全上下文中可用，也就是 HTTPS 或 `localhost` / `127.0.0.1`。通过 `http://<局域网 IP>` 访问时，歌曲下载退回内存 Blob（大文件占用较多内存），MV 无法下载；播放不受影响。
-
-## Serverless 部署（Vercel / Cloudflare）
+### Serverless 部署（Vercel / Cloudflare）
 
 不想运行二进制的话，可以把同一套页面部署到 serverless 平台：静态资源由平台托管，后端只剩一个函数（amp-api 目录代理、MV master 获取与电台接口）。两个平台任选其一：
 
@@ -62,6 +138,7 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
 | `AM_HOOK_WRAPPER_AUTH` | 可选，wrapper-lite 请求的 `Authorization`，规则与 `--wrapper-auth` 相同 |
 | `AM_HOOK_WRAPPER_HINT` | 可选，显示在本地 wrapper-lite 设置上方的提示，同 `--wrapper-hint` |
 
+> [!WARNING]
 > 设置 `AM_HOOK_WRAPPER_URL` 后，能打开站点的人都能使用你的 wrapper-lite（也就是你的 Apple 账号）。请用平台的访问控制（Vercel Deployment Protection、Cloudflare Access）限制访问。函数实例之间不共享状态，这里没有 `--wrapper-rate` / `--wrapper-concurrency` 那样的限速与限并发。
 
 与二进制的其他区别：
@@ -70,7 +147,18 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
 - 没有命令行参数、请求日志与自动更新。
 - Vercel 上页面地址由 `vercel.json` 的改写规则匹配，比二进制宽松：`/library/…`、`/new/…` 与 `/https://music.apple.com/<cc>/…` 下无效的地址也返回页面外壳而不是 404。
 
-## Web 界面
+### 使用本地 wrapper-lite
+
+导航底部的「wrapper-lite」设置可以在两种方式间切换（保存在浏览器中）：
+
+- **服务端**（默认）：wrapper-lite 请求经 am-hook 转发，限速、限并发与 `Authorization` 由 `--wrapper-*` 参数决定。[Serverless 部署](#serverless-部署vercel--cloudflare)没有设置 `AM_HOOK_WRAPPER_URL`、或二进制以 `--local-wrapper-only` 启动时没有这一项。
+- **本地**：浏览器直接请求你自己的 wrapper-lite（`/status`、`/m3u8`、`/key`、`/lyrics`、`/webplayback`、`/license`），在面板中填写地址、每秒请求数上限、同时请求数上限与 `Authorization`（规则与 `--wrapper-auth` 相同）。限制只作用于当前页面。地址可以带用户信息（如 `https://<token>@host`），与 `--wrapper-url` 相同，转为 `Authorization: Basic …` 发送；单独填写的 `Authorization` 优先。
+  - 请求是跨源的：wrapper-lite 需允许跨源请求（返回 `Access-Control-Allow-Origin`，填了 `Authorization` 时还需在预检中允许该请求头），或在浏览器中安装解除跨域限制的插件。
+  - MV 的 master 播放列表仍由 am-hook 以 `User-Agent: AM` 获取，其余 MV 请求（`/webplayback`、`/license`）直连本地 wrapper-lite。
+
+## 使用指南
+
+### 界面与导航
 
 - 界面支持中文 / English，导航底部的「界面语言」一键切换（会记住选择；首次访问按浏览器语言决定）。切换时正在进行的播放和下载不受影响。
 - 导航底部的设置，保存在 localStorage，不会过期：
@@ -78,73 +166,60 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
   - 曲库语言（amp-api 的 `l`，与界面语言相互独立）：默认为各地区的默认语言，可选项只有 `/amp/v1/storefronts` 中该地区的 `supportedLanguageTags`。按地区分别记住，歌词也使用它。
 - 首页显示 wrapper-lite 状态，以及最近搜索的关键词（点击可再次搜索，也可逐条删除）；页面底部有本项目的 GitHub 链接和对所用开源项目的致谢。
 - 搜索：首页输入框既能粘贴链接，也能按关键词搜索（与 music.apple.com 相同的 amp-api 请求）。输入时显示补全词与直达结果；结果按最佳结果、艺人、专辑、歌曲、歌单、MV 分组，可「加载更多」。搜索使用主地区，也可在结果旁的按钮里修改。按 `/` 聚焦输入框；搜索词记在地址栏 `?q=` 中，可前进 / 后退与分享。搜索只在首页；其他页面顶部是「返回」按钮，回到上一页（直接打开链接进入时回到首页）。
-- 全局播放条：与 music.apple.com 相同，底部播放条常驻，在站内页面之间跳转时播放不中断。
-  - 专辑、歌单、艺人页开始的播放队列在离开页面后继续按顺序播放，系统媒体控制的上一首 / 下一首同样可用；在歌曲页单独播放另一首歌会结束队列，切换同一首歌的音质则保留。
-  - 与 music.apple.com 相同，整个队列共用一个 MediaSource：下一首提前获取并接在当前歌曲之后，歌曲之间 `<audio>` 不停止。切到其他应用（包括全屏应用）时后台也能无缝切歌，Android 通知栏的媒体卡片不会消失。EC-3 PCM 播放的歌曲仍在上一首结束后再切换。
-  - 播放控件与 music.apple.com 相同：随机播放、上一首（已播放超过 3 秒时回到开头）、播放 / 暂停、下一首、重复播放（关 → 全部 → 单曲）。随机与重复状态会记住；专辑、歌单、艺人页的「随机播放」开启随机，「播放」按顺序播放。快退 / 快进用 ← / → 键或系统媒体控制。
-  - 待播清单：点播放条右侧的列表按钮打开。单击选中、双击播放，拖动整行调整顺序；悬停时封面左上角的 − 移出清单，「清除」清空后续歌曲。键盘 ↑/↓ 选择、Enter 播放、Delete 移除、Alt+↑/↓ 移动。触屏上点按播放、拖动右侧把手排序，随机 / 重复按钮在清单标题旁。
-  - 地址栏、页面标题和浏览器前进 / 后退跟随当前页面，链接可以直接分享，刷新后仍停留在当前页。
-  - 空格 / 方向键在任何页面都能控制播放；播放 MV 时会暂停音乐，反之亦然。
-  - 实现方式：与 music.apple.com 相同，整站是单页应用。服务端对所有页面地址都返回 `app.html`，播放条、音频、解密 Worker 和歌词界面常驻其中；站内链接由前端路由（`app.mjs`）接管，用 `history.pushState` 改地址并切换页面视图（`src/ui/views/`），文档不重新加载。不依赖任何请求头，通过 `http://<局域网 IP>` 访问时同样有效。
+- 地址栏、页面标题和浏览器前进 / 后退跟随当前页面，链接可以直接分享，刷新后仍停留在当前页。
+- 实现方式：与 music.apple.com 相同，整站是单页应用。服务端对所有页面地址都返回 `app.html`，播放条、音频、解密 Worker 和歌词界面常驻其中；站内链接由前端路由（`app.mjs`）接管，用 `history.pushState` 改地址并切换页面视图（`src/ui/views/`），文档不重新加载。不依赖任何请求头，通过 `http://<局域网 IP>` 访问时同样有效。
 
-### 资料库与歌单
+### 播放器
 
-与 music.apple.com 的「资料库」「歌单」相同，但**只保存在你的浏览器中**（IndexedDB）。服务端不保存任何资料库数据，也不需要账号；除了平常的目录请求，数据不会离开浏览器。
+与 music.apple.com 相同，底部播放条常驻，在站内页面之间跳转时播放不中断。
 
-- 侧边栏：「资料库」分组（最近添加、艺人、专辑、歌曲、音乐视频）与「歌单」分组（所有歌单，然后是各个歌单；+ 新建歌单）。页面地址在 `/library/...` 下，刷新与（同一浏览器中）打开链接都能回到原页面。
-- 添加：各处的「更多」菜单（搜索结果、货架、专辑 / 歌单 / 艺人 / 排行榜的曲目行）都有**添加到资料库** / **从资料库中删除**与**添加到歌单**子菜单（新建歌单…，然后是你的歌单，最近修改的在前）。专辑页、歌单页的播放按钮旁有 +，歌曲页有资料库与添加到歌单按钮。与 Apple Music 相同：添加专辑会同时添加其中全部歌曲与 MV；只添加单曲时，它的专辑与艺人也会出现在资料库中；删除专辑会一并删除其中的歌曲；添加 Apple Music 歌单只添加歌单本身（打开的仍是目录中的最新歌单）。歌单里已有的曲目会跳过。
-- 资料库页面：歌曲（播放 / 随机播放筛选后的列表，按标题、艺人、专辑、添加时间或时长排序，长列表随滚动渲染）、专辑与音乐视频网格、艺人（列表旁显示所选艺人的专辑与歌曲，手机上点进各艺人）、最近添加、所有歌单。每页都可以筛选，排序方式会记住。
-- 歌单（`/library/playlist/p.<id>`）：封面为前四张不同专辑封面拼成的 2×2 图，名称与描述（编辑）、播放 / 随机播放、拖动把手排序（鼠标与触屏相同，把手获得焦点时也可按 ↑ / ↓）、从歌单中删除、复制、导出与删除。歌单保存每首曲目的快照（歌名、艺人、专辑、封面、时长），打开时不需要请求目录，也可以包含不在资料库中的歌曲。
-- 导入 / 导出（资料库页面的 ⋯ 菜单）：**导出资料库**保存 `am-hook-library-<日期>.json`，包含全部资料库条目与歌单；**导出歌单**保存单个歌单（`<名称>.am-hook-playlist.json`），方便分享。**导入…** 两种文件都能读：整库文件可以选择合并（保留现有内容，同一 id 的歌单保留较新的一份）或替换；歌单文件直接加入并打开。每一条都会校验：只保留 `/https://music.apple.com/...` 页面链接与 https 图片地址，无效条目跳过，分享来的文件无法注入链接或脚本。**清空资料库…** 确认后删除全部内容。
-- 喜爱：与 Apple Music 相同，歌曲、MV、专辑、歌单（Apple Music 歌单与自己的歌单）和艺人都可以喜爱——各处「更多」菜单中的**喜爱** / **取消喜爱**，专辑页与歌单页的 + 旁、歌曲页以及艺人页操作行里的 ☆。喜爱的同时加入资料库（喜爱的艺人即使没有歌曲也会出现在「艺人」中）。喜爱的曲目带星形标记；歌曲、专辑、艺人、音乐视频与所有歌单页面有**喜爱**筛选。**喜爱的歌曲**（`/library/favorite-songs`，在侧边栏中，也排在所有歌单的最前面）是由喜爱的歌曲自动组成的歌单，最近喜爱的在前；取消喜爱即移出，「存储为歌单」可以复制成普通歌单。
-- 歌单文件夹（`/library/playlist-folder/f.<id>`）：在「歌单」旁的 + 或 ⋯ 菜单中新建，可以嵌套；自己的歌单与添加的 Apple Music 歌单都能放进去——用**移到文件夹**（「更多」菜单与歌单页），或在侧边栏把歌单、文件夹拖到另一个文件夹上（拖到「歌单」标题上移到最上层）。侧边栏中文件夹在前，可以展开 / 收起（会记住；打开的歌单所在文件夹会自动展开）。文件夹页显示路径、子文件夹与歌单，可以新建歌单、新建文件夹、重命名、移动、导出文件夹与删除文件夹。与 Apple Music 相同，删除文件夹会一并删除其中的全部内容（确认时显示数量）；文件夹不能移到自身或自己的子文件夹里。
-- 存储说明：数据按浏览器、按站点地址分开（`http://127.0.0.1:8888` 与 `http://<局域网 IP>:8888` 是两个资料库），换浏览器或地址时请导出再导入。同一浏览器的多个标签页会自动同步。浏览器不允许使用 IndexedDB 时（部分隐私模式），资料库只在本次会话的内存中，资料库页面会给出提示。
+- 专辑、歌单、艺人页开始的播放队列在离开页面后继续按顺序播放，系统媒体控制的上一首 / 下一首同样可用；在歌曲页单独播放另一首歌会结束队列，切换同一首歌的音质则保留。
+- 与 music.apple.com 相同，整个队列共用一个 MediaSource：下一首提前获取并接在当前歌曲之后，歌曲之间 `<audio>` 不停止。切到其他应用（包括全屏应用）时后台也能无缝切歌，Android 通知栏的媒体卡片不会消失。EC-3 PCM 播放的歌曲仍在上一首结束后再切换。
+- 播放控件与 music.apple.com 相同：随机播放、上一首（已播放超过 3 秒时回到开头）、播放 / 暂停、下一首、重复播放（关 → 全部 → 单曲）。随机与重复状态会记住；专辑、歌单、艺人页的「随机播放」开启随机，「播放」按顺序播放。快退 / 快进用 ← / → 键或系统媒体控制。
+- 待播清单：点播放条右侧的列表按钮打开。单击选中、双击播放，拖动整行调整顺序；悬停时封面左上角的 − 移出清单，「清除」清空后续歌曲。键盘 ↑/↓ 选择、Enter 播放、Delete 移除、Alt+↑/↓ 移动。触屏上点按播放、拖动右侧把手排序，随机 / 重复按钮在清单标题旁。
+- 空格 / 方向键在任何页面都能控制播放；播放 MV 时会暂停音乐，反之亦然。
 
-文件格式（版本 1）：
+### 页面一览
 
-```jsonc
-{
-  "format": "am-hook-library", "version": 1, "exportedAt": "2026-10-04T12:00:00.000Z",
-  "items": [   // 资料库：kind 为 song / music-video / album / playlist（Apple Music 歌单），addedAt 为毫秒
-    { "kind": "song", "id": "1468058171", "country": "cn", "name": "…", "artist": "…", "artists": [{ "name": "…", "href": "/https://music.apple.com/cn/artist/…/159260351" }],
-      "album": "…", "albumId": "1468058165", "albumHref": "/https://music.apple.com/cn/album/…/1468058165", "href": "/https://music.apple.com/cn/song/…/1468058171",
-      "artwork": "https://…/{w}x{h}bb.jpg", "bgColor": "1d1d1f", "duration": 221000, "explicit": false, "addedAt": 1759579200000 }
-  ],
-  "playlists": [   // 本地歌单：tracks 为同样的曲目快照，另加 uid / addedAt
-    { "id": "p.Ab3dE…", "name": "…", "description": "…", "folderId": "f.Xy9…", "favorite": 0, "createdAt": 1759579200000, "updatedAt": 1759579300000, "tracks": [ { "uid": "…", "addedAt": 1759579200000, "kind": "song", "id": "…" } ] }
-  ],
-  "folders": [   // 歌单文件夹；最上层的 parentId 为空
-    { "id": "f.Xy9…", "name": "…", "parentId": "", "createdAt": 1759579200000, "updatedAt": 1759579200000 }
-  ]
-}
-```
+下面的页面都是单页应用的路由：服务端返回 `app.html`，页面经 `/amp` 从 amp-api 加载数据。
 
-条目与歌单上的 `favorite`（毫秒，0 为未喜爱）、歌单与 Apple Music 歌单条目上的 `folderId`、`folders` 以及 `artist` 条目（喜爱的艺人）是后来加入的可选字段，因此版本号仍为 1：旧版本也能导入新文件，只是跳过不认识的内容。「导出文件夹」包含该文件夹、其子文件夹与其中的歌单。导入时指向不存在的文件夹或文件夹之间成环的，移到最上层。浏览器中的数据库升级为版本 2（新增 `folders`），已有的资料库原地升级。
+| 页面 | 说明 |
+|---|---|
+| `/` | 首页：搜索、wrapper-lite 状态与最近搜索 |
+| `/https://music.apple.com/<cc>/song/<slug>/<id>` | 歌曲页（见[歌曲](#歌曲)） |
+| `/https://music.apple.com/<cc>/music-video/<slug>/<id>` | MV 页（见 [MV](#mv)） |
+| `/https://music.apple.com/<cc>/post/<id>` | 艺人上传的视频（MV 页） |
+| `/https://music.apple.com/<cc>/album/<slug>/<id>` | 专辑页（与 music.apple.com 相同的 `editorialVideo` 动态封面：宽屏方形、手机全宽 3:4；曲目列表、连续播放、相关推荐货架；数据来自与 music.apple.com 相同的 amp-api `albums` 请求）。带 `?i=` 的专辑链接与 music.apple.com 一样打开专辑页，选中（高亮）该曲目并滚动到它 |
+| `/https://music.apple.com/<cc>/playlist/<slug>/<pl.id>` | 歌单页（编辑歌单与公开的用户歌单：与专辑页相同的动态封面；曲目带封面、艺人、专辑列；连续播放；精选艺人、策展人的更多歌单货架；数据来自与 music.apple.com 相同的 amp-api `playlists` 请求，经 `/amp` 获取） |
+| `/https://music.apple.com/<cc>/artist/<slug>/<id>` | 艺人页（与 music.apple.com 相同的头部：按目录数据显示动态视频、通栏图片或圆形头像；最新发行、歌曲排行与连续播放、专辑 / MV / 歌单 / 相似艺人货架与「显示全部」、艺人简介；数据来自与 music.apple.com 相同的 amp-api `artists` 请求，经 `/amp` 获取）。歌曲页、MV 页、专辑页的艺人名（多位艺人时各自单独链接）与艺人货架都链接到这里 |
+| `/new` | 新发现（侧边栏的「新发现」）：与 music.apple.com/{cc}/new 相同的编辑区块（amp-api `editorial/{cc}/groupings?name=music`），使用主地区，切换后重新加载——hero 大卡、四行曲目货架、专辑 / 歌单 / 电台 / 视频货架（列数与官网 shelf-grid 相同）与「探索更多」链接；`/https://music.apple.com/<cc>/new` 为固定地区 |
+| `/new/top-charts[/<kind>]` | 排行榜（新发现「探索更多」中的链接，与 music.apple.com/{cc}/new/top-charts 相同，amp-api `catalog/{cc}/charts`，使用主地区）：带名次的热门歌曲（三行）、城市排行榜、每周热门 100 首，以及带名次的热门歌单 / 专辑 / 视频。各榜单的「查看全部」（`songs`、`playlists`、`albums`、`music-videos`，另有 `city-charts`、`daily-global-top-charts`）列出整个榜单并滚动分页，歌曲与歌单页的榜单行相同；歌曲、专辑、视频榜可按类型筛选（`?genreId=`，类型来自 `catalog/{cc}/genres`）；`/https://music.apple.com/<cc>/new/top-charts[/<kind>]` 为固定地区 |
+| `/https://music.apple.com/<cc>/room/<id>`、`.../multi-room/<id>`、`.../grouping/<id>`、`.../curator/<slug>/<id>` | 编辑页，路由与 music.apple.com 相同：room 为区块的「查看全部」（全部内容的网格，滚动时分页加载）；multi-room（`editorial/{cc}/multirooms`，头图 + 区块）、grouping（`editorial/{cc}/groupings/{id}`，如「音乐视频」与各风格页）与 curator（`catalog/{cc}?ids[apple-curators]=`：其分组的区块，或全部歌单）沿用新发现的排版。编辑数据中的旧式链接（`collection/...?fcId=`、`viewGrouping?id=`、`viewFeature?id=`）在站内打开这些页面；电台打开本站的电台页，其他本站无法打开的内容链接到 Apple Music。在首页粘贴这些链接同样可以打开 |
+| `/radio` | 广播（侧边栏的「广播」）：与 music.apple.com/{cc}/radio 相同的编辑区块，使用主地区，填过 media-user-token 时另有「你的电台」；`/https://music.apple.com/<cc>/radio` 为固定地区 |
+| `/https://music.apple.com/<cc>/station/<slug>/ra.<id>` | 电台页：个人 / 编辑电台为接下来几首的曲目列表，直播电台与广播单集为 MV 页布局的播放与下载（见[广播与电台](#广播与电台)） |
+| `/library[/<分类>]`、`/library/artists/<名称>`、`/library/playlist/p.<id>`、`/library/favorite-songs`、`/library/playlist-folder/f.<id>` | 资料库页面（分类 `recently-added`、`artists`、`albums`、`songs`、`music-videos`、`all-playlists`）、本地歌单、喜爱的歌曲与歌单文件夹。资料库数据保存在浏览器的 IndexedDB 中（`src/ui/library.mjs`），见[资料库与歌单](#资料库与歌单) |
+| `/settings` | 设置中心（下载设置等）。设置保存在浏览器中（`src/ui/prefs.mjs`），见[批量下载与设置中心](#批量下载与设置中心) |
 
 ### 歌曲
 
 - 自动解析全部音质（无损 ALAC / 杜比全景声 / AAC / HE-AAC，含双耳、缩混版本），显示封面、歌名等信息（经服务端 `/amp` 代理请求 Apple Music 目录接口 amp-api）。
 - 每个音质的「更多」菜单中有 **下载解密文件**：在浏览器内解密并写入标签、封面与歌词（按设置中心的下载设置），显示进度，可随时取消。离开歌曲页后下载在后台继续（进度也在下载中心），完成后照常保存；回到该歌曲页时接着显示进度（关闭或刷新标签页会中断）。
 - 内置播放器：MSE 加浏览器端解密。浏览器不支持 ALAC 时通过 FLAC-in-MP4 无损播放；EC-3 的 MSE 不可用时回退为多声道 PCM，并提示空间音频限制。下载保留原始编码。支持空格 / 方向键和系统媒体控制。
-- 歌词：正在播放的歌曲有歌词时，播放条上出现「歌词」按钮（在任何页面都能打开，切歌后自动换成新歌的歌词）。歌词视图由 [AMLL（Apple Music-like Lyrics）](https://github.com/amll-dev/applemusic-like-lyrics) 渲染：逐词 / 逐行高亮与弹簧滚动、和声、对唱、翻译与发音、间奏圆点，点击任意一行即可跳转。背景是 AMLL 由专辑封面生成的流动网格渐变，也可以选引入 AMLL 前的经典背景（仿 Apple Music 网页版，由多份旋转的封面经扭曲、模糊生成；浏览器不支持 WebGL 时也用它），Esc 收起。点击播放条的封面、标题或空白处展开全屏播放界面（没有歌词的歌曲也能展开，只显示封面与播放控件）。同 music.apple.com，界面里的标题旁有喜爱（☆）与「更多」按钮（添加到资料库、添加到歌单、前往专辑、复制链接）；右下角的歌词按钮（手机上在播放控件下方）显示 / 隐藏歌词；按钮的位置同 music.apple.com——关闭在左上角，歌词翻译在右上角，播放按钮没有底色、居中排成一行，歌名与艺人各占一行、过长时滚动；手机上同官网的手机版：顶部是收起界面的下拉把手，显示歌词时标题行收成一行小封面，底部只有上一首 / 播放 / 下一首，下面是歌词开关与待播清单开关——待播清单占据歌词的位置，随机 / 重复在清单标题旁；隐藏时封面与播放控件居中，这个选择保存在浏览器中。右上角的歌词选项按钮（原来只有翻译菜单）可以切换翻译与发音、调整字号（70%–150%）与字重（细体到特粗）、在 Apple Music 与 [AMLL 歌词库](https://amll.dev/reference/http-api/overview)之间切换歌词来源（由浏览器按 Apple Music 歌曲 ID 直接查询，未收录的歌曲仍用 Apple Music 歌词；不选它时不会向它发送请求）、在 AMLL 与经典背景之间切换，以及下载当前显示的 TTML 歌词；除翻译与发音外都保存在浏览器中。
 
-### 批量下载与设置中心
+### 歌词与全屏播放界面
 
-- **设置中心**（`/settings`，侧边栏与手机菜单中「排行榜」下方的「设置」）：通用设置（主地区、曲库语言、界面语言、wrapper-lite，与导航底部相同）与下载设置，保存在 localStorage，修改立即生效（进行中的下载沿用开始时的设置），也为之后的播放设置预留了位置。下载设置参考 [apple-music-downloader](https://github.com/itouakirai/apple-music-downloader) 与 [amd.wol.moe](https://amd.wol.moe/)：
-  - 音质：首选音质（无损 ALAC / 杜比全景声 / AAC / AAC 双耳 / AAC 缩混 / HE-AAC）、ALAC 最高采样率、全景声上限（2768 / 2448）、没有首选音质时是否降级
-  - MV：下载专辑、歌单时是否一起下载其中的 MV，MV 最高分辨率（同参考实现的 `mv-max`：不超过该高度、平均码率最高的视频）与音轨（同 `mv-audio-type`：杜比全景声 → AC-3 → AAC、AC-3 → AAC 或只用 AAC）
-  - 性能：同时下载的曲目数、失败重试次数、是否用 OPFS 暂存
-  - 保存方式：**ZIP**（整张专辑 / 歌单一个文件，不压缩，超过 4 GiB 时为 ZIP64）、**文件夹**（File System Access API 直接写入选定的本地文件夹，可建子文件夹，可跳过已存在的文件；需要 Chrome / Edge 桌面版）、**逐个文件**；歌单可附带 `.m3u8` 播放列表
-  - 文件名模板：专辑 / 歌单文件夹（ZIP 名）、专辑曲目、歌单曲目、单曲；`/` 表示子文件夹，`{tracknum:02d}` 补零，变量有 `{title}` `{artist}` `{album}` `{album_artist}` `{composer}` `{genre}` `{tracknum}` `{tracktotal}` `{disk}` `{disktotal}` `{year}` `{release_date}` `{codec}` `{quality}` `{bit_depth}` `{sample_rate}` `{sample_rate_kHz}` `{explicit}` `{song_id}` `{album_id}` `{artist_id}` `{isrc}` `{upc}` `{record_label}` `{copyright}` `{playlist}` `{playlist_id}` `{curator}` `{index}`，编辑时实时预览；变量值里的 `/` 等非法字符替换为 `_`
-  - 标签：可选写入的字段（标题、艺人、专辑、专辑艺人、作曲、流派、发行日期、曲目号、碟号、歌词、封面、版权、厂牌、UPC、ISRC、分级、歌曲 / 专辑 / 艺人 ID），排序字段，歌单曲目使用原专辑信息或歌单信息，元数据语言
-  - 封面：JPEG / PNG / 原图、尺寸、另存 `cover.jpg`
-  - 歌词：另存 `.lrc` / `.ttml`、逐字（增强型 LRC）、附带翻译 / 发音、歌词语言
-- **下载**：专辑页与歌单页的下载按钮（播放、随机播放旁）打开对话框，可临时改音质并选择曲目（默认全部歌曲，以及设置中没有关闭时的 MV；未发行的曲目不能选择）；各处的「更多」菜单（曲目行、搜索结果、货架等）中的歌曲、MV、专辑与歌单也可直接下载；歌曲页各音质的「下载解密文件」同样经下载管理器（`src/ui/downloads.mjs`）进行，带标签。
-  - 每首歌在浏览器内解密后，`media.wasm` 在整理为标准 MP4 时把 iTunes 标签（`moov.udta.meta.ilst`，字段同 go-mp4tag）连同封面、歌词一起写入 `moov`，不需要第二次改写文件；封面与歌词与音频同时获取，取不到时只是不写入
-  - 元数据来自 amp-api `songs?ids=…&include=albums,artists` 与 `music-videos?ids=…`（每 100 首一次请求）：作曲、ISRC、曲目号 / 碟号，以及所属专辑的 UPC、版权、厂牌与曲目数
-  - MV 的下载同参考实现的 `mvDownloader`：从 wrapper-lite 取 MV master，按设置选视频与音轨，由 MV 引擎解密、合并并整理为 `.mp4`，文件名使用同样的模板（`{codec}` / `{quality}` 为视频与音频规格，如 `2160p HEVC Dolby Vision · Dolby Atmos`）。标签同参考实现的 `writeMVMP4Tags`（专辑信息取自专辑或歌单，另写 `PERFORMER`、`RELEASETIME`，封面为 MV 缩略图），媒体类型为音乐视频（`stik` 6）。需要 OPFS
-  - ZIP 不复制数据：由 OPFS 中的各个文件与头部拼成一个 Blob，CRC-32 在 defrag 写出时顺带计算
-- **下载中心**（`src/ui/download-center.mjs`）：与播放条一样常驻在页面底部（播放条上方），站内跳转时下载不中断；显示总进度、速度与当前任务，展开后列出各专辑 / 歌单 / 单曲及每首歌的状态，可以取消、重试（整个任务或单首）、有失败曲目时仍然保存已完成的部分、再次保存、移除。移除或关闭标签页时删除临时文件；下载进行中关闭标签页会提示。
+- 正在播放的歌曲有歌词时，播放条上出现「歌词」按钮（在任何页面都能打开，切歌后自动换成新歌的歌词）。
+- 歌词视图由 [AMLL（Apple Music-like Lyrics）](https://github.com/amll-dev/applemusic-like-lyrics) 渲染：逐词 / 逐行高亮与弹簧滚动、和声、对唱、翻译与发音、间奏圆点，点击任意一行即可跳转。Esc 收起。
+- 背景是 AMLL 由专辑封面生成的流动网格渐变，也可以选引入 AMLL 前的经典背景（仿 Apple Music 网页版，由多份旋转的封面经扭曲、模糊生成；浏览器不支持 WebGL 时也用它）。
+- 点击播放条的封面、标题或空白处展开全屏播放界面（没有歌词的歌曲也能展开，只显示封面与播放控件）。
+  - 同 music.apple.com，界面里的标题旁有喜爱（☆）与「更多」按钮（添加到资料库、添加到歌单、前往专辑、复制链接）；右下角的歌词按钮（手机上在播放控件下方）显示 / 隐藏歌词。
+  - 按钮的位置同 music.apple.com——关闭在左上角，歌词翻译在右上角，播放按钮没有底色、居中排成一行，歌名与艺人各占一行、过长时滚动。
+  - 手机上同官网的手机版：顶部是收起界面的下拉把手，显示歌词时标题行收成一行小封面，底部只有上一首 / 播放 / 下一首，下面是歌词开关与待播清单开关——待播清单占据歌词的位置，随机 / 重复在清单标题旁；隐藏时封面与播放控件居中，这个选择保存在浏览器中。
+- 右上角的歌词选项按钮（原来只有翻译菜单）：
+  - 切换翻译与发音，调整字号（70%–150%）与字重（细体到特粗）；
+  - 在 Apple Music 与 [AMLL 歌词库](https://amll.dev/reference/http-api/overview)之间切换歌词来源（由浏览器按 Apple Music 歌曲 ID 直接查询，未收录的歌曲仍用 Apple Music 歌词；不选它时不会向它发送请求）；
+  - 在 AMLL 与经典背景之间切换，以及下载当前显示的 TTML 歌词。
+  - 除翻译与发音外都保存在浏览器中。
 
 ### MV
 
@@ -165,7 +240,76 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
   - 广播单集（`format: stream`，`streamingRadioSubType: Episode`，音频或视频）：与 MV 页相同的布局，列出 HLS 的各码率与轨道，可以播放、跳转和下载（音频为 `.m4a`，视频为 `.mp4`，带标题、节目、播出日期与封面标签）。
   - 直播电台（`isLive`：Apple Music 1、各地广播，以及直播过的视频节目）：同样是 MV 页的布局，从直播窗口末尾附近开始播放，显示「直播」标记、当前歌曲（分片 `emsg` 中的 ID3，能对应到歌曲时链接到歌曲页）与节目表；不能下载。
 
+### 资料库与歌单
+
+与 music.apple.com 的「资料库」「歌单」相同，但**只保存在你的浏览器中**（IndexedDB）。服务端不保存任何资料库数据，也不需要账号；除了平常的目录请求，数据不会离开浏览器。
+
+- 侧边栏：「资料库」分组（最近添加、艺人、专辑、歌曲、音乐视频）与「歌单」分组（所有歌单，然后是各个歌单；+ 新建歌单）。页面地址在 `/library/...` 下，刷新与（同一浏览器中）打开链接都能回到原页面。
+- 添加：各处的「更多」菜单（搜索结果、货架、专辑 / 歌单 / 艺人 / 排行榜的曲目行）都有**添加到资料库** / **从资料库中删除**与**添加到歌单**子菜单（新建歌单…，然后是你的歌单，最近修改的在前）。专辑页、歌单页的播放按钮旁有 +，歌曲页有资料库与添加到歌单按钮。与 Apple Music 相同：添加专辑会同时添加其中全部歌曲与 MV；只添加单曲时，它的专辑与艺人也会出现在资料库中；删除专辑会一并删除其中的歌曲；添加 Apple Music 歌单只添加歌单本身（打开的仍是目录中的最新歌单）。歌单里已有的曲目会跳过。
+- 资料库页面：歌曲（播放 / 随机播放筛选后的列表，按标题、艺人、专辑、添加时间或时长排序，长列表随滚动渲染）、专辑与音乐视频网格、艺人（列表旁显示所选艺人的专辑与歌曲，手机上点进各艺人）、最近添加、所有歌单。每页都可以筛选，排序方式会记住。
+- 歌单（`/library/playlist/p.<id>`）：封面为前四张不同专辑封面拼成的 2×2 图，名称与描述（编辑）、播放 / 随机播放、拖动把手排序（鼠标与触屏相同，把手获得焦点时也可按 ↑ / ↓）、从歌单中删除、复制、导出与删除。歌单保存每首曲目的快照（歌名、艺人、专辑、封面、时长），打开时不需要请求目录，也可以包含不在资料库中的歌曲。
+- 导入 / 导出（资料库页面的 ⋯ 菜单）：**导出资料库**保存 `am-hook-library-<日期>.json`，包含全部资料库条目与歌单；**导出歌单**保存单个歌单（`<名称>.am-hook-playlist.json`），方便分享。**导入…** 两种文件都能读：整库文件可以选择合并（保留现有内容，同一 id 的歌单保留较新的一份）或替换；歌单文件直接加入并打开。每一条都会校验：只保留 `/https://music.apple.com/...` 页面链接与 https 图片地址，无效条目跳过，分享来的文件无法注入链接或脚本。**清空资料库…** 确认后删除全部内容。
+- 喜爱：与 Apple Music 相同，歌曲、MV、专辑、歌单（Apple Music 歌单与自己的歌单）和艺人都可以喜爱——各处「更多」菜单中的**喜爱** / **取消喜爱**，专辑页与歌单页的 + 旁、歌曲页以及艺人页操作行里的 ☆。喜爱的同时加入资料库（喜爱的艺人即使没有歌曲也会出现在「艺人」中）。喜爱的曲目带星形标记；歌曲、专辑、艺人、音乐视频与所有歌单页面有**喜爱**筛选。**喜爱的歌曲**（`/library/favorite-songs`，在侧边栏中，也排在所有歌单的最前面）是由喜爱的歌曲自动组成的歌单，最近喜爱的在前；取消喜爱即移出，「存储为歌单」可以复制成普通歌单。
+- 歌单文件夹（`/library/playlist-folder/f.<id>`）：在「歌单」旁的 + 或 ⋯ 菜单中新建，可以嵌套；自己的歌单与添加的 Apple Music 歌单都能放进去——用**移到文件夹**（「更多」菜单与歌单页），或在侧边栏把歌单、文件夹拖到另一个文件夹上（拖到「歌单」标题上移到最上层）。侧边栏中文件夹在前，可以展开 / 收起（会记住；打开的歌单所在文件夹会自动展开）。文件夹页显示路径、子文件夹与歌单，可以新建歌单、新建文件夹、重命名、移动、导出文件夹与删除文件夹。与 Apple Music 相同，删除文件夹会一并删除其中的全部内容（确认时显示数量）；文件夹不能移到自身或自己的子文件夹里。
+- 存储说明：数据按浏览器、按站点地址分开（`http://127.0.0.1:8888` 与 `http://<局域网 IP>:8888` 是两个资料库），换浏览器或地址时请导出再导入。同一浏览器的多个标签页会自动同步。浏览器不允许使用 IndexedDB 时（部分隐私模式），资料库只在本次会话的内存中，资料库页面会给出提示。
+
+<details>
+<summary><b>资料库文件格式（版本 1）</b></summary>
+
+```jsonc
+{
+  "format": "am-hook-library", "version": 1, "exportedAt": "2026-10-04T12:00:00.000Z",
+  "items": [   // 资料库：kind 为 song / music-video / album / playlist（Apple Music 歌单），addedAt 为毫秒
+    { "kind": "song", "id": "1468058171", "country": "cn", "name": "…", "artist": "…", "artists": [{ "name": "…", "href": "/https://music.apple.com/cn/artist/…/159260351" }],
+      "album": "…", "albumId": "1468058165", "albumHref": "/https://music.apple.com/cn/album/…/1468058165", "href": "/https://music.apple.com/cn/song/…/1468058171",
+      "artwork": "https://…/{w}x{h}bb.jpg", "bgColor": "1d1d1f", "duration": 221000, "explicit": false, "addedAt": 1759579200000 }
+  ],
+  "playlists": [   // 本地歌单：tracks 为同样的曲目快照，另加 uid / addedAt
+    { "id": "p.Ab3dE…", "name": "…", "description": "…", "folderId": "f.Xy9…", "favorite": 0, "createdAt": 1759579200000, "updatedAt": 1759579300000, "tracks": [ { "uid": "…", "addedAt": 1759579200000, "kind": "song", "id": "…" } ] }
+  ],
+  "folders": [   // 歌单文件夹；最上层的 parentId 为空
+    { "id": "f.Xy9…", "name": "…", "parentId": "", "createdAt": 1759579200000, "updatedAt": 1759579200000 }
+  ]
+}
+```
+
+条目与歌单上的 `favorite`（毫秒，0 为未喜爱）、歌单与 Apple Music 歌单条目上的 `folderId`、`folders` 以及 `artist` 条目（喜爱的艺人）是后来加入的可选字段，因此版本号仍为 1：旧版本也能导入新文件，只是跳过不认识的内容。「导出文件夹」包含该文件夹、其子文件夹与其中的歌单。导入时指向不存在的文件夹或文件夹之间成环的，移到最上层。浏览器中的数据库升级为版本 2（新增 `folders`），已有的资料库原地升级。
+
+</details>
+
+### 批量下载与设置中心
+
+- **设置中心**（`/settings`，侧边栏与手机菜单中「排行榜」下方的「设置」）：通用设置（主地区、曲库语言、界面语言、wrapper-lite，与导航底部相同）与下载设置，保存在 localStorage，修改立即生效（进行中的下载沿用开始时的设置），也为之后的播放设置预留了位置。下载设置参考 [apple-music-downloader](https://github.com/itouakirai/apple-music-downloader) 与 [amd.wol.moe](https://amd.wol.moe/)：
+  - 音质：首选音质（无损 ALAC / 杜比全景声 / AAC / AAC 双耳 / AAC 缩混 / HE-AAC）、ALAC 最高采样率、全景声上限（2768 / 2448）、没有首选音质时是否降级
+  - MV：下载专辑、歌单时是否一起下载其中的 MV，MV 最高分辨率（同参考实现的 `mv-max`：不超过该高度、平均码率最高的视频）与音轨（同 `mv-audio-type`：杜比全景声 → AC-3 → AAC、AC-3 → AAC 或只用 AAC）
+  - 性能：同时下载的曲目数、失败重试次数、是否用 OPFS 暂存
+  - 保存方式：**ZIP**（整张专辑 / 歌单一个文件，不压缩，超过 4 GiB 时为 ZIP64）、**文件夹**（File System Access API 直接写入选定的本地文件夹，可建子文件夹，可跳过已存在的文件；需要 Chrome / Edge 桌面版）、**逐个文件**；歌单可附带 `.m3u8` 播放列表
+  - 文件名模板：专辑 / 歌单文件夹（ZIP 名）、专辑曲目、歌单曲目、单曲；`/` 表示子文件夹，`{tracknum:02d}` 补零，变量有 `{title}` `{artist}` `{album}` `{album_artist}` `{composer}` `{genre}` `{tracknum}` `{tracktotal}` `{disk}` `{disktotal}` `{year}` `{release_date}` `{codec}` `{quality}` `{bit_depth}` `{sample_rate}` `{sample_rate_kHz}` `{explicit}` `{song_id}` `{album_id}` `{artist_id}` `{isrc}` `{upc}` `{record_label}` `{copyright}` `{playlist}` `{playlist_id}` `{curator}` `{index}`，编辑时实时预览；变量值里的 `/` 等非法字符替换为 `_`
+  - 标签：可选写入的字段（标题、艺人、专辑、专辑艺人、作曲、流派、发行日期、曲目号、碟号、歌词、封面、版权、厂牌、UPC、ISRC、分级、歌曲 / 专辑 / 艺人 ID），排序字段，歌单曲目使用原专辑信息或歌单信息，元数据语言
+  - 封面：JPEG / PNG / 原图、尺寸、另存 `cover.jpg`
+  - 歌词：另存 `.lrc` / `.ttml`、逐字（增强型 LRC）、附带翻译 / 发音、歌词语言
+- **下载**：专辑页与歌单页的下载按钮（播放、随机播放旁）打开对话框，可临时改音质并选择曲目（默认全部歌曲，以及设置中没有关闭时的 MV；未发行的曲目不能选择）；各处的「更多」菜单（曲目行、搜索结果、货架等）中的歌曲、MV、专辑与歌单也可直接下载；歌曲页各音质的「下载解密文件」同样经下载管理器（`src/ui/downloads.mjs`）进行，带标签。
+  - 每首歌在浏览器内解密后，`media.wasm` 在整理为标准 MP4 时把 iTunes 标签（`moov.udta.meta.ilst`，字段同 go-mp4tag）连同封面、歌词一起写入 `moov`，不需要第二次改写文件；封面与歌词与音频同时获取，取不到时只是不写入
+  - 元数据来自 amp-api `songs?ids=…&include=albums,artists` 与 `music-videos?ids=…`（每 100 首一次请求）：作曲、ISRC、曲目号 / 碟号，以及所属专辑的 UPC、版权、厂牌与曲目数
+  - MV 的下载同参考实现的 `mvDownloader`：从 wrapper-lite 取 MV master，按设置选视频与音轨，由 MV 引擎解密、合并并整理为 `.mp4`，文件名使用同样的模板（`{codec}` / `{quality}` 为视频与音频规格，如 `2160p HEVC Dolby Vision · Dolby Atmos`）。标签同参考实现的 `writeMVMP4Tags`（专辑信息取自专辑或歌单，另写 `PERFORMER`、`RELEASETIME`，封面为 MV 缩略图），媒体类型为音乐视频（`stik` 6）。需要 OPFS
+  - ZIP 不复制数据：由 OPFS 中的各个文件与头部拼成一个 Blob，CRC-32 在 defrag 写出时顺带计算
+- **下载中心**（`src/ui/download-center.mjs`）：与播放条一样常驻在页面底部（播放条上方），站内跳转时下载不中断；显示总进度、速度与当前任务，展开后列出各专辑 / 歌单 / 单曲及每首歌的状态，可以取消、重试（整个任务或单首）、有失败曲目时仍然保存已完成的部分、再次保存、移除。移除或关闭标签页时删除临时文件；下载进行中关闭标签页会提示。
+
 ## 工作原理
+
+```mermaid
+flowchart LR
+  B["浏览器<br/>Web Worker + WebAssembly"]
+  S["am-hook<br/>（二进制或 serverless 函数）"]
+  W["wrapper-lite"]
+  A["amp-api<br/>（目录）"]
+  C["Apple CDN"]
+  B -- "master 地址、解密模板、<br/>许可证、歌词" --> S
+  S --> W
+  B -- "目录 / 搜索，经 /amp" --> S
+  S --> A
+  B -- "播放列表与媒体分片<br/>（直连，从不代理）" --> C
+```
 
 ### 歌曲：浏览器端解密
 
@@ -190,7 +334,7 @@ box 处理：FairPlay 元数据 box（`sinf`、`senc`、`saiz`、`saio`、`pssh`
 2. 它的 `EXT-X-KEY` 是带 KID 的 `data:` URI，分片为 CENC（AES-CTR）。媒体 Worker 生成 Widevine license 请求（`crates/am-media/src/widevine.rs`，移植自参考实现的 CDM 与内置设备；与 MV 的 PlayReady 共用 `media_challenge` / `media_license`），不带 `drm-type` 发给 wrapper-lite `/license`。Widevine 失败时再用同一 KID 试 PlayReady。
 3. 分片由同一个 Worker 池用内容密钥原地解密（`hook_decrypt_cenc`、`cenc::decrypt_fragment_in_place`），字节长度不变，因此播放、跳转与下载都与上面相同。
 
-### MV
+### MV 解密
 
 - `/parse/mv/<adamId>` 从 wrapper-lite `/webplayback` 获取 master 地址，再以 `User-Agent: AM` 获取内容，返回播放列表文本和最终 CDN 地址。浏览器的 User-Agent 无法修改，用其他 User-Agent 获取可能拿不到 4K，所以使用本地 wrapper-lite 时 master 也交给服务端（`/parse/mv-master`）获取。
 - `/mv/webplayback/<adamId>` 和 `/mv/license` 分别转发到 wrapper-lite `/webplayback` 和 `/license`（MV 只使用 PlayReady；许可证失败会显示错误，不切换其他 DRM）。只有 AAC-LC 的歌曲也经这两个接口，发送 Widevine 请求（不带 `drm-type`）。
@@ -198,54 +342,15 @@ box 处理：FairPlay 元数据 box（`sinf`、`senc`、`saiz`、`saio`、`pssh`
 - challenge 构建、license 解析、CENC/CBCS 解密、字幕修复、fragmented MP4 合并以及转为 progressive MP4 在 Worker 中由 `media.wasm` 完成（Rust 实现，见 [crates/am-media](crates/am-media/README.md)）。
 - 暂不支持直播、discontinuity 或中途更换初始化段的清单。
 
-### 电台
+### 电台流
 
 - 电台资源照常经 `/amp` 获取。需要账号的请求由服务端带上 developer token 与页面传来的 media-user-token 发往 `amp-api.music.apple.com`（不走 edge、不缓存）：`/station/next-tracks/<id>`、`/station/assets`（`/v1/play/assets?<playParams>&keyFormat=web`，返回 HLS 地址与 license 服务器）、`/station/catalog/...`、`/station/recent`、`/station/storefront`。
 - 直播电台与广播单集的 HLS（`itsliveradio.apple.com`，允许跨源）由浏览器直接获取，fMP4 分片同时列出 FairPlay、PlayReady 与 Widevine 的 `EXT-X-KEY`。与 MV、AAC-LC 歌曲共用媒体 Worker：先用 Widevine（失败再用 PlayReady）生成 license 请求，按 license 服务器地址选择 MusicKit 的请求格式（如 `linear.tv.apple.com/v1/radio/streaming-key-delivery` 为 `{ adamId, challenge, uri, key-system, … }`），由 `/station/license` 带上两个 token（Widevine 另带 `X-Apple-Renewal`）发给 Apple——wrapper-lite 的 `/license` 不支持电台。取得内容密钥后在 Worker 中解密，交给 MediaSource 播放。
 - 直播没有 `#EXT-X-ENDLIST`：从窗口末尾往前 3 个分片开始，按 `TARGETDURATION` 刷新列表并按序号追加，落到窗口之外时跳到最新的位置。下载只用于点播，与 MV 相同：分片写入 OPFS 后整理为标准 MP4（只有音频时保留原来的轨道）。
 
-### 使用本地 wrapper-lite
+## 参考
 
-导航底部的「wrapper-lite」设置可以在两种方式间切换（保存在浏览器中）：
-
-- **服务端**（默认）：wrapper-lite 请求经 am-hook 转发，限速、限并发与 `Authorization` 由 `--wrapper-*` 参数决定。[Serverless 部署](#serverless-部署vercel--cloudflare)没有设置 `AM_HOOK_WRAPPER_URL`、或二进制以 `--local-wrapper-only` 启动时没有这一项。
-- **本地**：浏览器直接请求你自己的 wrapper-lite（`/status`、`/m3u8`、`/key`、`/lyrics`、`/webplayback`、`/license`），在面板中填写地址、每秒请求数上限、同时请求数上限与 `Authorization`（规则与 `--wrapper-auth` 相同）。限制只作用于当前页面。地址可以带用户信息（如 `https://<token>@host`），与 `--wrapper-url` 相同，转为 `Authorization: Basic …` 发送；单独填写的 `Authorization` 优先。
-  - 请求是跨源的：wrapper-lite 需允许跨源请求（返回 `Access-Control-Allow-Origin`，填了 `Authorization` 时还需在预检中允许该请求头），或在浏览器中安装解除跨域限制的插件。
-  - MV 的 master 播放列表仍由 am-hook 以 `User-Agent: AM` 获取，其余 MV 请求（`/webplayback`、`/license`）直连本地 wrapper-lite。
-
-## 服务端接口
-
-| 接口 | 说明 |
-|---|---|
-| `GET /` | 首页。下面的各页面地址与首页一样都返回单页应用 `app.html`，页面内容由前端加载 |
-| `GET /https://music.apple.com/<cc>/song/<slug>/<id>` | 歌曲页 |
-| `GET /https://music.apple.com/<cc>/music-video/<slug>/<id>` | MV 页 |
-| `GET /https://music.apple.com/<cc>/post/<id>` | 艺人上传的视频（MV 页） |
-| `GET /status` | wrapper-lite 状态与可用地区（所有客户端共用同一结果 10 秒） |
-| `GET /parse/song/<adamId>` | 通过 wrapper-lite `/m3u8` 获取歌曲 master m3u8 的地址（`{"code":0,"data":{"masterUrl":…}}`），master 由浏览器获取并解析 |
-| `GET /key?adamId=<adamId>&uri=<skd-uri>` | 转发 wrapper-lite `/key` 返回的歌曲轨道解密模板 JSON |
-| `GET /lyrics/<adamId>?language=<语言>` | 通过 wrapper-lite `/lyrics` 获取 TTML 歌词，原样返回 XML；没有歌词时返回 404。`language` 可选，为歌曲所在地区的曲库语言（选定的语言，否则为地区默认语言，如 `zh-Hans-CN`） |
-| `GET /parse/mv/<adamId>` | MV master 播放列表文本与最终 CDN 地址 |
-| `GET /parse/mv-master?url=<master 地址>` | 同上，master 地址由页面从本地 wrapper-lite 取得；只接受 `apple.com` 的 HTTPS 地址 |
-| `GET /https://music.apple.com/<cc>/album/<slug>/<id>` | 专辑页（与 music.apple.com 相同的 `editorialVideo` 动态封面：宽屏方形、手机全宽 3:4；曲目列表、连续播放、相关推荐货架；数据来自与 music.apple.com 相同的 amp-api `albums` 请求）。带 `?i=` 的专辑链接与 music.apple.com 一样打开专辑页，选中（高亮）该曲目并滚动到它 |
-| `GET /https://music.apple.com/<cc>/playlist/<slug>/<pl.id>` | 歌单页（编辑歌单与公开的用户歌单：与专辑页相同的动态封面；曲目带封面、艺人、专辑列；连续播放；精选艺人、策展人的更多歌单货架；数据来自与 music.apple.com 相同的 amp-api `playlists` 请求，经 `/amp` 获取） |
-| `GET /https://music.apple.com/<cc>/artist/<slug>/<id>` | 艺人页（与 music.apple.com 相同的头部：按目录数据显示动态视频、通栏图片或圆形头像；最新发行、歌曲排行与连续播放、专辑 / MV / 歌单 / 相似艺人货架与「显示全部」、艺人简介；数据来自与 music.apple.com 相同的 amp-api `artists` 请求，经 `/amp` 获取）。歌曲页、MV 页、专辑页的艺人名（多位艺人时各自单独链接）与艺人货架都链接到这里 |
-| `GET /settings` | 设置中心（下载设置等）。服务端只返回单页应用，设置保存在浏览器中（`src/ui/prefs.mjs`） |
-| `GET /radio` | 广播（侧边栏的「广播」）：与 music.apple.com/{cc}/radio 相同的编辑区块，使用主地区，填过 media-user-token 时另有「你的电台」；`/https://music.apple.com/<cc>/radio` 为固定地区 |
-| `GET /https://music.apple.com/<cc>/station/<slug>/ra.<id>` | 电台页：个人 / 编辑电台为接下来几首的曲目列表，直播电台与广播单集为 MV 页布局的播放与下载（见[广播与电台](#广播与电台)） |
-| `GET /library[/<分类>]`、`GET /library/artists/<名称>`、`GET /library/playlist/p.<id>`、`GET /library/favorite-songs`、`GET /library/playlist-folder/f.<id>` | 资料库页面（分类 `recently-added`、`artists`、`albums`、`songs`、`music-videos`、`all-playlists`）、本地歌单、喜爱的歌曲与歌单文件夹。服务端只返回单页应用，资料库数据保存在浏览器的 IndexedDB 中（`src/ui/library.mjs`） |
-| `GET /new` | 新发现（侧边栏的「新发现」）：与 music.apple.com/{cc}/new 相同的编辑区块（amp-api `editorial/{cc}/groupings?name=music`），使用主地区，切换后重新加载——hero 大卡、四行曲目货架、专辑 / 歌单 / 电台 / 视频货架（列数与官网 shelf-grid 相同）与「探索更多」链接；`/https://music.apple.com/<cc>/new` 为固定地区 |
-| `GET /new/top-charts[/<kind>]` | 排行榜（新发现「探索更多」中的链接，与 music.apple.com/{cc}/new/top-charts 相同，amp-api `catalog/{cc}/charts`，使用主地区）：带名次的热门歌曲（三行）、城市排行榜、每周热门 100 首，以及带名次的热门歌单 / 专辑 / 视频。各榜单的「查看全部」（`songs`、`playlists`、`albums`、`music-videos`，另有 `city-charts`、`daily-global-top-charts`）列出整个榜单并滚动分页，歌曲与歌单页的榜单行相同；歌曲、专辑、视频榜可按类型筛选（`?genreId=`，类型来自 `catalog/{cc}/genres`）；`/https://music.apple.com/<cc>/new/top-charts[/<kind>]` 为固定地区 |
-| `GET /https://music.apple.com/<cc>/room/<id>`、`.../multi-room/<id>`、`.../grouping/<id>`、`.../curator/<slug>/<id>` | 编辑页，路由与 music.apple.com 相同：room 为区块的「查看全部」（全部内容的网格，滚动时分页加载）；multi-room（`editorial/{cc}/multirooms`，头图 + 区块）、grouping（`editorial/{cc}/groupings/{id}`，如「音乐视频」与各风格页）与 curator（`catalog/{cc}?ids[apple-curators]=`：其分组的区块，或全部歌单）沿用新发现的排版。编辑数据中的旧式链接（`collection/...?fcId=`、`viewGrouping?id=`、`viewFeature?id=`）在站内打开这些页面；电台打开本站的电台页，其他本站无法打开的内容链接到 Apple Music。在首页粘贴这些链接同样可以打开 |
-| `GET /amp/v1/catalog/<path>?<query>` | 代理 Apple Music 目录接口（`amp-api-edge.music.apple.com/v1/catalog/...`，首页搜索使用），自动附带 music.apple.com 网页版 developer token，查询参数原样转发。使用启动时预热的专用 HTTP/2 连接，缓存成功响应，合并相同的并发请求，并通过 `Server-Timing` 标明缓存命中（`cache;desc=hit/miss/shared`）与上游耗时 |
-| `GET /amp/v1/editorial/<path>?<query>` | 代理编辑内容接口（`amp-api-edge.music.apple.com/v1/editorial/...`：groupings、rooms、multirooms，新发现与编辑页使用），方式与 `/amp/v1/catalog` 相同，共用连接与缓存 |
-| `GET /amp/v1/storefronts` | amp-api 全部地区信息（查询参数原样转发，以便跟随分页 `next`）；页面只拉取一次并保存在 localStorage（超过 30 天后在后台刷新），用于主地区列表与曲库语言的可选项（各地区的 `supportedLanguageTags`）（地区不支持的 `l` 会被静默回退到默认语言，如 `cn` 只支持 `zh-Hans-CN` / `en-GB`） |
-| `GET /mv/webplayback/<adamId>`、`POST /mv/license` | 转发到 wrapper-lite `/webplayback` 与 `/license`：MV（PlayReady，`drm-type: pr`）与没有 master m3u8 的歌曲（AAC-LC 的 media m3u8，Widevine，不带 `drm-type`） |
-| `POST /station/next-tracks/ra.<id>`、`GET /station/assets?<playParams>`、`GET /station/catalog/<path>`、`GET /station/recent`、`GET /station/storefront` | 电台接口：带上页面经 `X-Media-User-Token` 传来的 media-user-token 与 developer token 请求 `amp-api.music.apple.com`（`/v1/me/stations/next-tracks`、`/v1/play/assets`、`/v1/catalog`、`/v1/me/recent/radio-stations`、`/v1/me/storefront`），原样返回、不缓存；没有 token 时返回 401 |
-| `POST /station/license` | `{ url, body, renewal }`：把 `body` 连同两个 token POST 给电台的 license 服务器（`url` 须为 Apple 的 HTTPS 地址，且是 MusicKit 认识的 license 路径），原样返回响应 |
-| `/assets/...` | 内嵌在二进制中的前端路由、页面视图（`/assets/views/`）、脚本、样式与按需加载的 WASM。页面通过 `/assets/h/` 下带内容哈希的地址加载（`immutable` 长期缓存），原地址以 `no-cache` + ETag 提供。`/assets/host.js` 告诉页面服务端能否转发 wrapper-lite（serverless 部署由函数生成） |
-
-## 命令行参数
+### 命令行参数
 
 | 参数 | 默认值 | 说明 |
 |---|---|---|
@@ -262,8 +367,32 @@ box 处理：FairPlay 元数据 box（`sinf`、`senc`、`saiz`、`saio`、`pssh`
 | `--wrapper-hint <TEXT>` | 无 | 显示在本地 wrapper-lite 设置上方的提示，如去哪里申请公共 wrapper-lite 的 token，其中的网址显示为链接。也可用环境变量 `AM_HOOK_WRAPPER_HINT` 设置 |
 | `--amp-keepalive <SECONDS>` | `30` | amp-api 连接保活：空闲达到该时长时发送一个轻量请求（0 关闭）。无论是否开启，启动时都会先获取 token 并建立连接 |
 | `--amp-cache-mb <MB>` | `32` | amp-api 响应缓存（目录 5 分钟、地区表 24 小时；0 关闭）。相同的并发请求始终只请求一次上游 |
+| `--check-update` | 关闭 | 启动时检查 GitHub Releases 上是否有新版本，并写入日志 |
+| `--auto-update` | 关闭 | 同 `--check-update`，并下载当前平台的新版二进制替换当前文件（旧文件保留为备份），之后需重启 am-hook。Windows 无法替换正在运行的 exe，日志会列出手动替换的步骤 |
 
-## 构建
+### 服务端接口
+
+页面地址（见[页面一览](#页面一览)）都返回单页应用 `app.html`。API 接口如下：
+
+| 接口 | 说明 |
+|---|---|
+| `GET /status` | wrapper-lite 状态与可用地区（所有客户端共用同一结果 10 秒） |
+| `GET /parse/song/<adamId>` | 通过 wrapper-lite `/m3u8` 获取歌曲 master m3u8 的地址（`{"code":0,"data":{"masterUrl":…}}`），master 由浏览器获取并解析 |
+| `GET /key?adamId=<adamId>&uri=<skd-uri>` | 转发 wrapper-lite `/key` 返回的歌曲轨道解密模板 JSON |
+| `GET /lyrics/<adamId>?language=<语言>` | 通过 wrapper-lite `/lyrics` 获取 TTML 歌词，原样返回 XML；没有歌词时返回 404。`language` 可选，为歌曲所在地区的曲库语言（选定的语言，否则为地区默认语言，如 `zh-Hans-CN`） |
+| `GET /parse/mv/<adamId>` | MV master 播放列表文本与最终 CDN 地址 |
+| `GET /parse/mv-master?url=<master 地址>` | 同上，master 地址由页面从本地 wrapper-lite 取得；只接受 `apple.com` 的 HTTPS 地址 |
+| `GET /amp/v1/catalog/<path>?<query>` | 代理 Apple Music 目录接口（`amp-api-edge.music.apple.com/v1/catalog/...`，首页搜索使用），自动附带 music.apple.com 网页版 developer token，查询参数原样转发。使用启动时预热的专用 HTTP/2 连接，缓存成功响应，合并相同的并发请求，并通过 `Server-Timing` 标明缓存命中（`cache;desc=hit/miss/shared`）与上游耗时 |
+| `GET /amp/v1/editorial/<path>?<query>` | 代理编辑内容接口（`amp-api-edge.music.apple.com/v1/editorial/...`：groupings、rooms、multirooms，新发现与编辑页使用），方式与 `/amp/v1/catalog` 相同，共用连接与缓存 |
+| `GET /amp/v1/storefronts` | amp-api 全部地区信息（查询参数原样转发，以便跟随分页 `next`）；页面只拉取一次并保存在 localStorage（超过 30 天后在后台刷新），用于主地区列表与曲库语言的可选项（各地区的 `supportedLanguageTags`）（地区不支持的 `l` 会被静默回退到默认语言，如 `cn` 只支持 `zh-Hans-CN` / `en-GB`） |
+| `GET /mv/webplayback/<adamId>`、`POST /mv/license` | 转发到 wrapper-lite `/webplayback` 与 `/license`：MV（PlayReady，`drm-type: pr`）与没有 master m3u8 的歌曲（AAC-LC 的 media m3u8，Widevine，不带 `drm-type`） |
+| `POST /station/next-tracks/ra.<id>`、`GET /station/assets?<playParams>`、`GET /station/catalog/<path>`、`GET /station/recent`、`GET /station/storefront` | 电台接口：带上页面经 `X-Media-User-Token` 传来的 media-user-token 与 developer token 请求 `amp-api.music.apple.com`（`/v1/me/stations/next-tracks`、`/v1/play/assets`、`/v1/catalog`、`/v1/me/recent/radio-stations`、`/v1/me/storefront`），原样返回、不缓存；没有 token 时返回 401 |
+| `POST /station/license` | `{ url, body, renewal }`：把 `body` 连同两个 token POST 给电台的 license 服务器（`url` 须为 Apple 的 HTTPS 地址，且是 MusicKit 认识的 license 路径），原样返回响应 |
+| `/assets/...` | 内嵌在二进制中的前端路由、页面视图（`/assets/views/`）、脚本、样式与按需加载的 WASM。页面通过 `/assets/h/` 下带内容哈希的地址加载（`immutable` 长期缓存），原地址以 `no-cache` + ETag 提供。`/assets/host.js` 告诉页面服务端能否转发 wrapper-lite（serverless 部署由函数生成） |
+
+## 开发
+
+### 构建
 
 ```sh
 cargo build --release
@@ -278,7 +407,7 @@ cargo build --release
 | `lyrics/amll-core.mjs`、`lyrics/amll.css` | `@applemusic-like-lyrics/core`，见 [browser/amll](browser/amll/README.md) | `node scripts/build-amll.cjs <node_modules 路径>` |
 | `ec3.wasm`、`ec3-runtime.mjs` | `@mediabunny/ac3` 1.59.1 | `node scripts/extract-ec3.mjs`，见 [EC3-SOURCE.md](src/ui/EC3-SOURCE.md) |
 
-## 测试
+### 测试
 
 ```sh
 cargo test --workspace
@@ -295,17 +424,52 @@ cargo test --test e2e_test -- --ignored
 
 这些测试验证歌词。
 
-浏览器端测试是普通的 Node 脚本：
+浏览器端测试是普通的 Node 脚本。`<playwright>` 为 Playwright 包路径；在线测试的 `[base]` 省略时：MV 与电台测试默认 `http://127.0.0.1:18888`，其余测试默认 `AM_HOOK_URL` 或 `http://127.0.0.1:8888`（ALAC 测试只读 `AM_HOOK_URL`）。
 
-| 类型 | 命令 |
+<details>
+<summary><b>离线，仅需 Node</b></summary>
+
+| 命令 | 覆盖内容 |
 |---|---|
-| 离线，仅需 Node | `node --test tests/player_*.cjs`、`node tests/mv_hls.cjs`、`node tests/mv_captions.cjs`、`node --test tests/serverless.mjs`（serverless 后端与 `dist/` 的生成，CI 也会运行）、`node --test tests/download_core.mjs`（ZIP / ZIP64、iTunes 标签、文件名模板） |
-| 离线，Playwright + Chrome 与本地 fixture | `node tests/ui_layout.cjs <playwright>`、`node tests/lyrics_ui.cjs <playwright>`、`node tests/mv_ui.cjs <playwright>`、`node tests/library_ui.cjs <playwright>`（资料库与歌单：添加、歌单、排序、刷新后保留、导出 / 导入与文件校验、喜爱、文件夹与拖放、数据库升级）、`node tests/station_ui.cjs <playwright>`（广播与电台页：导航位置、直播货架与「你的电台」、首次填写 media-user-token、接下来的几首与续取、单集与直播的布局、设置中心） |
-| 在线（需运行 am-hook、wrapper-lite 并能访问 Apple CDN） | `node tests/mv_live.cjs <playwright> [base]`、`node tests/mv_captions_live.cjs <playwright> [base]`、`node tests/alac_recovery.cjs <playwright>`、`node tests/alac_source_recovery.cjs <playwright>`、`node tests/aac_lc_live.cjs <playwright> [base]`（没有 master 的歌曲：AAC-LC 变体、Widevine license、服务端与本地模式下的播放与跳转、下载到 `target/`）、`node tests/search_ui.cjs <playwright> [base]`、`node tests/album_ui.cjs <playwright> [base]`、`node tests/playlist_ui.cjs <playwright> [base]`、`node tests/artist_ui.cjs <playwright> [base]`、`node tests/browse_ui.cjs <playwright> [base]`（需能访问 music.apple.com）、`node tests/app_ui.cjs <playwright> [base]`（单页应用：跳转后继续播放、队列、前进 / 后退、歌词）、`node tests/download_ui.cjs <playwright> [base]`（批量下载：设置中心、专辑 ZIP 的标签 / 封面 / 歌词、文件夹模式、歌单与 .m3u8、MV、取消 / 重试；需要 cn 地区的 wrapper-lite）、`node tests/radio_live.cjs <playwright> [base] [token 文件]`（电台：需要 media-user-token，取自 token 文件、`AM_HOOK_MEDIA_USER_TOKEN` 或 `target/my-media-user-token.txt`；风格电台与个人电台、最近播放中的广播单集的 Widevine license / 播放 / 跳转 / M4A 下载，以及用单集分片模拟的直播） |
+| `node --test tests/player_*.cjs` | 播放器 |
+| `node tests/mv_hls.cjs`、`node tests/mv_captions.cjs` | MV 清单与字幕 |
+| `node --test tests/serverless.mjs` | serverless 后端与 `dist/` 的生成，CI 也会运行 |
+| `node --test tests/download_core.mjs` | ZIP / ZIP64、iTunes 标签、文件名模板 |
 
-`<playwright>` 为 Playwright 包路径；在线测试的 `[base]` 省略时：MV 与电台测试默认 `http://127.0.0.1:18888`，其余测试默认 `AM_HOOK_URL` 或 `http://127.0.0.1:8888`（ALAC 测试只读 `AM_HOOK_URL`）。
+</details>
 
-## 项目结构
+<details>
+<summary><b>离线，Playwright + Chrome 与本地 fixture</b></summary>
+
+| 命令 | 覆盖内容 |
+|---|---|
+| `node tests/ui_layout.cjs <playwright>` | 页面布局 |
+| `node tests/lyrics_ui.cjs <playwright>` | 歌词界面 |
+| `node tests/mv_ui.cjs <playwright>` | MV 页 |
+| `node tests/library_ui.cjs <playwright>` | 资料库与歌单：添加、歌单、排序、刷新后保留、导出 / 导入与文件校验、喜爱、文件夹与拖放、数据库升级 |
+| `node tests/station_ui.cjs <playwright>` | 广播与电台页：导航位置、直播货架与「你的电台」、首次填写 media-user-token、接下来的几首与续取、单集与直播的布局、设置中心 |
+
+</details>
+
+<details>
+<summary><b>在线（需运行 am-hook、wrapper-lite 并能访问 Apple CDN）</b></summary>
+
+| 命令 | 覆盖内容 |
+|---|---|
+| `node tests/mv_live.cjs <playwright> [base]`、`node tests/mv_captions_live.cjs <playwright> [base]` | MV 播放与字幕 |
+| `node tests/alac_recovery.cjs <playwright>`、`node tests/alac_source_recovery.cjs <playwright>` | ALAC 包尾修复 |
+| `node tests/aac_lc_live.cjs <playwright> [base]` | 没有 master 的歌曲：AAC-LC 变体、Widevine license、服务端与本地模式下的播放与跳转、下载到 `target/` |
+| `node tests/search_ui.cjs <playwright> [base]`、`node tests/album_ui.cjs <playwright> [base]`、`node tests/playlist_ui.cjs <playwright> [base]`、`node tests/artist_ui.cjs <playwright> [base]`、`node tests/browse_ui.cjs <playwright> [base]` | 搜索、专辑、歌单、艺人与浏览页（需能访问 music.apple.com） |
+| `node tests/app_ui.cjs <playwright> [base]` | 单页应用：跳转后继续播放、队列、前进 / 后退、歌词 |
+| `node tests/download_ui.cjs <playwright> [base]` | 批量下载：设置中心、专辑 ZIP 的标签 / 封面 / 歌词、文件夹模式、歌单与 .m3u8、MV、取消 / 重试；需要 cn 地区的 wrapper-lite |
+| `node tests/radio_live.cjs <playwright> [base] [token 文件]` | 电台：需要 media-user-token，取自 token 文件、`AM_HOOK_MEDIA_USER_TOKEN` 或 `target/my-media-user-token.txt`；风格电台与个人电台、最近播放中的广播单集的 Widevine license / 播放 / 跳转 / M4A 下载，以及用单集分片模拟的直播 |
+
+</details>
+
+### 项目结构
+
+<details>
+<summary><b>源码目录</b></summary>
 
 ```
 src/
@@ -314,9 +478,11 @@ src/
   lib.rs               路由构建
   assets.rs            内嵌前端资源：一张表（`ASSETS`）同时决定路由与 MIME，新增浏览器文件只需加一行
   amp.rs               amp-api 目录接口代理（自动获取并刷新 music.apple.com 网页版 developer token）与电台接口（转发 media-user-token 与 license 请求）
+  limit.rs             按客户端 IP 限制转发 wrapper-lite 的请求频率与并发
   log.rs               请求日志
   links.rs             Apple Music 链接解析与页面路径判定（共用的正则片段，log.rs 也复用它给请求归类）
   state.rs             配置与共享客户端
+  updater.rs           --check-update / --auto-update（GitHub Releases）
   wrapper.rs           wrapper-lite 请求客户端（master m3u8、解密模板、歌词）
   ui.rs                Web 接口（状态、解析、模板、歌词、MV 转发；fallback 为 Apple Music 页面路径返回单页应用）
   ui/
@@ -359,7 +525,10 @@ serverless/
 api/handler.mjs        Vercel Edge Function 入口（vercel.json）
 scripts/               WASM / 资源构建脚本；build-static.mjs 按 assets.rs 的资源表生成 serverless 部署的 dist/
 tests/                 Rust 集成测试与 Node 浏览器测试（app.cjs 为打开页面的公用函数）
+docs/                  发布指南（RELEASE.md）与 README 截图
 ```
+
+</details>
 
 ## 许可证
 
