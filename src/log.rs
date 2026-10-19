@@ -388,9 +388,10 @@ pub async fn report_wrapper_queue(state: Arc<AppState>) {
             *delayed += s.delayed;
             *longest = (*longest).max(s.longest_wait);
             warn!(
-                "wrapper-lite THROTTLED · sent {}/{rate} in last 1 s · in flight {}/{concurrency} · queued {} ({} for concurrency, {} for rate)",
+                "wrapper-lite THROTTLED · sent {}/{rate} in last 1 s · in flight {}/{concurrency} (+{} held after timeout / cancel) · queued {} ({} for concurrency, {} for rate)",
                 s.sent_last_second,
                 s.in_flight,
+                s.held,
                 s.queued(),
                 s.waiting_concurrency,
                 s.waiting_rate,
