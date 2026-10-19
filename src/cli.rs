@@ -47,6 +47,18 @@ pub struct Cli {
     #[arg(long, env = "AM_HOOK_WRAPPER_AUTH", hide_env_values = true)]
     pub wrapper_auth: Option<String>,
 
+    /// Max wrapper-lite requests relayed per client IP in any 60 seconds (/status not
+    /// counted); further requests get HTTP 429 with Retry-After. 0 = unlimited
+    #[arg(long, default_value_t = 0)]
+    pub client_rate: u32,
+
+    /// Request header holding the client IP, set by the reverse proxy in front
+    /// (e.g. X-Real-IP, CF-Connecting-IP; the first entry of a list is used).
+    /// Only set it when every request passes through that proxy, otherwise clients can
+    /// spoof it. Default: the TCP peer address
+    #[arg(long)]
+    pub client_ip_header: Option<String>,
+
     /// Seconds between keep-alive requests that keep the amp-api (catalog / search)
     /// connection warm while idle; 0 disables them
     #[arg(long, default_value_t = 30)]
@@ -92,6 +104,11 @@ impl Cli {
             wrapper_auth,
             wrapper_relay: !self.local_wrapper_only,
             wrapper_hint: self.wrapper_hint.as_deref().map(str::trim).filter(|h| !h.is_empty()).map(str::to_owned),
+            client_rate: self.client_rate,
+            client_ip_header: match &self.client_ip_header {
+                Some(raw) => crate::limit::parse_ip_header(raw)?,
+                None => None,
+            },
         })
     }
 }

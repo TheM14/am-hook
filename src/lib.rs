@@ -1,6 +1,7 @@
 pub mod amp;
 pub mod assets;
 pub mod cli;
+pub mod limit;
 pub mod log;
 pub mod links;
 pub mod state;
@@ -32,6 +33,8 @@ pub fn router(state: Arc<AppState>) -> Router {
         .route("/mv/webplayback/:adam_id", get(ui::mv_webplayback_handler))
         .route("/mv/license", post(ui::mv_license_handler))
         .route("/lyrics/:adam_id", get(ui::lyrics_handler))
+        // 按客户端 IP 限流（--client-rate），在 require_relay 之内
+        .route_layer(axum::middleware::from_fn_with_state(state.clone(), limit::limit_clients))
         .route_layer(axum::middleware::from_fn_with_state(state.clone(), ui::require_relay));
     router
         .merge(relay)

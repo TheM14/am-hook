@@ -294,6 +294,10 @@ pub fn print_banner(listen: SocketAddr, config: &Config) {
             None => "none".to_owned(),
         };
         lines.push(format!("                limit {limits} · auth {auth}"));
+        if config.client_rate > 0 {
+            let source = config.client_ip_header.as_deref().unwrap_or("peer address");
+            lines.push(format!("                per client {} req/min · IP from {source}", config.client_rate));
+        }
     } else {
         lines.push("  wrapper-lite  not relayed: browsers connect to their own (local mode only)".into());
         lines.push(format!("                page defaults {} · {limits}", config.wrapper_url));

@@ -24,6 +24,8 @@ fn config(wrapper_url: String, relay: bool) -> Config {
         wrapper_auth: Some("Bearer operator-secret".into()),
         wrapper_relay: relay,
         wrapper_hint: Some("Get a token at https://token.test".into()),
+        client_rate: 0,
+        client_ip_header: None,
     }
 }
 
