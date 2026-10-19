@@ -1,5 +1,14 @@
 # CHANGELOG
 
+## v0.5.2 (2026-10-19)
+
+### New
+- ✨ `--client-rate`: max relayed wrapper-lite requests per client IP in any 60 seconds (`/status` not counted); further requests get HTTP 429 with `Retry-After` and never reach wrapper-lite, so one visitor (e.g. batch-downloading whole artists) cannot use up a shared wrapper-lite; rejected requests are logged as `client <ip> over N/min`
+- ✨ `--client-ip-header`: take the client IP from a header set by the reverse proxy (e.g. `X-Real-IP`, `CF-Connecting-IP`); the TCP peer address by default
+
+### Fixes
+- 🐛 wrapper-lite concurrency limit: a request that timed out, failed while reading the response, or was cancelled (client disconnected) returned its permit at once while wrapper-lite might still be processing it, so under a slow upstream the real concurrency exceeded `--wrapper-concurrency` (a public wrapper-lite then answered `rate limited (concurrency)` and later `banned`). Such permits are now held for 30 more seconds; a complete reply or a connect failure still returns it at once. The `wrapper-lite THROTTLED` line shows the held count
+
 ## v0.5.1 (2026-10-19)
 
 ### New

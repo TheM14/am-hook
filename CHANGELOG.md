@@ -1,5 +1,14 @@
 # 更新日志
 
+## v0.5.2 (2026-10-19)
+
+### 新功能
+- ✨ `--client-rate`：每个客户端 IP 任意 60 秒内转发 wrapper-lite 的请求上限（不含 `/status`），超出时返回 HTTP 429 与 `Retry-After`、不再发往 wrapper-lite，免得单个访客（如批量扒取整个艺人）用光共用的 wrapper-lite；被拒绝的请求在日志中标出 `client <ip> over N/min`
+- ✨ `--client-ip-header`：从反向代理设置的请求头（如 `X-Real-IP`、`CF-Connecting-IP`）取客户端 IP，默认用 TCP 对端地址
+
+### 修复
+- 🐛 wrapper-lite 限并发：超时、读响应出错或被取消（客户端断开）的请求立即归还并发名额，而 wrapper-lite 上可能仍在处理，上游变慢时实际并发会超过 `--wrapper-concurrency`（公共 wrapper-lite 因此返回 `rate limited (concurrency)` 乃至 `banned`）：现在这类请求的名额再保留 30 秒才归还，正常结束或连接失败时仍立即归还；`wrapper-lite THROTTLED` 一行显示保留的数量
+
 ## v0.5.1 (2026-10-19)
 
 ### 新功能
