@@ -21,6 +21,8 @@ pub struct Config {
     pub wrapper_hint: Option<String>,
     /// 每个客户端 IP 每分钟转发 wrapper-lite 的请求上限（不含 `/status`），0 表示不限
     pub client_rate: u32,
+    /// 每个客户端 IP 同时转发 wrapper-lite 的请求上限（不含 `/status`），超出的排队，0 表示不限
+    pub client_concurrency: usize,
     /// 取客户端 IP 的请求头（小写，由反向代理设置），None 表示用 TCP 对端地址
     pub client_ip_header: Option<String>,
 }
@@ -53,6 +55,7 @@ impl AppState {
             wrapper_relay: true,
             wrapper_hint: None,
             client_rate: 0,
+            client_concurrency: 0,
             client_ip_header: None,
         })
     }
@@ -83,7 +86,7 @@ impl AppState {
             .expect("Failed to build reqwest Apple-only HTTP client");
         let amp = Arc::new(crate::amp::Amp::new(config.amp_cache_mb * 1024 * 1024));
         let wrapper = crate::wrapper::Wrapper::new(&config);
-        let client_limit = crate::limit::ClientLimit::new(config.client_rate, config.client_ip_header.as_deref());
+        let client_limit = crate::limit::ClientLimit::new(config.client_rate, config.client_concurrency, config.client_ip_header.as_deref());
         Self { config, http_client, apple_client, wrapper, amp, client_limit, status_cache: Default::default() }
     }
 }

@@ -2,6 +2,9 @@
 
 ## 未发布
 
+### 新功能
+- ✨ `--client-concurrency`：每个客户端 IP 同时转发 wrapper-lite 的请求上限（不含 `/status`），超出的排队等待而不是失败；与按分钟计的 `--client-rate` 配合，单个访客突发时不会占满 `--wrapper-concurrency` 的名额、堵住其他用户。排队的请求在日志中标出 `QUEUED … by client concurrency`
+
 ### 修复
 - 🐛 `/status` 不计入 `--client-rate`，客户端却可以一直刷它、每次都请求 wrapper-lite，占用 `--wrapper-rate` 与并发名额：现在所有客户端共用同一结果 10 秒，同时到达的请求合并为一次，wrapper-lite 每 10 秒最多收到一次 `/status`；上游 `/status` 另设 10 秒超时
 

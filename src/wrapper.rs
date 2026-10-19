@@ -459,6 +459,7 @@ mod tests {
             wrapper_relay: true,
             wrapper_hint: None,
             client_rate: 0,
+            client_concurrency: 0,
             client_ip_header: None,
         }
     }

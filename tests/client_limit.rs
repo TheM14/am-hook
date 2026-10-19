@@ -19,6 +19,7 @@ fn config(wrapper_url: String, ip_header: Option<&str>) -> Config {
         wrapper_relay: true,
         wrapper_hint: None,
         client_rate: 2,
+        client_concurrency: 0,
         client_ip_header: ip_header.map(str::to_owned),
     }
 }
@@ -84,6 +85,47 @@ async fn status_is_shared_across_clients() {
         assert_eq!(body["regions"], serde_json::json!(["us"]));
     }
     assert_eq!(calls.load(Ordering::SeqCst), 1, "one wrapper-lite /status for all clients");
+}
+
+/// --client-concurrency：同一 IP 超出的请求排队（不返回错误），其他 IP 不受影响
+#[tokio::test]
+async fn client_concurrency_queues_per_ip() {
+    let active = Arc::new(AtomicUsize::new(0));
+    let peak = Arc::new(AtomicUsize::new(0));
+    let (a, p) = (active.clone(), peak.clone());
+    let wrapper = Router::new().fallback(move || {
+        let (active, peak) = (a.clone(), p.clone());
+        async move {
+            peak.fetch_max(active.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            active.fetch_sub(1, Ordering::SeqCst);
+            r#"{"code":0,"data":{"m3u8":"https://aod.itunes.apple.com/x.m3u8"},"msg":"SUCCESS"}"#
+        }
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let wrapper_url = format!("http://{}", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, wrapper).await.unwrap() });
+
+    let mut config = config(wrapper_url, Some("x-real-ip"));
+    config.client_rate = 0;
+    config.client_concurrency = 1;
+    let app = serve_app(AppState::with_config(config)).await;
+    let client = reqwest::Client::new();
+    let song = |ip: &'static str| client.get(format!("{app}/parse/song/1440833098")).header("x-real-ip", ip).send();
+
+    // 同一 IP 的 3 个请求依次处理
+    let start = std::time::Instant::now();
+    let same = futures::future::join_all([song("198.51.100.1"), song("198.51.100.1"), song("198.51.100.1")]).await;
+    assert!(same.iter().all(|r| r.as_ref().unwrap().status() == 200), "queued, not rejected");
+    assert!(start.elapsed() >= Duration::from_millis(600));
+    assert_eq!(peak.swap(0, Ordering::SeqCst), 1);
+
+    // 不同 IP 同时处理
+    let start = std::time::Instant::now();
+    let different = futures::future::join_all([song("198.51.100.1"), song("198.51.100.2"), song("198.51.100.3")]).await;
+    assert!(different.iter().all(|r| r.as_ref().unwrap().status() == 200));
+    assert!(start.elapsed() < Duration::from_millis(500));
+    assert_eq!(peak.load(Ordering::SeqCst), 3);
 }
 
 #[tokio::test]

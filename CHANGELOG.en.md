@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+### New
+- ✨ `--client-concurrency`: max wrapper-lite requests relayed at once per client IP (`/status` not counted); further requests wait instead of failing. Together with the per-minute `--client-rate`, one visitor's burst can no longer hold every `--wrapper-concurrency` permit and stall everyone else. Waiting requests are logged as `QUEUED … by client concurrency`
+
 ### Fixes
 - 🐛 `/status` is not counted by `--client-rate`, yet a client could keep requesting it and every request reached wrapper-lite, using up `--wrapper-rate` and concurrency permits: all clients now share one result for 10 s and simultaneous requests are merged, so wrapper-lite gets at most one `/status` per 10 s; the upstream `/status` also has a 10 s timeout
 

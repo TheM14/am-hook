@@ -25,6 +25,7 @@ fn config(wrapper_url: String, relay: bool) -> Config {
         wrapper_relay: relay,
         wrapper_hint: Some("Get a token at https://token.test".into()),
         client_rate: 0,
+        client_concurrency: 0,
         client_ip_header: None,
     }
 }
