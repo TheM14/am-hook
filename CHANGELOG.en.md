@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.5.3 (2026-10-19)
 
 ### New
 - ✨ `--client-concurrency`: max wrapper-lite requests relayed at once per client IP (`/status` not counted); further requests wait instead of failing. Together with the per-minute `--client-rate`, one visitor's burst can no longer hold every `--wrapper-concurrency` permit and stall everyone else. Waiting requests are logged as `QUEUED … by client concurrency`

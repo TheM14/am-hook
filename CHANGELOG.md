@@ -1,6 +1,6 @@
 # 更新日志
 
-## 未发布
+## v0.5.3 (2026-10-19)
 
 ### 新功能
 - ✨ `--client-concurrency`：每个客户端 IP 同时转发 wrapper-lite 的请求上限（不含 `/status`），超出的排队等待而不是失败；与按分钟计的 `--client-rate` 配合，单个访客突发时不会占满 `--wrapper-concurrency` 的名额、堵住其他用户。排队的请求在日志中标出 `QUEUED … by client concurrency`
