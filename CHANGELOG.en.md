@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.5.6 (2026-10-20)
 
 ### New
 - ✨ "Check ALAC" on album pages (the waveform button next to Play and Shuffle): finds the escape frames whose end was overwritten in every track's best ALAC stream ([AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)), without wrapper-lite and without requesting `/key`

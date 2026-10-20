@@ -1,6 +1,6 @@
 # 更新日志
 
-## 未发布
+## v0.5.6 (2026-10-20)
 
 ### 新功能
 - ✨ 专辑页「检测 ALAC」（播放、随机播放旁的波形按钮）：逐首检测最高音质 ALAC 中末尾被覆盖的原样帧（[AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)），不经过 wrapper-lite，也不请求 `/key`
