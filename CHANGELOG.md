@@ -1,5 +1,17 @@
 # 更新日志
 
+## 未发布
+
+### 新功能
+- ✨ 专辑页「检测 ALAC」（播放、随机播放旁的波形按钮）：逐首检测最高音质 ALAC 中末尾被覆盖的原样帧（[AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)），不经过 wrapper-lite，也不请求 `/key`
+  - master m3u8 取自 amp-api 的 `extendedAssetUrls.enhancedHls`；每个分段只下载开头的 moof，长度超过一帧 PCM 的 sample 再只读末尾 4 字节（cbcs 不加密的尾部），16-bit / 44.1 kHz 的一首歌约 80 KB
+  - 区分「缺 END 标记」（FFmpeg 等会丢弃该帧）与「隐藏缺陷」（END 标记恰好是 `111` 但填充位不为零：解码不报错，最后一个样本已损坏），列出帧号、时间与末尾 4 字节，可复制文字报告
+  - 显示打包日期（init 段 `mvhd` 的创建时间）与打包软件版本（`swre`）
+  - 可选：用固定密钥解密第一个分段（约 15 秒）并解码，分析实际位深（低位是否全为零）与频宽（高于量化噪声的最高频率，陡降时提示疑似升频或有损来源），并画出频谱
+
+### 变更
+- 📝 README 更正 ALAC 包尾修复的说明：恢复 END 标记只是让解码器不再丢弃该帧，被覆盖的最后一个样本无法还原
+
 ## v0.5.5 (2026-10-19)
 
 ### 变更

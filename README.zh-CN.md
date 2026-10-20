@@ -57,6 +57,7 @@
 - **到处都能播**：内置无缝衔接的播放器与播放队列，ALAC 转 FLAC、EC-3 转 PCM 兜底，支持系统媒体控制。
 - **与 music.apple.com 一样的体验**：搜索、新发现、排行榜、广播，专辑 / 歌单 / 艺人 / 编辑页，以及由 [AMLL](https://github.com/amll-dev/applemusic-like-lyrics) 渲染的逐字歌词。
 - **完整的下载**：单曲或整张专辑 / 歌单，写入 iTunes 标签、封面与歌词，可保存为 ZIP / 文件夹 / 逐个文件，支持文件名模板。
+- **ALAC 检测**：不请求 `/key`，找出整张专辑中末尾被覆盖的 ALAC 原样帧，并给出打包日期与前 15 秒的实际位深、频宽。
 - **本地资料库**：资料库、歌单、喜爱与文件夹保存在浏览器的 IndexedDB 中，可导入 / 导出。
 - **部署方式随意**：单个二进制，或一键部署到 Vercel / Cloudflare Workers。
 
@@ -296,6 +297,10 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
   - MV 的下载同参考实现的 `mvDownloader`：从 wrapper-lite 取 MV master，按设置选视频与音轨，由 MV 引擎解密、合并并整理为 `.mp4`，文件名使用同样的模板（`{codec}` / `{quality}` 为视频与音频规格，如 `2160p HEVC Dolby Vision · Dolby Atmos`）。标签同参考实现的 `writeMVMP4Tags`（专辑信息取自专辑或歌单，另写 `PERFORMER`、`RELEASETIME`，封面为 MV 缩略图），媒体类型为音乐视频（`stik` 6）。需要 OPFS
   - ZIP 不复制数据：由 OPFS 中的各个文件与头部拼成一个 Blob，CRC-32 在 defrag 写出时顺带计算
 - **下载中心**（`src/ui/download-center.mjs`）：与播放条一样常驻在页面底部（播放条上方），站内跳转时下载不中断；显示总进度、速度与当前任务，展开后列出各专辑 / 歌单 / 单曲及每首歌的状态，可以取消、重试（整个任务或单首）、有失败曲目时仍然保存已完成的部分、再次保存、移除。移除或关闭标签页时删除临时文件；下载进行中关闭标签页会提示。
+- **ALAC 检测**：有无损音质的专辑页，播放、随机播放旁的波形按钮逐首检测最高音质的 ALAC（`src/ui/alac-check.mjs`，对话框见 `views/alac-check-dialog.mjs`），不经过 wrapper-lite，也不请求 `/key`，可复制文字报告。
+  - **原样帧末尾缺陷**（[AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)）：Apple 打包时输出缓冲区只有一帧原始 PCM 大，原样帧（未压缩帧）多出的末尾 4 字节在缓冲区释放后才被复制，内容是堆管理数据。master m3u8 取自 amp-api 的 `extendedAssetUrls.enhancedHls`；每个分段只下载开头的 moof（几 KB），长度超过一帧 PCM 的 sample（16-bit 立体声 16388 字节、24-bit 24580 字节）再只读末尾 4 字节——cbcs 只加密整 16 字节块，这 4 字节是明文。PCM 之后不是 END 标记 `111` 的为「缺 END 标记」（FFmpeg 等会丢弃该帧）；是 `111` 但填充位不为零的为「隐藏缺陷」（解码不报错，最后一个样本已损坏）。列出帧号、时间与末尾 4 字节
+  - **打包信息**：init 段 `mvhd` 的创建时间（打包日期）与 `udta/swre`（打包软件版本）
+  - **实际位深与频宽**（可关闭）：第一个分段（约 15 秒）使用固定密钥，在浏览器内解密后由 `flac.wasm` 解码分析（`crates/am-flac-wasm/src/analysis.rs`）：低位是否全为零（如 24-bit 中实为 16-bit），以及平均频谱高于容器量化噪声 20 dB 的最高频率；只有其上方陡降时才判断为疑似升频（如 96 kHz 中只有 22 kHz 以下的内容）或 44.1 / 48 kHz 的有损来源，并画出频谱
 
 ## 工作原理
 
@@ -324,7 +329,7 @@ flowchart LR
 5. **播放**：浏览器支持原编码时，解密后的分片直接喂给 MSE。不支持 ALAC 但支持 FLAC-in-MP4 时，按需加载 `flac.wasm`，把 ALAC packet 无损转成 FLAC frame 并重新封装成较小的 fMP4 fragment。EC-3 在 MSE 支持时直接播放，否则按需加载 `ec3.wasm`，通过 Web Audio 播放 5.1/7.1 声道 PCM（不渲染 Atmos 对象）。拖动时直接定位到对应原始分片。
 6. **下载**：4 路并发拉取和解密，结果按原始偏移写入 OPFS 临时文件，完成后像参考下载器的 `DefragmentMP4` 那样转为 progressive MP4（`M4A ` ftyp，`moov` 位于媒体数据之前），再交给浏览器保存。不支持 OPFS 时退回内存 Blob。
 
-`hook.wasm` 会在解密后修复可确认的 ALAC 包尾错误（如歌曲 `1691044818`）：根据 init 中的轨道与 sample description，定位 PCM 完整的未压缩单声道／立体声包，将缺失或损坏的 3-bit `TYPE_END` 恢复为 `111`。修复不改变 PCM、sample 长度或 Range 偏移。压缩包、PCM 截断及没有足够尾部空间的包不做原地修复；转 FLAC 时仍保留可追加结束标记的兜底。
+`hook.wasm` 会在解密后修复可确认的 ALAC 包尾错误（如歌曲 `1691044818`）：根据 init 中的轨道与 sample description，定位 PCM 完整的未压缩单声道／立体声包，将缺失或损坏的 3-bit `TYPE_END` 恢复为 `111`，解码器因此不再丢弃该帧；但这类包末尾 4 字节在 Apple 打包时已被覆盖（[AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)），最后一个样本的原始数据不在文件中，修复无法还原它。修复不改变 sample 长度或 Range 偏移。专辑页的「ALAC 检测」可以列出受影响的帧。压缩包、PCM 截断及没有足够尾部空间的包不做原地修复；转 FLAC 时仍保留可追加结束标记的兜底。
 
 box 处理：FairPlay 元数据 box（`sinf`、`senc`、`saiz`、`saio`、`pssh`，以及分组类型为 `seig`/`seam` 的 `sgpd`、`sbgp`）替换为等长的 `free` box，字节长度和 Range 偏移保持不变。init 段中的 `enca` box 改写为原始编码（`ec-3`、`mp4a`、`alac` 等）。
 
@@ -437,6 +442,7 @@ cargo test --test e2e_test -- --ignored
 | `node tests/mv_hls.cjs`、`node tests/mv_captions.cjs` | MV 清单与字幕 |
 | `node --test tests/serverless.mjs` | serverless 后端与 `dist/` 的生成，CI 也会运行 |
 | `node --test tests/download_core.mjs` | ZIP / ZIP64、iTunes 标签、文件名模板 |
+| `node --test tests/alac_check.mjs` | ALAC 检测：原样帧末尾的判定（含 issue #136 中的实例）、moof / init 解析、多 DRM 清单中的固定密钥、频宽结论；CI 也会运行 |
 
 </details>
 
@@ -460,6 +466,7 @@ cargo test --test e2e_test -- --ignored
 |---|---|
 | `node tests/mv_live.cjs <playwright> [base]`、`node tests/mv_captions_live.cjs <playwright> [base]` | MV 播放与字幕 |
 | `node tests/alac_recovery.cjs <playwright>`、`node tests/alac_source_recovery.cjs <playwright>` | ALAC 包尾修复 |
+| `node tests/alac_check_ui.cjs <playwright> [base]` | 专辑页 ALAC 检测：issue #136 中 Shadows In The Night 的两个缺陷帧、打包日期、前 15 秒分析、复制报告，且不请求 `/key`（不需要 wrapper-lite） |
 | `node tests/aac_lc_live.cjs <playwright> [base]` | 没有 master 的歌曲：AAC-LC 变体、Widevine license、服务端与本地模式下的播放与跳转、下载到 `target/` |
 | `node tests/search_ui.cjs <playwright> [base]`、`node tests/album_ui.cjs <playwright> [base]`、`node tests/playlist_ui.cjs <playwright> [base]`、`node tests/artist_ui.cjs <playwright> [base]`、`node tests/browse_ui.cjs <playwright> [base]` | 搜索、专辑、歌单、艺人与浏览页（需能访问 music.apple.com） |
 | `node tests/app_ui.cjs <playwright> [base]` | 单页应用：跳转后继续播放、队列、前进 / 后退、歌词 |
@@ -502,7 +509,8 @@ src/
     decrypt.js         歌曲解密：m3u8 解析、Worker 池、模板、下载与 OPFS
     hook-worker.js     Worker：调用 wasm 解密、写入 OPFS
     hook.wasm          crates/am-wasm 的编译产物
-    flac.wasm / flac-transcode-worker.js / flac-init.bin   ALAC 转 FLAC 播放
+    flac.wasm / flac-transcode-worker.js / flac-init.bin   ALAC 转 FLAC 播放；ALAC 检测的解码分析
+    alac-check.mjs     专辑页的 ALAC 检测（原样帧末尾缺陷、打包信息、实际位深与频宽）；对话框在 views/alac-check-dialog.mjs
     ec3.wasm / ec3-runtime.mjs / ec3-decode-worker.js      EC-3 PCM 回退
     lyrics/            歌词界面（打包好的 AMLL，见 browser/amll；ttml.mjs 解析 TTML，panel.mjs 接入播放器，backdrop*.mjs 绘制经典背景）
     station.mjs        电台需要 media-user-token 的接口：token 的保存与填写、next-tracks、play assets、license 请求格式
@@ -514,7 +522,7 @@ crates/
   am-mp4/              ISOBMFF 解析、box 修补、sample 解密（服务端与 wasm 共用）；内嵌首段固定模板
   am-alac/             保守的 ALAC 包尾修复
   am-wasm/             am-mp4 的浏览器端 C ABI 导出（wasm32-unknown-unknown）
-  am-flac-wasm/        浏览器端 ALAC 解码与 FLAC frame 写入
+  am-flac-wasm/        浏览器端 ALAC 解码与 FLAC frame 写入；PCM 分析（实际位深、频宽，analysis.rs）
   am-media/            浏览器媒体核心：PlayReady、Widevine、CENC/CBCS、字幕修复、MP4 合并与 defrag
   am-media-wasm/       am-media 的浏览器端 C ABI 导出
   temari/              内置的 Temari FairPlay 解密库

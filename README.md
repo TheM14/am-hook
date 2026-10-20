@@ -57,6 +57,7 @@ By default **decryption happens entirely in the browser**. The server only talks
 - **Plays anywhere**: built-in gapless player with a shared queue, ALAC-to-FLAC and EC-3-to-PCM fallbacks, system media controls.
 - **Feels like music.apple.com**: search, New, Top Charts, Radio, album / playlist / artist / editorial pages, and synced lyrics rendered by [AMLL](https://github.com/amll-dev/applemusic-like-lyrics).
 - **Downloads done properly**: per-track or whole albums / playlists, iTunes tags, cover art and lyrics, ZIP / folder / file output with name templates.
+- **ALAC check**: without requesting `/key`, finds the ALAC escape frames whose end was overwritten across a whole album, with the packaging date and the real bit depth and bandwidth of the first 15 seconds.
 - **Your library, locally**: library, playlists, favorites and folders kept in the browser's IndexedDB, with import / export.
 - **Deploy your way**: a single binary, or Vercel / Cloudflare Workers with one click.
 
@@ -296,6 +297,10 @@ Like music.apple.com's Library and Playlists, but **stored only in your browser*
   - Music videos are downloaded like the reference `mvDownloader`: the MV master from wrapper-lite, the video and audio picked by the settings, then decrypted, muxed and defragmented by the MV engine into an `.mp4` named with the same templates (`{codec}` / `{quality}` describe the video and audio, e.g. `2160p HEVC Dolby Vision · Dolby Atmos`). Tags follow the reference `writeMVMP4Tags` (album info from the album or playlist, `PERFORMER`, `RELEASETIME`, the MV thumbnail as cover art) plus media type Music Video (`stik` 6). They need OPFS
   - ZIPs copy nothing: one Blob is assembled from the files in OPFS and the headers, with CRC-32 computed while defrag writes each file
 - **Download center** (`src/ui/download-center.mjs`): stays at the bottom of the page like the player bar (above it) and keeps going across navigation; shows overall progress, speed and the current job, and expands into a list of albums / playlists / songs with each track's state, where you can cancel, retry (a job or a single track), save the finished part of a job with failures, save again or remove. Temporary files are deleted on removal or when the tab closes; closing the tab during a download asks for confirmation.
+- **ALAC check**: on album pages with lossless audio, the waveform button next to Play and Shuffle checks every track's best ALAC stream (`src/ui/alac-check.mjs`, dialog in `views/alac-check-dialog.mjs`) without wrapper-lite and without requesting `/key`; the report can be copied as text.
+  - **Damaged escape-frame ends** ([AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)): Apple packages ALAC into an output buffer only as large as one frame of raw PCM, so the 4 extra bytes of an escape (uncompressed) frame are copied after the buffer is freed and hold heap metadata. The master m3u8 comes from amp-api's `extendedAssetUrls.enhancedHls`; only the moof at the start of each segment (a few KB) is downloaded, and for samples larger than one frame of PCM (16388 bytes in 16-bit stereo, 24580 in 24-bit) only the last 4 bytes, which cbcs leaves unencrypted because it encrypts whole 16-byte blocks only. If the PCM is not followed by the END tag `111` the frame is reported as "END tag missing" (FFmpeg and others drop it); with `111` but non-zero padding as "Hidden damage" (it decodes, but the last sample is wrong). Frame numbers, times and the last 4 bytes are listed
+  - **Packaging**: the creation time in the init segment's `mvhd` (packaging date) and `udta/swre` (packager version)
+  - **Real bit depth and bandwidth** (optional): the first segment (about 15 s) uses the fixed key, so it is decrypted in the browser and decoded by `flac.wasm` (`crates/am-flac-wasm/src/analysis.rs`): whether the low bits are always zero (16-bit audio in a 24-bit container), and the highest frequency of the average spectrum that is 20 dB above the container's quantization noise. Only a steep drop above it is reported as likely upsampled (for example 96 kHz with nothing above 22 kHz) or, at 44.1 / 48 kHz, as a likely lossy source; the spectrum is drawn
 
 ## How It Works
 
@@ -324,7 +329,7 @@ In the browser (`src/ui/decrypt.js`):
 5. **Playback**: decrypted fragments feed MSE when the original codec is supported. If ALAC is unavailable but FLAC-in-MP4 is, the on-demand `flac.wasm` losslessly converts ALAC packets to FLAC frames and remuxes them into small fMP4 fragments. EC-3 uses MSE when supported, otherwise the on-demand `ec3.wasm` decoder plays 5.1/7.1 PCM through Web Audio (no Atmos object rendering). Seeking jumps to the matching source fragment.
 6. **Download**: 4 lanes fetch and decrypt concurrently and write each result at its original offset into an OPFS temporary file, which is then converted to a progressive MP4 like the reference downloader's `DefragmentMP4` (`M4A ` ftyp, `moov` before the media data) and handed to the browser to save. Without OPFS it falls back to in-memory Blobs.
 
-`hook.wasm` repairs identifiable ALAC end-tag damage after decryption (for example, song `1691044818`). The init segment's track and sample description identify complete uncompressed mono/stereo packets; a missing or damaged 3-bit `TYPE_END` is restored to `111`. PCM, sample lengths and Range offsets stay unchanged. Compressed packets, truncated PCM and packets without room for the tag are left untouched; FLAC transcoding keeps its fallback that can append a missing tag byte.
+`hook.wasm` repairs identifiable ALAC end-tag damage after decryption (for example, song `1691044818`). The init segment's track and sample description identify complete uncompressed mono/stereo packets; a missing or damaged 3-bit `TYPE_END` is restored to `111` so decoders no longer drop the frame. The last 4 bytes of such packets were already overwritten when Apple packaged them ([AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)): the original last sample is not in the file, and the repair cannot restore it. Sample lengths and Range offsets stay unchanged. The album page's ALAC check lists the affected frames. Compressed packets, truncated PCM and packets without room for the tag are left untouched; FLAC transcoding keeps its fallback that can append a missing tag byte.
 
 Box handling: FairPlay metadata boxes (`sinf`, `senc`, `saiz`, `saio`, `pssh`, and `sgpd`/`sbgp` with grouping type `seig`/`seam`) are replaced with equal-length `free` boxes, so byte lengths and Range offsets stay exact. The `enca` box in the init segment is rewritten to the original codec (`ec-3`, `mp4a`, `alac`, etc.).
 
@@ -437,6 +442,7 @@ Browser-side tests are plain Node scripts. `<playwright>` is the path to a Playw
 | `node tests/mv_hls.cjs`, `node tests/mv_captions.cjs` | MV playlists and captions |
 | `node --test tests/serverless.mjs` | The serverless backend and the `dist/` layout; also run in CI |
 | `node --test tests/download_core.mjs` | ZIP / ZIP64, iTunes tags, file name templates |
+| `node --test tests/alac_check.mjs` | ALAC check: escape-frame end verdicts (including the cases from issue #136), moof / init parsing, the fixed key in multi-DRM playlists, bandwidth verdicts; also run by CI |
 
 </details>
 
@@ -460,6 +466,7 @@ Browser-side tests are plain Node scripts. `<playwright>` is the path to a Playw
 |---|---|
 | `node tests/mv_live.cjs <playwright> [base]`, `node tests/mv_captions_live.cjs <playwright> [base]` | MV playback and captions |
 | `node tests/alac_recovery.cjs <playwright>`, `node tests/alac_source_recovery.cjs <playwright>` | ALAC end-tag repair |
+| `node tests/alac_check_ui.cjs <playwright> [base]` | Album page ALAC check: the two damaged frames of Shadows In The Night from issue #136, packaging date, first-15-seconds analysis, copied report, no `/key` request (wrapper-lite not needed) |
 | `node tests/aac_lc_live.cjs <playwright> [base]` | A song without a master: AAC-LC variant, Widevine license, playback and seeking in server and local modes, download to `target/` |
 | `node tests/search_ui.cjs <playwright> [base]`, `node tests/album_ui.cjs <playwright> [base]`, `node tests/playlist_ui.cjs <playwright> [base]`, `node tests/artist_ui.cjs <playwright> [base]`, `node tests/browse_ui.cjs <playwright> [base]` | Search, album, playlist, artist and browse pages (need access to music.apple.com) |
 | `node tests/app_ui.cjs <playwright> [base]` | Single-page app: playback across navigation, queue, Back / Forward, lyrics |
@@ -502,7 +509,8 @@ src/
     decrypt.js         Song decryption: m3u8 parsing, Worker pool, templates, download and OPFS
     hook-worker.js     Worker: wasm decryption and OPFS writes
     hook.wasm          Build output of crates/am-wasm
-    flac.wasm / flac-transcode-worker.js / flac-init.bin   ALAC-to-FLAC playback
+    flac.wasm / flac-transcode-worker.js / flac-init.bin   ALAC-to-FLAC playback; decoding for the ALAC check
+    alac-check.mjs     album page ALAC check (damaged escape-frame ends, packaging, real bit depth and bandwidth); dialog in views/alac-check-dialog.mjs
     ec3.wasm / ec3-runtime.mjs / ec3-decode-worker.js      EC-3 PCM fallback
     lyrics/            Lyrics view (bundled AMLL, see browser/amll; ttml.mjs parses TTML, panel.mjs wires it to the player, backdrop*.mjs draw the classic background)
     station.mjs        Station endpoints needing a media-user-token: storing and asking for the token, next tracks, play assets, license request formats
@@ -514,7 +522,7 @@ crates/
   am-mp4/              ISOBMFF parsing, box patching, sample decryption (shared by server and wasm); embeds the fixed first-fragment template
   am-alac/             Conservative ALAC end-tag repair
   am-wasm/             Browser C ABI exports of am-mp4 (wasm32-unknown-unknown)
-  am-flac-wasm/        ALAC packet decoder and FLAC frame writer for the browser
+  am-flac-wasm/        ALAC packet decoder and FLAC frame writer for the browser; PCM analysis (real bit depth, bandwidth, analysis.rs)
   am-media/            Browser media core: PlayReady, Widevine, CENC/CBCS, caption repair, MP4 muxing and defragmentation
   am-media-wasm/       Browser C ABI exports of am-media
   temari/              Vendored Temari FairPlay decryption library

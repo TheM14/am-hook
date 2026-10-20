@@ -1,10 +1,13 @@
 //! Minimal ALAC packet decoder and FLAC verbatim-frame writer.
-//! MP4 parsing/muxing stays in JavaScript, so this module is loaded only for ALAC playback.
+//! MP4 parsing/muxing stays in JavaScript, so this module is loaded only for ALAC playback
+//! and for the album page's ALAC check (`flac_analyze_*`, see analysis.rs).
 
 use std::alloc::{alloc, dealloc, Layout};
 use std::cell::RefCell;
 
 use alac::{Decoder, StreamInfo};
+
+pub mod analysis;
 
 struct Context {
     decoder: Decoder,
@@ -16,6 +19,8 @@ struct Context {
     rate: u32,
     max_block: u32,
     samples: u32,
+    analyzer: Option<analysis::Analyzer>,
+    report: String,
 }
 
 thread_local! {
@@ -73,6 +78,8 @@ pub unsafe extern "C" fn flac_open(ptr: *const u8, len: usize) -> u32 {
             rate,
             max_block,
             samples: 0,
+            analyzer: None,
+            report: String::new(),
         });
     });
     1
@@ -141,24 +148,10 @@ pub unsafe extern "C" fn flac_encode(
         let Some(ctx) = borrow.as_mut() else { return 0 };
         ctx.samples = 0;
         ctx.frame.clear();
-        let pcm = match ctx.decoder.decode_packet(packet, &mut ctx.pcm) {
-            Ok(pcm) => pcm,
-            Err(_) => {
-                if !repair_uncompressed_end(
-                    packet,
-                    &mut ctx.repair,
-                    ctx.channels,
-                    ctx.bits,
-                    ctx.max_block,
-                ) {
-                    return 0;
-                }
-                let Ok(pcm) = ctx.decoder.decode_packet(&ctx.repair, &mut ctx.pcm) else {
-                    return 0;
-                };
-                pcm
-            }
+        let Some(len) = ctx.decode(packet) else {
+            return 0;
         };
+        let pcm = &ctx.pcm[..len];
         let samples = pcm.len() / ctx.channels;
         // FLAC permits 1..15 samples in the final frame (RFC 9639 §4.1).
         // ALAC's final packet can be this short; rejecting it loses the whole
@@ -178,6 +171,93 @@ pub unsafe extern "C" fn flac_encode(
         );
         1
     })
+}
+
+impl Context {
+    /// Decodes one packet into `pcm` and returns the number of interleaved samples;
+    /// a damaged end tag of an escape packet is repaired first.
+    fn decode(&mut self, packet: &[u8]) -> Option<usize> {
+        if let Ok(pcm) = self.decoder.decode_packet(packet, &mut self.pcm) {
+            return Some(pcm.len());
+        }
+        if !repair_uncompressed_end(
+            packet,
+            &mut self.repair,
+            self.channels,
+            self.bits,
+            self.max_block,
+        ) {
+            return None;
+        }
+        self.decoder
+            .decode_packet(&self.repair, &mut self.pcm)
+            .ok()
+            .map(<[i32]>::len)
+    }
+}
+
+/// Starts analyzing the PCM of the open track (see analysis.rs). Returns 1 on success.
+#[no_mangle]
+pub extern "C" fn flac_analyze_begin() -> u32 {
+    CONTEXT.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let Some(ctx) = borrow.as_mut() else { return 0 };
+        ctx.analyzer = Some(analysis::Analyzer::new(ctx.channels, ctx.bits, ctx.rate));
+        ctx.report.clear();
+        1
+    })
+}
+
+/// Decodes one ALAC packet into the analysis. Returns 1 on success.
+/// # Safety
+/// `ptr` must point to `len` readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn flac_analyze(ptr: *const u8, len: usize) -> u32 {
+    let Some(packet) = (!ptr.is_null()).then(|| std::slice::from_raw_parts(ptr, len)) else {
+        return 0;
+    };
+    CONTEXT.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let Some(ctx) = borrow.as_mut() else { return 0 };
+        if ctx.analyzer.is_none() {
+            return 0;
+        }
+        let Some(len) = ctx.decode(packet) else {
+            return 0;
+        };
+        if let Some(analyzer) = ctx.analyzer.as_mut() {
+            analyzer.push(&ctx.pcm[..len]);
+        }
+        1
+    })
+}
+
+/// Ends the analysis; the JSON report is then at `flac_report_ptr` / `flac_report_len`.
+#[no_mangle]
+pub extern "C" fn flac_analyze_end() -> u32 {
+    CONTEXT.with(|cell| {
+        let mut borrow = cell.borrow_mut();
+        let Some(ctx) = borrow.as_mut() else { return 0 };
+        let Some(analyzer) = ctx.analyzer.take() else {
+            return 0;
+        };
+        ctx.report = analyzer.finish().to_json();
+        1
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn flac_report_ptr() -> *const u8 {
+    CONTEXT.with(|cell| {
+        cell.borrow()
+            .as_ref()
+            .map_or(std::ptr::null(), |c| c.report.as_ptr())
+    })
+}
+
+#[no_mangle]
+pub extern "C" fn flac_report_len() -> usize {
+    CONTEXT.with(|cell| cell.borrow().as_ref().map_or(0, |c| c.report.len()))
 }
 
 /// Some ALAC escape packets (e.g. song 1691044818) contain every PCM bit,
@@ -519,6 +599,31 @@ mod tests {
         let empty = short_alac_packet(0);
         assert_eq!(unsafe { flac_encode(empty.as_ptr(), empty.len(), 0, 0) }, 0);
         flac_close();
+    }
+
+    #[test]
+    fn analyzes_decoded_packets_through_the_wasm_api() {
+        let cookie = [
+            0, 0, 0x10, 0, 0, 24, 40, 10, 14, 2, 0, 255, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 0xb1, 0x10,
+        ];
+        assert_eq!(unsafe { flac_open(cookie.as_ptr(), cookie.len()) }, 1);
+        let packet = short_alac_packet(16);
+        let analyze = || unsafe { flac_analyze(packet.as_ptr(), packet.len()) };
+        assert_eq!(analyze(), 0, "analysis not started");
+        assert_eq!(flac_analyze_begin(), 1);
+        for _ in 0..3 {
+            assert_eq!(analyze(), 1);
+        }
+        assert_eq!(flac_analyze_end(), 1);
+        let json = unsafe { std::slice::from_raw_parts(flac_report_ptr(), flac_report_len()) };
+        let json = std::str::from_utf8(json).unwrap();
+        assert!(
+            json.starts_with("{\"frames\":48,\"bits\":24,\"rate\":176400,\"effectiveBits\":24,"),
+            "{json}"
+        );
+        assert_eq!(flac_analyze_end(), 0, "already ended");
+        flac_close();
+        assert_eq!(flac_analyze_begin(), 0, "no open track");
     }
 
     #[test]

@@ -67,6 +67,8 @@ pub static ASSETS: &[Asset] = &[
     asset!("/assets/zip.mjs", JS, "zip.mjs"),
     asset!("/assets/naming.mjs", JS, "naming.mjs"),
     asset!("/assets/lrc.mjs", JS, "lrc.mjs"),
+    // 专辑页的 ALAC 检测：原样帧末尾缺陷（只读 moof 与帧尾，不请求 /key）、打包日期，以及第一个分段的实际位深与频宽
+    asset!("/assets/alac-check.mjs", JS, "alac-check.mjs"),
     // FLAC 转码与 EC-3 解码
     asset!("/assets/flac-transcode-worker.js", JS, "flac-transcode-worker.js"),
     asset!("/assets/flac.wasm", WASM, "flac.wasm"),
@@ -129,6 +131,8 @@ pub static ASSETS: &[Asset] = &[
     asset!("/assets/views/settings.mjs", JS, "views/settings.mjs"),
     asset!("/assets/views/settings.css", CSS, "views/settings.css"),
     asset!("/assets/views/download-dialog.mjs", JS, "views/download-dialog.mjs"),
+    // 专辑页的 ALAC 检测对话框（检测逻辑见 /assets/alac-check.mjs）
+    asset!("/assets/views/alac-check-dialog.mjs", JS, "views/alac-check-dialog.mjs"),
 ];
 
 /// 由部署环境生成的资源（二进制见 ui::host_js_handler，serverless 部署见 serverless/core.mjs）：不加哈希，也不改写

@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## Unreleased
+
+### New
+- ✨ "Check ALAC" on album pages (the waveform button next to Play and Shuffle): finds the escape frames whose end was overwritten in every track's best ALAC stream ([AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)), without wrapper-lite and without requesting `/key`
+  - The master m3u8 comes from amp-api's `extendedAssetUrls.enhancedHls`; only each segment's moof is downloaded, plus the last 4 bytes (the part cbcs leaves unencrypted) of samples larger than one frame of PCM, about 80 KB for a 16-bit / 44.1 kHz track
+  - Tells "END tag missing" (FFmpeg and others drop the frame) from "Hidden damage" (the END tag happens to be `111` but the padding is not zero: it decodes, but the last sample is wrong), lists frame numbers, times and the last 4 bytes, and copies a text report
+  - Shows the packaging date (creation time in the init segment's `mvhd`) and the packager version (`swre`)
+  - Optionally decrypts the first segment (about 15 s) with the fixed key and decodes it to measure the real bit depth (low bits always zero?) and bandwidth (highest frequency above the quantization noise; a steep drop suggests upsampling or a lossy source), with a spectrum chart
+
+### Changed
+- 📝 The README now describes the ALAC end-tag repair accurately: restoring the END tag only stops decoders from dropping the frame; the overwritten last sample cannot be restored
+
 ## v0.5.5 (2026-10-19)
 
 ### Changed

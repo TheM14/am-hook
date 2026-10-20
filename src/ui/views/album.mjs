@@ -2,6 +2,7 @@
 import { createActions, ICON as ACTION_ICON, playable, targetOf } from './actions.mjs';
 import { createDetailHeader } from './detail-header.mjs';
 import { openDownloadDialog } from './download-dialog.mjs';
+import { openAlacCheckDialog } from './alac-check-dialog.mjs';
 
 const { formatTime, qualityIcon } = window.AmHook;
 const { AmDecrypt, AmI18n } = window;
@@ -37,8 +38,12 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     } : {},
   } : null));
   moreBtn.disabled = true;
+  // 检测 ALAC（见 alac-check-dialog.mjs）：有 ALAC 的专辑才显示，master m3u8 取自曲目的 extendedAssetUrls.enhancedHls
+  const checkBtn = Object.assign(document.createElement('button'), { className: 'detail-circle-btn', type: 'button', hidden: true });
+  checkBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12h4l3-7 4.5 14L17 9l1.5 3H22"/></svg>';
+  checkBtn.addEventListener('click', () => { if (album) openAlacCheckDialog({ resource: album, tracks, toast }); });
   root.querySelector('.detail-actions').append(Object.assign(document.createElement('span'), { className: 'detail-extra' }));
-  root.querySelector('.detail-extra').append(moreBtn);
+  root.querySelector('.detail-extra').append(checkBtn, moreBtn);
   let rows = new Map();
   let notesExpanded = false;
   let loadToken = 0;
@@ -303,6 +308,9 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     renderFooter();
     renderShelves();
     moreBtn.disabled = false;
+    checkBtn.hidden = !songs().some((track) => track.attributes.extendedAssetUrls && track.attributes.extendedAssetUrls.enhancedHls);
+    checkBtn.title = t('ac.button');
+    checkBtn.setAttribute('aria-label', checkBtn.title);
   }
 
   async function loadAlbum() {
@@ -317,7 +325,7 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
       let list = (rel && rel.data) || [];
       // 超长专辑的曲目分页
       for (let more = rel && rel.next; more;) {
-        const page = await amp(more, { l, 'include[songs]': 'artists', 'include[music-videos]': 'artists', 'fields[artists]': 'name,url' });
+        const page = await amp(more, { l, extend: 'extendedAssetUrls', 'include[songs]': 'artists', 'include[music-videos]': 'artists', 'fields[artists]': 'name,url' });
         list = list.concat(page.data || []);
         more = page.next;
       }

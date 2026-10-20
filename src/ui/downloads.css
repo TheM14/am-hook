@@ -152,3 +152,64 @@ body.has-downloads.has-player { padding-bottom: calc(var(--player-height, 110px)
 .dl-dialog-start { border: 0; background: var(--accent); color: #fff; }
 .dl-dialog-start:hover { background: var(--accent-hover); }
 .dl-dialog-start:disabled { opacity: .5; cursor: default; }
+
+/* ---------- ALAC 检测对话框（专辑页，沿用下载对话框的外框，见 views/alac-check-dialog.mjs） ---------- */
+.ac-dialog { width: min(720px, calc(100vw - 24px)); }
+.ac-intro { padding: 0 18px 8px; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.ac-intro summary { width: fit-content; cursor: pointer; }
+.ac-intro p { margin: 4px 0 0; }
+.ac-option { display: flex; align-items: flex-start; gap: 8px; padding: 0 18px 12px; font-size: 13px; cursor: pointer; }
+.ac-option input { flex: 0 0 auto; width: 16px; height: 16px; margin: 1px 0 0; accent-color: var(--accent); }
+.ac-list { padding: 4px 6px; }
+.ac-row + .ac-row { border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.ac-item {
+  display: flex; align-items: center; gap: 10px; width: 100%; min-height: 40px; padding: 4px 8px; border: 0; border-radius: 6px;
+  background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.ac-item:hover:not(:disabled) { background: color-mix(in srgb, var(--text) 4%, transparent); }
+.ac-item:disabled { cursor: default; }
+.ac-item[aria-expanded="true"] .dl-dialog-name { font-weight: 600; }
+.ac-format { flex: 0 0 auto; color: var(--faint); font-size: 12px; font-variant-numeric: tabular-nums; }
+.ac-status { flex: 0 0 auto; min-width: 72px; color: var(--muted); font-size: 12px; text-align: right; }
+.ac-status.is-ok { color: var(--ok); }
+.ac-status.is-bad { color: var(--error); font-weight: 600; }
+.ac-flag { flex: 0 0 auto; padding: 0 6px; border-radius: 4px; background: var(--warn-soft); color: var(--warn); font-size: 11px; line-height: 18px; }
+.ac-detail { display: grid; gap: 6px; padding: 2px 8px 12px 40px; font-size: 12px; }
+.ac-detail p { margin: 0; }
+.ac-meta { color: var(--muted); }
+.ac-soft { color: var(--faint); }
+.ac-error { color: var(--error); overflow-wrap: anywhere; }
+.ac-frames { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+.ac-frames th { padding: 4px 8px 4px 0; color: var(--faint); font-weight: 500; text-align: left; }
+.ac-frames td { padding: 3px 8px 3px 0; border-top: 1px solid color-mix(in srgb, var(--line) 60%, transparent); }
+.ac-frames tr.is-bad td:nth-child(3) { color: var(--error); }
+.ac-hex { font-family: var(--mono); white-space: nowrap; }
+.ac-analysis { display: grid; gap: 3px; margin-top: 4px; }
+.ac-analysis-title { color: var(--faint); }
+.ac-analysis .is-warn { color: var(--warn); }
+.ac-spectrum { margin-top: 6px; }
+.ac-spec-plot { position: relative; height: 96px; border-bottom: 1px solid var(--line); }
+.ac-spec-plot svg { display: block; width: 100%; height: 100%; overflow: visible; }
+.ac-spec-line { fill: none; stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; }
+.ac-spec-area { fill: color-mix(in srgb, var(--accent) 12%, transparent); stroke: none; }
+.ac-spec-floor { stroke: var(--faint); stroke-width: 1; stroke-dasharray: 3 3; }
+.ac-spec-limit { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 4 3; }
+.ac-spec-limit.is-warn { stroke: var(--warn); }
+.ac-spec-cursor { stroke: var(--text); stroke-width: 1; opacity: .4; }
+.ac-spec-floor-label, .ac-spec-limit-label {
+  position: absolute; color: var(--faint); font-size: 10px; line-height: 1; white-space: nowrap; pointer-events: none;
+}
+.ac-spec-floor-label { right: 0; transform: translateY(-120%); }
+.ac-spec-limit-label { top: 0; padding-left: 4px; color: var(--muted); }
+.ac-spec-tip {
+  position: absolute; top: 14px; padding: 2px 6px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2);
+  color: var(--text); font-size: 11px; white-space: nowrap; pointer-events: none; transform: translateX(8px);
+}
+.ac-spec-tip.is-right { transform: translateX(calc(-100% - 8px)); }
+.ac-spec-axis { display: flex; justify-content: space-between; padding-top: 3px; color: var(--faint); font-size: 10px; font-variant-numeric: tabular-nums; }
+@media (max-width: 483px) {
+  .ac-dialog .dl-dialog-foot { gap: 8px; }
+  .ac-dialog .dl-dialog-foot button { flex: 1 1 auto; padding: 0 10px; font-size: 13px; white-space: nowrap; }
+  .ac-format { display: none; }
+  .ac-detail { padding-left: 8px; }
+}

@@ -254,18 +254,42 @@ async function transcode(buf) {
   return output;
 }
 
+/**
+ * Album page ALAC check (alac-check.mjs): decode a decrypted fragment and report what the PCM really
+ * contains (crates/am-flac-wasm/src/analysis.rs). `init` must already be patched (enca -> alac).
+ * Closes any open transcoding track: the check uses a worker of its own.
+ */
+async function analyze(init, frag) {
+  const w = await wasm();
+  codec = undefined;
+  const cookie = cookieFromInit(new Uint8Array(init));
+  if (!withWasmInput(w, cookie, (ptr, len) => w.flac_open(ptr, len)) || !w.flac_analyze_begin()) throw new Error('Unsupported ALAC track');
+  try {
+    let failed = 0;
+    for (const sample of sourceSamples(new Uint8Array(frag)).samples) {
+      if (!withWasmInput(w, sample.bytes, (ptr, len) => w.flac_analyze(ptr, len))) failed++;
+    }
+    if (!w.flac_analyze_end()) throw new Error('ALAC analysis failed');
+    const report = JSON.parse(new TextDecoder().decode(new Uint8Array(w.memory.buffer, w.flac_report_ptr(), w.flac_report_len())));
+    return { ...report, failedPackets: failed };
+  } finally {
+    w.flac_close();
+  }
+}
+
 if (typeof self !== 'undefined' && typeof self.postMessage === 'function') {
   self.onmessage = async ({ data }) => {
     const { id, op, buf } = data;
     // The page reuses this worker for the next track: forget the open track, keep the loaded wasm.
     if (op === 'reset') { codec = undefined; return; }
     try {
-      const result = op === 'open' ? await openTrack(buf) : await transcode(buf);
-      self.postMessage({ id, ok: true, result }, Array.isArray(result) ? result : [result]);
+      const result = op === 'open' ? await openTrack(buf) : op === 'analyze' ? await analyze(data.init, data.frag) : await transcode(buf);
+      const transfer = Array.isArray(result) ? result : result instanceof ArrayBuffer ? [result] : [];
+      self.postMessage({ id, ok: true, result }, transfer);
     } catch (error) {
       self.postMessage({ id, ok: false, error: error.message || String(error) });
     }
   };
 }
 
-if (typeof module !== 'undefined') module.exports = { boxes, cookieFromInit, patchInit, sourceSamples, muxFragment, openTrack, transcode };
+if (typeof module !== 'undefined') module.exports = { boxes, cookieFromInit, patchInit, sourceSamples, muxFragment, openTrack, transcode, analyze };
