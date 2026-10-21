@@ -1,6 +1,6 @@
 # CHANGELOG
 
-## Unreleased
+## v0.5.7 (2026-10-21)
 
 ### New
 - ✨ "Check ALAC" can also check the master m3u8 from wrapper-lite: it may be packaged differently from the web API's (amp-api `enhancedHls`) and sometimes has a better ALAC (`1679278167`: 24/48 on the web, also 24/96 via wrapper-lite). The same best ALAC is checked once; different ones are both listed and the better one is marked
