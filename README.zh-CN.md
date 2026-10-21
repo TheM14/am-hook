@@ -297,7 +297,9 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
   - MV 的下载同参考实现的 `mvDownloader`：从 wrapper-lite 取 MV master，按设置选视频与音轨，由 MV 引擎解密、合并并整理为 `.mp4`，文件名使用同样的模板（`{codec}` / `{quality}` 为视频与音频规格，如 `2160p HEVC Dolby Vision · Dolby Atmos`）。标签同参考实现的 `writeMVMP4Tags`（专辑信息取自专辑或歌单，另写 `PERFORMER`、`RELEASETIME`，封面为 MV 缩略图），媒体类型为音乐视频（`stik` 6）。需要 OPFS
   - ZIP 不复制数据：由 OPFS 中的各个文件与头部拼成一个 Blob，CRC-32 在 defrag 写出时顺带计算
 - **下载中心**（`src/ui/download-center.mjs`）：与播放条一样常驻在页面底部（播放条上方），站内跳转时下载不中断；显示总进度、速度与当前任务，展开后列出各专辑 / 歌单 / 单曲及每首歌的状态，可以取消、重试（整个任务或单首）、有失败曲目时仍然保存已完成的部分、再次保存、移除。移除或关闭标签页时删除临时文件；下载进行中关闭标签页会提示。
-- **ALAC 检测**：有无损音质的专辑页，播放、随机播放旁的波形按钮逐首检测最高音质的 ALAC（`src/ui/alac-check.mjs`，对话框见 `views/alac-check-dialog.mjs`），不经过 wrapper-lite，也不请求 `/key`，可复制文字报告。
+- **ALAC 检测**：专辑页、歌单页与歌曲页头部的波形按钮，以及歌曲「更多」菜单里的「检测 ALAC」，逐首检测最高音质的 ALAC（`src/ui/alac-check.mjs`，对话框见 `views/alac-check-dialog.mjs`），不请求 `/key`。打开后不自动开始，可全选、全不选或勾选部分曲目；显示地区、专辑 / 歌单 / 歌曲 ID、每首的歌曲 ID 与检测时间，可复制文字报告。
+  - **网页版与 wrapper-lite 的 master**：默认只用 amp-api 的 `extendedAssetUrls.enhancedHls`，不经过 wrapper-lite。两者可能是不同的打包，wrapper-lite 给出的有时音质更高（如歌曲 `1679278167`：网页版只有 24-bit / 48 kHz，wrapper-lite 的另有 24-bit / 96 kHz），勾选后同时检测 wrapper-lite 的 master；两边最高音质 ALAC 的 media m3u8 相同时只检测一次，不同时分别列出并标明哪边音质更高。歌曲页的音质列表（来自 wrapper-lite）也会取网页版的 master 比较，只在 wrapper-lite 中有的音质标为「仅 wrapper-lite」
+  - **下载时检测**（设置中心，默认关闭）：下载 ALAC 时同时检测实际下载的那一份：原始分段在解密、修复之前顺带读出 moof 与原样帧末尾，不另发请求。结论显示在下载中心，并写入自定义标签 `----:com.apple.iTunes:ALAC_CHECK`（名称可改），内容如 `result=damaged; noEnd=25; hidden=0; oversize=0; frames=2108; escapes=25; format=16/44100; bad=#124@11.517:noEnd,…; packaged=…; endTagRepair=on; checked=…`
   - **原样帧末尾缺陷**（[AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)）：Apple 打包时输出缓冲区只有一帧原始 PCM 大，原样帧（未压缩帧）多出的末尾 4 字节在缓冲区释放后才被复制，内容是堆管理数据。master m3u8 取自 amp-api 的 `extendedAssetUrls.enhancedHls`；每个分段只下载开头的 moof（几 KB），长度超过一帧 PCM 的 sample（16-bit 立体声 16388 字节、24-bit 24580 字节）再只读末尾 4 字节——cbcs 只加密整 16 字节块，这 4 字节是明文。PCM 之后不是 END 标记 `111` 的为「缺 END 标记」（FFmpeg 等会丢弃该帧）；是 `111` 但填充位不为零的为「隐藏缺陷」（解码不报错，最后一个样本已损坏）。列出帧号、时间与末尾 4 字节
   - **打包信息**：init 段 `mvhd` 的创建时间（打包日期）与 `udta/swre`（打包软件版本）
   - **实际位深与频宽**（可关闭）：第一个分段（约 15 秒）使用固定密钥，在浏览器内解密后由 `flac.wasm` 解码分析（`crates/am-flac-wasm/src/analysis.rs`）：低位是否全为零（如 24-bit 中实为 16-bit），以及平均频谱高于容器量化噪声 20 dB 的最高频率；只有其上方陡降时才判断为疑似升频（如 96 kHz 中只有 22 kHz 以下的内容）或 44.1 / 48 kHz 的有损来源，并画出频谱
@@ -329,7 +331,7 @@ flowchart LR
 5. **播放**：浏览器支持原编码时，解密后的分片直接喂给 MSE。不支持 ALAC 但支持 FLAC-in-MP4 时，按需加载 `flac.wasm`，把 ALAC packet 无损转成 FLAC frame 并重新封装成较小的 fMP4 fragment。EC-3 在 MSE 支持时直接播放，否则按需加载 `ec3.wasm`，通过 Web Audio 播放 5.1/7.1 声道 PCM（不渲染 Atmos 对象）。拖动时直接定位到对应原始分片。
 6. **下载**：4 路并发拉取和解密，结果按原始偏移写入 OPFS 临时文件，完成后像参考下载器的 `DefragmentMP4` 那样转为 progressive MP4（`M4A ` ftyp，`moov` 位于媒体数据之前），再交给浏览器保存。不支持 OPFS 时退回内存 Blob。
 
-`hook.wasm` 会在解密后修复可确认的 ALAC 包尾错误（如歌曲 `1691044818`）：根据 init 中的轨道与 sample description，定位 PCM 完整的未压缩单声道／立体声包，将缺失或损坏的 3-bit `TYPE_END` 恢复为 `111`，解码器因此不再丢弃该帧；但这类包末尾 4 字节在 Apple 打包时已被覆盖（[AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)），最后一个样本的原始数据不在文件中，修复无法还原它。修复不改变 sample 长度或 Range 偏移。专辑页的「ALAC 检测」可以列出受影响的帧。压缩包、PCM 截断及没有足够尾部空间的包不做原地修复；转 FLAC 时仍保留可追加结束标记的兜底。
+`hook.wasm` 会在解密后修复可确认的 ALAC 包尾错误（如歌曲 `1691044818`）：根据 init 中的轨道与 sample description，定位 PCM 完整的未压缩单声道／立体声包，将缺失或损坏的 3-bit `TYPE_END` 恢复为 `111`，解码器因此不再丢弃该帧；但这类包末尾 4 字节在 Apple 打包时已被覆盖（[AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)），最后一个样本的原始数据不在文件中，修复无法还原它。修复不改变 sample 长度或 Range 偏移。也可在设置中心关闭修复：被覆盖的样本无论如何都已丢失，关闭只是让保存的文件与 Apple 提供的逐字节相同（缺 END 标记的帧会被 FFmpeg 等丢弃）。「检测 ALAC」可以列出受影响的帧。压缩包、PCM 截断及没有足够尾部空间的包不做原地修复；转 FLAC 时仍保留可追加结束标记的兜底。
 
 box 处理：FairPlay 元数据 box（`sinf`、`senc`、`saiz`、`saio`、`pssh`，以及分组类型为 `seig`/`seam` 的 `sgpd`、`sbgp`）替换为等长的 `free` box，字节长度和 Range 偏移保持不变。init 段中的 `enca` box 改写为原始编码（`ec-3`、`mp4a`、`alac` 等）。
 

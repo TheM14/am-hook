@@ -1,8 +1,7 @@
 // 专辑页（/https://music.apple.com/{cc}/album/{slug}/{id}），由 app.mjs 挂载
-import { createActions, ICON as ACTION_ICON, playable, targetOf } from './actions.mjs';
+import { createActions, ICON as ACTION_ICON, openAlacCheck, playable, targetOf } from './actions.mjs';
 import { createDetailHeader } from './detail-header.mjs';
 import { openDownloadDialog } from './download-dialog.mjs';
-import { openAlacCheckDialog } from './alac-check-dialog.mjs';
 
 const { formatTime, qualityIcon } = window.AmHook;
 const { AmDecrypt, AmI18n } = window;
@@ -38,10 +37,12 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     } : {},
   } : null));
   moreBtn.disabled = true;
-  // 检测 ALAC（见 alac-check-dialog.mjs）：有 ALAC 的专辑才显示，master m3u8 取自曲目的 extendedAssetUrls.enhancedHls
-  const checkBtn = Object.assign(document.createElement('button'), { className: 'detail-circle-btn', type: 'button', hidden: true });
-  checkBtn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M2 12h4l3-7 4.5 14L17 9l1.5 3H22"/></svg>';
-  checkBtn.addEventListener('click', () => { if (album) openAlacCheckDialog({ resource: album, tracks, toast }); });
+  // 检测 ALAC（见 alac-check-dialog.mjs）：有歌曲的专辑才显示，网页版的 master m3u8 取自曲目的 extendedAssetUrls.enhancedHls；
+  // 曲目「更多」菜单里也有，只检测那一首
+  const checkBtn = Object.assign(document.createElement('button'), { className: 'detail-circle-btn', type: 'button', hidden: true, innerHTML: ACTION_ICON.check });
+  checkBtn.addEventListener('click', () => {
+    if (album) openAlacCheck({ kind: 'album', id: albumId, country, resource: album, tracks, toast }).catch((err) => toast(err.message));
+  });
   root.querySelector('.detail-actions').append(Object.assign(document.createElement('span'), { className: 'detail-extra' }));
   root.querySelector('.detail-extra').append(checkBtn, moreBtn);
   let rows = new Map();
@@ -308,7 +309,7 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     renderFooter();
     renderShelves();
     moreBtn.disabled = false;
-    checkBtn.hidden = !songs().some((track) => track.attributes.extendedAssetUrls && track.attributes.extendedAssetUrls.enhancedHls);
+    checkBtn.hidden = !songs().length;
     checkBtn.title = t('ac.button');
     checkBtn.setAttribute('aria-label', checkBtn.title);
   }

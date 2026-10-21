@@ -45,6 +45,11 @@ export const DEFAULTS = {
     atmosMax: 2768,
     // 首选音质不存在时改用次一级（否则跳过该曲目）
     fallback: true,
+    // ALAC：为缺少 END 标记的原样帧补上标记（AppleMusicDecrypt#136，见 crates/am-alac）
+    alacRepair: true,
+    // ALAC：下载时检测原样帧（alac-check.mjs），结果写入自定义标签 ----:com.apple.iTunes:<alacCheckTagName>
+    alacCheckTag: false,
+    alacCheckTagName: 'ALAC_CHECK',
     // 专辑 / 歌单中的 MV 一起下载（下载对话框中默认勾选）
     mv: true,
     mvMax: 2160,
@@ -91,6 +96,8 @@ export const DEFAULTS = {
 };
 
 const LANG_TAG = /^[A-Za-z0-9-]{0,35}$/;
+/** iTunes 自定义字段名（----:com.apple.iTunes:<名称>） */
+export const TAG_NAME = /^[A-Za-z0-9 _.-]{1,64}$/;
 const int = (v, min, max, fallback) => {
   const n = Number(v);
   return Number.isInteger(n) && n >= min && n <= max ? n : fallback;
@@ -110,7 +117,10 @@ function clean(section, raw) {
     alacMax: oneOf(Number(r.alacMax), o.alacMax, d.alacMax),
     atmosMax: oneOf(Number(r.atmosMax), o.atmosMax, d.atmosMax),
     fallback: bool(r.fallback, d.fallback),
-    mv: bool(r.mv, d.mv),
+    alacRepair: bool(r.alacRepair, d.alacRepair),
+    alacCheckTag: bool(r.alacCheckTag, d.alacCheckTag),
+    alacCheckTagName: typeof r.alacCheckTagName === 'string' && TAG_NAME.test(r.alacCheckTagName.trim()) ? r.alacCheckTagName.trim() : d.alacCheckTagName,
+    mv:bool(r.mv, d.mv),
     mvMax: oneOf(Number(r.mvMax), o.mvMax, d.mvMax),
     mvAudio: oneOf(r.mvAudio, o.mvAudio, d.mvAudio),
     concurrency: int(r.concurrency, 1, 6, d.concurrency),

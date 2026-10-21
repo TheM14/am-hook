@@ -1,4 +1,5 @@
-// ALAC 检测（专辑页「检测 ALAC」，见 views/alac-check-dialog.mjs）：不请求 /key，只从 Apple CDN 读取很少的字节。
+// ALAC 检测（专辑、歌单、歌曲页与曲目「更多」菜单的「检测 ALAC」，见 views/alac-check-dialog.mjs；
+// 也可在下载时检测并写入标签，见 downloads.mjs）：不请求 /key，只从 Apple CDN 读取很少的字节。
 //
 // 背景（AppleMusicDecrypt#136）：Apple 打包 ALAC 时输出缓冲区只有一帧原始 PCM 那么大
 // （frameLength × 声道 × 位深 / 8），原样帧（escape，不压缩）比它多 4 字节；这 4 字节在缓冲区释放后才被复制，
@@ -250,39 +251,54 @@ export function createAnalyzer() {
   };
 }
 
-/**
- * 检测一首歌曲。master 为 amp-api extendedAssetUrls.enhancedHls（master m3u8）。
- * options：signal；limit（网络请求限流器）；analyzer（createAnalyzer() 的结果，没有时不分析第一个分段）；
- * analysisLimit（分析的限流器）；onProgress({ phase: 'scan' | 'analyze', done, total })。
- * 返回 { status: 'noAlac' } 或
- * { status: 'done', variant, info, layout, frames, duration, escapes: [{ frame, time, size, tail, verdict }], bytes, analysis, analysisError }，
- * time 为秒，tail 为末尾 4 字节的十六进制，analysis 为 flac.wasm 的报告（没有分析时为 null）。
- */
-export async function checkTrack(master, { adamId, signal, limit = (fn) => fn(), analyzer = null, analysisLimit = (fn) => fn(), onProgress } = {}) {
-  const { AmWrapper, AmDecrypt } = globalThis;
-  let bytes = 0;
-  const fetchBytes = (url, start, end) => limit(async () => {
+/** 经限流器的 CDN 请求，统计下载的字节数（net.bytes） */
+function network(signal, limit) {
+  const net = { bytes: 0 };
+  net.range = (url, start, end) => limit(async () => {
     signal?.throwIfAborted();
     const res = await fetch(url, { headers: { Range: `bytes=${start}-${end}` }, signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     let buf = new Uint8Array(await res.arrayBuffer());
     // 上游忽略 Range 时自行截取
     if (res.status === 200 && buf.length > end - start + 1) buf = buf.slice(start, end + 1);
-    bytes += buf.length;
+    net.bytes += buf.length;
     return buf;
   });
-  const fetchText = (url) => limit(async () => {
+  net.text = (url) => limit(async () => {
+    signal?.throwIfAborted();
     const res = await fetch(url, { signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const text = await res.text();
-    bytes += text.length;
+    net.bytes += text.length;
     return { text, url: res.url || url };
   });
+  return net;
+}
 
-  const masterRes = await fetchText(master);
-  const variant = pickAlac(AmWrapper.parseSongMaster(masterRes.text, masterRes.url));
+/**
+ * 检测一首歌曲。master 为 master m3u8 的地址（如 amp-api extendedAssetUrls.enhancedHls），其中音质最高的 ALAC 见 pickAlac。
+ * options 同 checkVariant。返回 { status: 'noAlac' } 或 checkVariant 的结果。
+ */
+export async function checkTrack(master, options = {}) {
+  const { signal, limit = (fn) => fn() } = options;
+  const net = network(signal, limit);
+  const res = await net.text(master);
+  const variant = pickAlac(globalThis.AmWrapper.parseSongMaster(res.text, res.url));
   if (!variant) return { status: 'noAlac' };
-  const media = await fetchText(variant.url);
+  return checkVariant(variant, { ...options, net });
+}
+
+/**
+ * 检测 master 中的一个 ALAC 变体（parseSongMaster 的结果，variant.url 为 media m3u8）。
+ * options：adamId；signal；limit（网络请求限流器）；analyzer（createAnalyzer() 的结果，没有时不分析第一个分段）；
+ * analysisLimit（分析的限流器）；onProgress({ phase: 'scan' | 'analyze', done, total })。
+ * 返回 { status: 'done', variant, info, layout, frames, duration, escapes: [{ frame, time, size, tail, verdict }], bytes, analysis, analysisError }，
+ * time 为秒，tail 为末尾 4 字节的十六进制，analysis 为 flac.wasm 的报告（没有分析时为 null）。
+ */
+export async function checkVariant(variant, { adamId, signal, limit = (fn) => fn(), analyzer = null, analysisLimit = (fn) => fn(), onProgress, net = network(signal, limit) } = {}) {
+  const { AmDecrypt } = globalThis;
+  const fetchBytes = net.range;
+  const media = await net.text(variant.url);
   const playlist = AmDecrypt.parseMediaPlaylist(media.text, media.url, adamId);
   const info = parseInit(await fetchBytes(playlist.url, playlist.init.start, playlist.init.end));
   const layout = frameLayout(info);
@@ -296,7 +312,7 @@ export async function checkTrack(master, { adamId, signal, limit = (fn) => fn(),
       const track = new AmDecrypt.Track({ ...playlist, cenc: false, keyUri: null, segments: [first] });
       const frag = await track.load(first, signal);
       const init = await track.load(track.init, signal);
-      bytes += first.end - first.start + 1;
+      net.bytes += first.end - first.start + 1;
       onProgress?.({ phase: 'analyze' });
       return analyzer.analyze(init, frag);
     })
@@ -328,6 +344,26 @@ export async function checkTrack(master, { adamId, signal, limit = (fn) => fn(),
     return { count: parsed.samples.length, escapes };
   }));
 
+  const { escapes, frames } = collectEscapes(perSegment, info, layout);
+
+  let report = null;
+  let analysisError = null;
+  if (analysis) {
+    try {
+      report = await analysis;
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      analysisError = error.message || String(error);
+    }
+  }
+  return { status: 'done', variant, info, layout, frames, duration: playlist.duration, escapes, bytes: net.bytes, analysis: report, analysisError };
+}
+
+/**
+ * 各分段的原样帧（{ count, escapes: [{ index, time, size, tail }] }，index 为分段内的序号）→ 全曲的帧号、秒与判定。
+ * 返回 { escapes, frames }，escapes 的格式见 checkVariant
+ */
+function collectEscapes(perSegment, info, layout) {
   const escapes = [];
   let frames = 0;
   for (const segment of perSegment) {
@@ -342,18 +378,145 @@ export async function checkTrack(master, { adamId, signal, limit = (fn) => fn(),
     }
     frames += segment.count;
   }
+  return { escapes, frames };
+}
 
-  let report = null;
-  let analysisError = null;
-  if (analysis) {
+/**
+ * 下载时检测（downloads.mjs）：下载本来就取得每个分段的完整数据，在解密与修复 END 标记之前交给这里，
+ * 不再另发请求。init(bytes) 收原始 init 段，segment(index, bytes) 收第 index 个原始分段（顺序不限，
+ * 只记下每个 sample 的长度、时间与末尾 4 字节——cbcs 不加密这几个字节）；全部收到后 result(variant) 给出与
+ * checkVariant 相同格式的结果（bytes 为 0：没有额外下载），缺分段或解析失败时抛出错误。
+ */
+export function createFragmentScanner(segmentCount) {
+  let info = null;
+  let error = null;
+  const segments = new Array(segmentCount);
+  const guard = (fn) => { if (!error) { try { fn(); } catch (e) { error = e; } } };
+  return {
+    init(bytes) { guard(() => { info = parseInit(bytes); }); },
+    segment(index, bytes) {
+      guard(() => {
+        const parsed = parseFragmentHead(bytes);
+        if (parsed.needed) throw new Error('Truncated moof');
+        segments[index] = parsed.samples.map(({ offset, size, time }) => ({ size, time, tail: bytes.slice(offset + size - 4, offset + size) }));
+      });
+    },
+    result(variant) {
+      if (error) throw error;
+      if (!info) throw new Error('Missing init segment');
+      const layout = frameLayout(info);
+      const perSegment = [];
+      for (let i = 0; i < segmentCount; i++) {
+        if (!segments[i]) throw new Error(`Missing segment ${i}`);
+        const samples = segments[i];
+        perSegment.push({
+          count: samples.length,
+          escapes: samples.map((s, index) => ({ ...s, index })).filter((s) => s.size > layout.pcmBytes),
+        });
+      }
+      const { escapes, frames } = collectEscapes(perSegment, info, layout);
+      return { status: 'done', variant, info, layout, frames, escapes, bytes: 0, analysis: null, analysisError: null };
+    },
+  };
+}
+
+/** 两个 ALAC 变体音质的比较：正数表示 a 更高（采样率、位深依次比较） */
+export function compareAlac(a, b) {
+  return (a.sample_rate || 0) - (b.sample_rate || 0) || (a.bit_depth || 0) - (b.bit_depth || 0);
+}
+
+/**
+ * 分别取网页版（amp-api enhancedHls）与 wrapper-lite（/m3u8）的 master，检测两边音质最高的 ALAC。
+ * 两边的 master 可能是不同的打包：同一首歌网页版可能只有 24-bit / 48 kHz，wrapper-lite 的却有 24-bit / 96 kHz；
+ * 最高音质 ALAC 的 media m3u8 地址相同时只检测一次。
+ * sources：{ web: master 地址或 null，wrapper: false | true（向 wrapper-lite 请求）| { masterUrl, variants }（已取到的，见 AmWrapper.songMaster） }
+ * options 同 checkVariant，onProgress 另带 stream（streams 中的下标）。
+ * 返回 { masters: { web?, wrapper? }, streams }：
+ *   masters 各项为 { url, variant（没有 ALAC 时为 null）, error }；
+ *   streams 为 [{ sources: ['web', 'wrapper'] 中的一项或两项, variant, result（checkVariant 的结果）, error }]，网页版在前。
+ * 只有取消时抛出错误，其余错误记在对应的 masters / streams 中。
+ */
+export async function checkSources(adamId, sources, options = {}) {
+  const { signal, limit = (fn) => fn(), onProgress } = options;
+  const masters = {};
+  const resolve = async (name, load) => {
     try {
-      report = await analysis;
+      const { url, variants } = await load();
+      masters[name] = { url, variant: pickAlac(variants), error: null };
     } catch (error) {
       if (signal?.aborted) throw signal.reason;
-      analysisError = error.message || String(error);
+      masters[name] = { url: null, variant: null, error: error.message || String(error) };
     }
+  };
+  const net = network(signal, limit);
+  const jobs = [];
+  if (sources.web) {
+    jobs.push(resolve('web', async () => {
+      const res = await net.text(sources.web);
+      return { url: res.url, variants: globalThis.AmWrapper.parseSongMaster(res.text, res.url) };
+    }));
   }
-  return { status: 'done', variant, info, layout, frames, duration: playlist.duration, escapes, bytes, analysis: report, analysisError };
+  if (sources.wrapper) {
+    jobs.push(resolve('wrapper', async () => {
+      const data = sources.wrapper === true ? await globalThis.AmWrapper.songMaster(adamId, signal) : sources.wrapper;
+      return { url: data.masterUrl, variants: data.variants };
+    }));
+  }
+  await Promise.all(jobs);
+
+  const streams = [];
+  for (const name of ['web', 'wrapper']) {
+    const variant = masters[name] && masters[name].variant;
+    if (!variant) continue;
+    const same = streams.find((s) => s.variant.url === variant.url);
+    if (same) same.sources.push(name);
+    else streams.push({ sources: [name], variant, result: null, error: null });
+  }
+  await Promise.all(streams.map(async (stream, index) => {
+    try {
+      stream.result = await checkVariant(stream.variant, {
+        ...options, adamId, net: network(signal, limit),
+        onProgress: onProgress && ((p) => onProgress({ ...p, stream: index })),
+      });
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason;
+      stream.error = error.message || String(error);
+    }
+  }));
+  // 检测 master 的流量记在第一条流上
+  if (streams[0] && streams[0].result) streams[0].result.bytes += net.bytes;
+  return { masters, streams };
+}
+
+/** 有缺陷的原样帧的判定结果 */
+export const DEFECTS = new Set(['noEnd', 'hidden', 'oversize']);
+
+const iso = (date) => (date ? date.toISOString().replace(/\.\d{3}Z$/, 'Z') : '');
+
+/**
+ * 写入标签（下载时检测，见 downloads.mjs）的一行文字：分号分隔的 key=value，便于脚本解析。
+ *   result=ok|damaged; noEnd=; hidden=; oversize=; frames=; escapes=; format=位深/采样率; bad=#帧号@秒:结果,…（最多 50 个）;
+ *   packaged=打包时间; packager=打包软件; endTagRepair=on|off（下载时是否补上 END 标记）; checked=检测时间; by=am-hook
+ */
+export function tagValue(result, { repair, checked = new Date() } = {}) {
+  const bad = result.escapes.filter((e) => DEFECTS.has(e.verdict));
+  const count = (verdict) => bad.filter((e) => e.verdict === verdict).length;
+  const fields = [
+    ['result', bad.length ? 'damaged' : 'ok'],
+    ['noEnd', count('noEnd')],
+    ['hidden', count('hidden')],
+    ['oversize', count('oversize')],
+    ['frames', result.frames],
+    ['escapes', result.escapes.length],
+    ['format', `${result.info.bits}/${result.info.rate}`],
+    ['bad', bad.slice(0, 50).map((e) => `#${e.frame}@${e.time.toFixed(3)}:${e.verdict}`).join(',') + (bad.length > 50 ? ',…' : '')],
+    ['packaged', iso(result.info.created)],
+    ['packager', result.info.software.replace(/[;=]/g, ' ')],
+    ['endTagRepair', repair ? 'on' : 'off'],
+    ['checked', iso(checked)],
+    ['by', 'am-hook'],
+  ];
+  return fields.filter(([, v]) => v !== '').map(([k, v]) => `${k}=${v}`).join('; ');
 }
 
 /**

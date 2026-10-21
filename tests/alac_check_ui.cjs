@@ -30,18 +30,21 @@ const albumPath = '/https://music.apple.com/us/album/shadows-in-the-night-ajse-e
       await button.click();
       const dialog = frame.locator('.ac-dialog');
       await dialog.waitFor();
-      // The check starts on opening; stopping and starting again must not let the stopped run touch the rows
+      // Nothing runs before Start; stopping and starting again must not let the stopped run touch the rows
       const run = dialog.locator('.dl-dialog-start');
-      if (await run.textContent() === 'Stop') {
-        await run.click();
-        assert.match(await run.textContent(), /^(Start|Check again)$/);
-        await run.click();
-      }
-      await frame.waitForFunction(() => document.querySelector('.ac-dialog .dl-dialog-start').textContent === 'Check again', null, { timeout: 180000 });
+      assert.equal(await run.textContent(), 'Check 2');
+      assert.match(await dialog.locator('.dl-dialog-count').textContent(), /^Selected 2\/2$/);
+      assert.match(await dialog.locator('.ac-head-meta').textContent(), /^US · Album ID 1896269091$/);
+      await run.click();
+      await run.click();
+      assert.match(await run.textContent(), /^Check 2( again)?$/);
+      await run.click();
+      await frame.waitForFunction(() => document.querySelector('.ac-dialog .dl-dialog-start').textContent === 'Check 2 again', null, { timeout: 180000 });
+      assert.match(await dialog.locator('.ac-head-meta').textContent(), /^US · Album ID 1896269091 · Checked .+ in \d+ s$/);
 
       const row = dialog.locator('.ac-row', { hasText: 'AJSE Extended Remix' });
-      assert.equal(await row.locator('.ac-status').textContent(), 'Damaged frames: 2');
-      assert.match(await dialog.locator('.dl-dialog-count').textContent(), /Checked 2\/2 · damaged tracks: 1, frames: 2/);
+      assert.equal(await row.locator('.ac-item .ac-status').textContent(), 'Damaged frames: 2');
+      assert.equal(await dialog.locator('.dl-dialog-count').textContent(), 'Damaged tracks: 1, frames: 2');
       await row.locator('.ac-item').click();
       const cells = await row.locator('.ac-frames tbody tr').evaluateAll((trs) => trs.map((tr) => [...tr.cells].map((td) => td.textContent)));
       assert.deepEqual(cells, [
@@ -49,9 +52,9 @@ const albumPath = '/https://music.apple.com/us/album/shadows-in-the-night-ajse-e
         ['#2288', '3:15.243', 'END tag missing', '10 60 00 00'],
       ]);
       const detail = await row.locator('.ac-detail').textContent();
-      assert.match(detail, /Packaged .*2026/);
-      assert.match(detail, /1\.25\.36\.42/);
-      assert.match(detail, /24-bit \/ 48 kHz · Frames: 2994, escape frames: 2/);
+      assert.match(detail, /Web API24-bit \/ 48 kHzDamaged frames: 2/);
+      assert.match(detail, /Packaged .*2026.* · 2994 frames, 2 escape · [\d.]+ [KM]B/);
+      assert.match(await row.locator('.ac-stream .ac-meta').getAttribute('title'), /^1\.25\.36\.42/);
       assert.match(detail, /Bit depth: 24-bit \(no zero padding found\)/);
       assert.match(detail, /Bandwidth: reaches 24 kHz/);
       assert.equal(await row.locator('.ac-spectrum').count(), 1);
@@ -61,6 +64,7 @@ const albumPath = '/https://music.apple.com/us/album/shadows-in-the-night-ajse-e
       const report = await page.evaluate(() => navigator.clipboard.readText());
       assert.match(report, /^ALAC check: Shadows In The Night/);
       assert.match(report, /#2287 3:15\.157 Hidden damage \[00 5f 2d fd\]/);
+      assert.match(report, /\(1\.25\.36\.42/);
 
       await dialog.locator('.dl-dialog-cancel', { hasText: 'Close' }).click();
       // the dialog's close event (stop and remove) is dispatched asynchronously

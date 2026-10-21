@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## Unreleased
+
+### New
+- ✨ "Check ALAC" can also check the master m3u8 from wrapper-lite: it may be packaged differently from the web API's (amp-api `enhancedHls`) and sometimes has a better ALAC (`1679278167`: 24/48 on the web, also 24/96 via wrapper-lite). The same best ALAC is checked once; different ones are both listed and the better one is marked
+- ✨ ALAC check on playlist and song pages and in songs' More menu (albums, playlists, search and more)
+- ✨ The song page compares the web API's master with wrapper-lite's, tags qualities only wrapper-lite has and can copy the web master URL
+- ✨ Settings: turn off the ALAC END-tag repair of downloads; check ALAC while downloading and write the result to a custom tag (`ALAC_CHECK` by default), also shown in the download center; the check reads the downloaded data itself, with no extra requests
+
+### Changed
+- 💄 The check dialog no longer starts by itself: select all, none or some tracks; it shows the region, the album / playlist / song ID, song IDs and the check time; the options are one line of short labels with the explanations under "About", and each source's result is a card
+
 ## v0.5.6 (2026-10-20)
 
 ### New

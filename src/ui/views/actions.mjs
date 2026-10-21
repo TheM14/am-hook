@@ -27,7 +27,30 @@ export const ICON = {
   link: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10 14a4 4 0 0 0 5.66 0l3-3a4 4 0 0 0-5.66-5.66l-1 1"/><path d="M14 10a4 4 0 0 0-5.66 0l-3 3a4 4 0 0 0 5.66 5.66l1-1"/></svg>',
   apple: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14 4h6v6"/><path d="M20 4 11 13"/><path d="M18 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V7a1 1 0 0 1 1-1h5"/></svg>',
   download: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v11"/><path d="m7 10 5 5 5-5"/><path d="M5 20h14"/></svg>',
+  // 检测 ALAC（alac-check-dialog.mjs）：波形
+  check: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h4l3-7 4.5 14L17 9l1.5 3H22"/></svg>',
 };
+
+/**
+ * 打开「检测 ALAC」对话框（只在需要时加载）。options 见 openAlacCheckDialog；
+ * 页面已有专辑 / 歌单资源时由页面传入，「更多」菜单只检测一首（见 checkSong）
+ */
+export async function openAlacCheck(options) {
+  const { openAlacCheckDialog } = await import('./alac-check-dialog.mjs');
+  return openAlacCheckDialog(options);
+}
+
+/** 「更多」菜单里的检测 ALAC：歌曲条目的 amp-api 资源，资料库里的曲目只有快照时拼出所需的字段 */
+function checkSong(target, toast) {
+  const r = target.resource;
+  const s = target.track || {};
+  const track = r && r.attributes ? r : {
+    id: s.id, type: 'songs',
+    // url 只用来取所属专辑的 ID（album/<slug>/<id>）
+    attributes: { name: s.name || target.name, artistName: s.artist || '', artwork: s.artwork ? { url: s.artwork } : null, url: s.albumHref || '', playParams: {} },
+  };
+  return openAlacCheck({ kind: 'song', id: track.id, country: target.country, resource: track, tracks: [track], toast }).catch((err) => toast(err.message));
+}
 
 /** 详情页头部「更多」菜单（createActions 的 headerMenu）的条目顺序，组间加分隔线；各页面只列出自己有的条目 */
 const HEADER_MENU = [
@@ -596,6 +619,7 @@ export function createActions({ signal, player, navigate, toast }) {
         onSelect: () => downloads.add(dl).then((job) => { if (job) toast(t('dlc.added', { name: target.name })); }, (err) => toast(err.message)),
       });
     }
+    if (dl && target.kind === 'song') items.push({ icon: ICON.check, label: t('ac.button'), onSelect: () => checkSong(target, toast) });
     if (target.albumHref) items.push({ icon: ICON.album, label: t('action.goAlbum'), onSelect: () => navigate(target.albumHref) });
     const lib = Object.values(libraryEntries(target, button));
     if (lib.length) items.push(...(items.length ? ['-'] : []), ...lib);

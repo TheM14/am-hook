@@ -1,5 +1,5 @@
 // 歌单页（/https://music.apple.com/{cc}/playlist/{slug}/pl.{id}），由 app.mjs 挂载
-import { createActions, ICON as ACTION_ICON, playable, targetOf, localPath } from './actions.mjs';
+import { createActions, ICON as ACTION_ICON, openAlacCheck, playable, targetOf, localPath } from './actions.mjs';
 import { createDetailHeader } from './detail-header.mjs';
 import { openDownloadDialog } from './download-dialog.mjs';
 
@@ -30,8 +30,13 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     } : {},
   } : null));
   moreBtn.disabled = true;
+  // 检测 ALAC（见 alac-check-dialog.mjs），与专辑页相同
+  const checkBtn = Object.assign(document.createElement('button'), { className: 'detail-circle-btn', type: 'button', hidden: true, innerHTML: ACTION_ICON.check });
+  checkBtn.addEventListener('click', () => {
+    if (playlist) openAlacCheck({ kind: 'playlist', id: playlistId, country, resource: playlist, tracks, toast }).catch((err) => toast(err.message));
+  });
   root.querySelector('.detail-actions').append(Object.assign(document.createElement('span'), { className: 'detail-extra' }));
-  root.querySelector('.detail-extra').append(moreBtn);
+  root.querySelector('.detail-extra').append(checkBtn, moreBtn);
   let rows = new Map();
   let notesExpanded = false;
   let loadToken = 0;
@@ -301,6 +306,9 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     renderFooter();
     renderShelves();
     moreBtn.disabled = false;
+    checkBtn.hidden = !songs().length;
+    checkBtn.title = t('ac.button');
+    checkBtn.setAttribute('aria-label', checkBtn.title);
   }
 
   async function loadPlaylist() {

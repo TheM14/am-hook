@@ -313,6 +313,8 @@
           // 上游忽略 Range 时自行截取
           if (res.status === 200 && buf.byteLength > length) buf = buf.slice(piece.start, piece.end + 1);
           if (buf.byteLength !== length) throw new Error(t('err.segmentLength', { got: buf.byteLength, want: length }));
+          // 下载时检测 ALAC（downloads.mjs）：原始数据在解密、修复之前交给 inspect(piece, bytes)，不另发请求
+          if (this.inspect) this.inspect(piece, new Uint8Array(buf));
           return buf;
         } catch (err) {
           if (isAbort(err) || attempt >= 3) throw err;
@@ -328,7 +330,8 @@
         if (this.cenc) this.rawInit = buf.slice(0);
         return pool.run({ kind: 'init', buf });
       }
-      const init = await this.initData();
+      // init 用于修复 ALAC 的 END 标记；repair 为 false 时（设置中心关闭了修复，见 downloads.mjs）保留原始数据
+      const init = this.repair === false ? undefined : await this.initData();
       if (this.cenc && piece.key === 'track') return pool.run({ kind: 'frag', cenc: { key: await this.template(), init: this.rawInit }, init, buf });
       if (piece.key === 'fixed') return pool.run({ kind: 'frag', key: 'fixed', init, buf });
       if (piece.key === 'track') return pool.run({ kind: 'frag', key: this.keyUri, template: await this.template(), init, buf });

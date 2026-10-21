@@ -1,6 +1,6 @@
 // 设置中心（/settings），由 app.mjs 挂载。通用设置（主地区、曲库语言、界面语言、wrapper-lite）沿用导航底部的选择面板；
 // 下载设置（音质、MV、保存方式、文件名、标签、封面、歌词）保存在 prefs.mjs，修改立即生效（进行中的下载沿用开始时的设置）。
-import { prefs, OPTIONS, CODEC_GROUPS, TAG_FIELDS, DEFAULTS } from '../prefs.mjs';
+import { prefs, OPTIONS, CODEC_GROUPS, TAG_FIELDS, TAG_NAME, DEFAULTS } from '../prefs.mjs';
 import { formatPath, fitFolder, fitFile, TEMPLATE_VARS } from '../naming.mjs';
 import { downloads } from '../downloads.mjs';
 import { userToken, askToken, onTokenChange } from '../station.mjs';
@@ -146,11 +146,17 @@ export function mount({ root, signal, onLangChange, toast }) {
     const o = OPTIONS.download;
     const opfs = AmDecrypt.opfsSupported();
 
+    // 检测结果的标签名：清空时恢复默认
+    const tagNameRow = row(t('set.alacCheckTagName'), t('set.alacCheckTagNameDesc'), text('alacCheckTagName', DEFAULTS.download.alacCheckTagName, t('set.alacCheckTagName'), TAG_NAME));
     const quality = section('quality', 'set.quality',
       row(t('set.codec'), t('set.codecDesc'), select('codec', CODEC_GROUPS.map(([group, list]) => [t(`set.codecGroup.${group}`), list.map((c) => [c, t(`set.codec.${c}`)])]))),
       row(t('set.alacMax'), t('set.alacMaxDesc'), select('alacMax', o.alacMax.map((n) => [n, `${n / 1000} kHz`]))),
       row(t('set.atmosMax'), t('set.atmosMaxDesc'), select('atmosMax', o.atmosMax.map((n) => [n, `${n} (${n % 1000} kbps)`]))),
-      row(t('set.fallback'), t('set.fallbackDesc'), toggle('fallback', t('set.fallback'))));
+      row(t('set.fallback'), t('set.fallbackDesc'), toggle('fallback', t('set.fallback'))),
+      row(t('set.alacRepair'), t('set.alacRepairDesc'), toggle('alacRepair', t('set.alacRepair'))),
+      row(t('set.alacCheckTag'), t('set.alacCheckTagDesc'), toggle('alacCheckTag', t('set.alacCheckTag'))),
+      tagNameRow);
+    controls.push((v) => { tagNameRow.hidden = !v.alacCheckTag; });
 
     // MV（专辑、歌单中的，以及「更多」菜单里单独下载的）：同参考实现的 mv-max 与 mv-audio-type
     const mv = section('mv', 'set.mvSection',

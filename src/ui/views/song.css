@@ -113,6 +113,11 @@ body.song-page { overflow-x: clip; }
   background: color-mix(in srgb, var(--text) 9%, transparent); color: var(--muted); font-size: 10px; font-weight: 700; letter-spacing: .02em; white-space: nowrap;
 }
 .variant-tag.warn { background: var(--warn-soft); color: var(--warn); }
+.variant-tag.info { background: var(--info-soft); color: var(--info); }
+/* 网页版（amp-api enhancedHls）与 wrapper-lite 的 master m3u8 的比较 */
+.song-compare { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; margin: -4px 0 12px; overflow-wrap: anywhere; }
+.song-compare.is-better { color: var(--info); }
+.song-compare-copy { padding: 0; border: 0; background: none; color: var(--accent); font: inherit; font-size: 12px; cursor: pointer; }
 .variant-spec { margin-top: 2px; color: var(--muted); font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
 .variant-spec code { color: var(--faint); font-family: var(--mono); font-size: 11px; }
 .variant-progress { margin-top: 3px; color: var(--accent); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }

@@ -10,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 import {
-  checkTrack, classifyTail, createLimiter, firstSegmentFixed, frameLayout, interpretAnalysis, parseFragmentHead, parseInit, pickAlac,
+  checkSources, checkTrack, classifyTail, compareAlac, createFragmentScanner, createLimiter, firstSegmentFixed, frameLayout, interpretAnalysis, parseFragmentHead, parseInit,
+  pickAlac, tagValue,
 } from '../src/ui/alac-check.mjs';
 
 const root = path.join(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -197,9 +198,79 @@ test('checkTrack finds damaged escape frames from moofs and tails only, without 
       [6, 96 / 44100, 66, '00 00 00 c0', 'oversize'],
     ]);
     assert.equal(result.analysis, null, 'no analyzer, no decoding');
+
+    // While downloading the same bytes go through the scanner, in any order, with no requests of its own
+    const scanner = createFragmentScanner(segments.length);
+    scanner.segment(1, segments[1]);
+    scanner.init(head);
+    scanner.segment(0, segments[0]);
+    const scanned = scanner.result(result.variant);
+    assert.deepEqual([scanned.frames, scanned.escapes, scanned.info], [result.frames, result.escapes, result.info]);
+    const partial = createFragmentScanner(2);
+    partial.init(head);
+    partial.segment(0, segments[0]);
+    assert.throws(() => partial.result(result.variant), /Missing segment 1/);
     assert.ok(ranges.every((n) => n <= 1024 + 16 * 2 || n === head.length || n === 4), `only init, moof heads and 4-byte tails: ${ranges}`);
     assert.deepEqual(progress.at(-1), { phase: 'scan', done: 2, total: 2 });
     assert.equal((await checkTrack(`${base}none.m3u8`, {}).catch((e) => e)).message, 'HTTP 404');
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+});
+
+/* ---------- web API and wrapper-lite masters ---------- */
+
+test('checkSources checks the web and wrapper-lite masters, once when their best ALAC is the same file', async () => {
+  loadBrowserScripts();
+  const base = 'https://aod.itunes.apple.com/itunes-assets/x/';
+  const segment = fragment([[1, 2, 3], escape(68, hex('10 60 00 00'))], 0);
+  const head = init();
+  const file = Uint8Array.from([...head, ...segment]);
+  const media = ['#EXTM3U', `#EXT-X-MAP:URI="a_m.mp4",BYTERANGE="${head.length}@0"`, '#EXTINF:0.001,', `#EXT-X-BYTERANGE:${segment.length}@${head.length}`, 'a_m.mp4'].join('\n');
+  const stream = (rate, uri) => [
+    `#EXT-X-MEDIA:TYPE=AUDIO,GROUP-ID="audio-alac-stereo-${rate}-24",NAME="x",SAMPLE-RATE=${rate},BIT-DEPTH=24`,
+    `#EXT-X-STREAM-INF:BANDWIDTH=1000,CODECS="alac",AUDIO="audio-alac-stereo-${rate}-24"`, uri];
+  // Like song 1679278167: the web API's master only has 24/48, the wrapper-lite one (another packaging) also 24/96
+  const web = ['#EXTM3U', ...stream(48000, 'P1_alac48.m3u8')].join('\n');
+  const wrapperVariants = window.AmWrapper.parseSongMaster(['#EXTM3U', ...stream(96000, 'P3_alac96.m3u8'), ...stream(48000, 'P3_alac48.m3u8')].join('\n'), `${base}P3.m3u8`);
+  const realFetch = globalThis.fetch;
+  const requested = [];
+  globalThis.fetch = async (url, options = {}) => {
+    requested.push(url);
+    if (url === `${base}P1.m3u8`) return new Response(web);
+    if (/alac\d+\.m3u8$/.test(url)) return new Response(media);
+    const range = options.headers && options.headers.Range;
+    if (url === `${base}a_m.mp4` && range) {
+      const [, start, end] = /bytes=(\d+)-(\d+)/.exec(range).map(Number);
+      return new Response(file.slice(start, end + 1), { status: 206 });
+    }
+    return new Response('not found', { status: 404 });
+  };
+  try {
+    const both = await checkSources('1', { web: `${base}P1.m3u8`, wrapper: { masterUrl: `${base}P3.m3u8`, variants: wrapperVariants } }, { limit: createLimiter(4) });
+    assert.equal(both.masters.web.variant.sample_rate, 48000);
+    assert.equal(both.masters.wrapper.variant.sample_rate, 96000);
+    assert.equal(compareAlac(both.masters.wrapper.variant, both.masters.web.variant) > 0, true);
+    assert.deepEqual(both.streams.map((s) => [s.sources, s.variant.uri, s.result.escapes.map((e) => e.verdict)]), [
+      [['web'], 'P1_alac48.m3u8', ['noEnd']],
+      [['wrapper'], 'P3_alac96.m3u8', ['noEnd']],
+    ]);
+
+    // Same media m3u8 from both: checked once
+    requested.length = 0;
+    const same = await checkSources('1', { web: `${base}P1.m3u8`, wrapper: { masterUrl: `${base}P1.m3u8`, variants: window.AmWrapper.parseSongMaster(web, `${base}P1.m3u8`) } }, {});
+    assert.deepEqual(same.streams.map((s) => s.sources), [['web', 'wrapper']]);
+    assert.equal(requested.filter((u) => u.endsWith('alac48.m3u8')).length, 1);
+
+    // A failing source is reported, the other one is still checked
+    window.AmWrapper.songMaster = async () => { throw new Error('wrapper down'); };
+    const down = await checkSources('1', { web: `${base}P1.m3u8`, wrapper: true }, {});
+    assert.equal(down.masters.wrapper.error, 'wrapper down');
+    assert.equal(down.streams.length, 1);
+
+    const tag = tagValue(both.streams[1].result, { repair: true, checked: new Date('2026-10-21T00:00:00Z') });
+    assert.match(tag, /^result=damaged; noEnd=1; hidden=0; oversize=0; frames=2; escapes=1; format=16\/44100; bad=#1@0\.000:noEnd; packaged=2026-08-28T00:27:26Z; /);
+    assert.match(tag, /; endTagRepair=on; checked=2026-10-21T00:00:00Z; by=am-hook$/);
   } finally {
     globalThis.fetch = realFetch;
   }

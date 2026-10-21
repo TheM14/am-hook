@@ -24,6 +24,7 @@ import { buildZip, crc32 } from './zip.mjs';
 import { formatPath, formatName, fitFolder, fitFile } from './naming.mjs';
 import { ttmlToLrc } from './lrc.mjs';
 import { parseMaster, pickMvVideo, pickMvAudio, mvQualityVars } from './mv/hls.mjs';
+import { createFragmentScanner, tagValue, DEFECTS } from './alac-check.mjs';
 
 const { AmDecrypt, AmWrapper, AmI18n } = window;
 const t = (key, vars) => AmI18n.t(key, vars);
@@ -634,19 +635,23 @@ async function downloadSong(job, task, info, signal) {
   if (await exists(job, task)) return null;
 
   const track = await AmDecrypt.openTrack(v.url, signal);
+  track.repair = o.alacRepair;
   task.total = track.size;
   task.state = 'downloading';
   notify();
 
-  // 封面与歌词与音频同时获取
+  // 封面、歌词与 ALAC 检测（设置中心「下载时检测 ALAC」）与音频同时获取
   const embed = new Set(o.embed);
   const wantLyrics = embed.has('lyrics') || o.saveLyrics;
   const coverPromise = coverFor(job, info, signal, embed.has('cover') || (o.saveCover && job.kind !== 'playlist'));
   const lyricsPromise = wantLyrics ? fetchLyrics(job, task, signal) : Promise.resolve(null);
+  const finishCheck = o.alacCheckTag && classify(v).kind === 'alac' ? checkWhileDownloading(task, track, v, o) : null;
+  // tags() 在全部分段下载完之后才调用，检测所需的数据这时已经齐了
   const tags = async () => {
     const [cover, lyrics] = await Promise.all([coverPromise, lyricsPromise]);
+    const check = finishCheck && finishCheck();
     task.lyrics = lyrics;
-    return buildIlst(tagsFor(info, embed, o, cover, lyrics));
+    return buildIlst(tagsFor(info, embed, o, cover, lyrics, check ? { [o.alacCheckTagName]: check } : null));
   };
 
   let last = 0;
@@ -662,6 +667,35 @@ async function downloadSong(job, task, info, signal) {
     },
     onDefrag: () => { task.state = 'tagging'; notify(); },
   });
+}
+
+/**
+ * 下载 ALAC 时检测原样帧：下载取得的原始分段在解密、修复之前经 track.inspect 交给 createFragmentScanner
+ * （alac-check.mjs），不另发请求，结论与「检测 ALAC」相同。返回 finish()：全部分段下载完后调用，
+ * 给出写入标签的文字（见 tagValue；检测失败时为 result=error），结论同时附在下载中心的音质说明后
+ */
+function checkWhileDownloading(task, track, v, o) {
+  const scanner = createFragmentScanner(track.segments.length);
+  const index = new Map(track.segments.map((segment, i) => [segment, i]));
+  track.inspect = (piece, bytes) => {
+    if (piece.init) scanner.init(bytes);
+    else if (index.has(piece)) scanner.segment(index.get(piece), bytes);
+  };
+  return () => {
+    const quality = task.quality;
+    try {
+      const result = scanner.result(v);
+      const bad = result.escapes.filter((e) => DEFECTS.has(e.verdict)).length;
+      task.quality = `${quality} · ${bad ? t('dlc.checkBad', { n: bad }) : t('dlc.checkOk')}`;
+      return tagValue(result, { repair: o.alacRepair });
+    } catch (err) {
+      console.warn('[am-hook] ALAC 检测失败', task.id, err);
+      task.quality = `${quality} · ${t('dlc.checkFailed')}`;
+      return `result=error; error=${String((err && err.message) || err).replace(/[;=]/g, ' ')}; by=am-hook`;
+    } finally {
+      notify();
+    }
+  };
 }
 
 /**
@@ -726,7 +760,8 @@ async function fetchLyrics(job, task, signal) {
   }
 }
 
-function tagsFor(info, embed, o, cover, lyrics) {
+/** custom：歌曲的其他自定义字段（如 ALAC 检测结果） */
+function tagsFor(info, embed, o, cover, lyrics, custom = null) {
   const on = (f) => embed.has(f);
   return {
     title: on('title') ? info.title : '',
@@ -752,7 +787,7 @@ function tagsFor(info, embed, o, cover, lyrics) {
     sort: o.sortTags ? { title: info.title, artist: info.artist, album: info.album, albumArtist: info.albumArtist, composer: info.composer } : null,
     // MV：媒体类型为音乐视频；另写参考实现的 PERFORMER 与 RELEASETIME
     mediaType: info.mv ? 6 : 1,
-    custom: info.mv ? { PERFORMER: on('artist') ? info.artist : '', RELEASETIME: on('created') ? info.date : '' } : null,
+    custom: info.mv ? { PERFORMER: on('artist') ? info.artist : '', RELEASETIME: on('created') ? info.date : '' } : custom,
   };
 }
 

@@ -1,7 +1,9 @@
 // 歌曲页（/https://music.apple.com/{cc}/song/{slug}/{id}），由 app.mjs 挂载。
 // 布局照官网歌曲页（song-header-page 与 credits_detail）：头部、制作人员，最后是音乐视频与艺人的更多作品；
-// 头部之下是本站的音质列表：master m3u8 中的全部音频变体，按格式分组，可在线播放、下载解密文件
-import { createActions, openMenu, copyText, targetOf, pagePath, artistLinks, albumPathOf, ICON as ACTION_ICON } from './actions.mjs';
+// 头部之下是本站的音质列表：wrapper-lite 给出的 master m3u8 中的全部音频变体，按格式分组，可在线播放、下载解密文件；
+// 同时取网页版（amp-api extendedAssetUrls.enhancedHls）的 master 比较：两者可能是不同的打包，音质也可能不同
+import { createActions, openMenu, copyText, targetOf, pagePath, artistLinks, albumPathOf, openAlacCheck, ICON as ACTION_ICON } from './actions.mjs';
+import { compareAlac, pickAlac } from '../alac-check.mjs';
 import { createDetailHeader } from './detail-header.mjs';
 import { downloads } from '../downloads.mjs';
 
@@ -20,6 +22,8 @@ const SONG_PARAMS = {
   include: 'albums,artists,credits,music-videos',
   'include[artists]': 'albums',
   'fields[artists]': 'name,url,artwork',
+  // 网页版的 master m3u8（enhancedHls），与 wrapper-lite 的比较
+  extend: 'extendedAssetUrls',
 };
 
 export const bodyClass = 'song-page';
@@ -38,6 +42,10 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
   let metaLoaded = false;
   let variants = [];
   let variantsLoading = false;
+  /** wrapper-lite 的 master（AmWrapper.songMaster 的结果），检测 ALAC 时不再请求 */
+  let wrapperMaster = null;
+  /** 网页版的 master：{ url, variants } 或 { url, error }；没有 enhancedHls 时为 null */
+  let webMaster = null;
   let rows = new Map();
 
   const ICON = {
@@ -95,7 +103,18 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     } : {},
     tail: [{ icon: ACTION_ICON.apple, label: t('song.openApple'), onSelect: () => window.open(appleUrl(), '_blank', 'noopener') }],
   }));
-  $('buttons').append(favoriteToggle.button, moreBtn);
+  // 检测 ALAC（见 alac-check-dialog.mjs）：只检测这一首，wrapper-lite 的 master 用这里已取到的
+  const checkBtn = el('button', { className: 'detail-circle-btn', type: 'button', innerHTML: ACTION_ICON.check });
+  const labelCheck = () => { checkBtn.title = t('ac.button'); checkBtn.setAttribute('aria-label', checkBtn.title); };
+  labelCheck();
+  checkBtn.addEventListener('click', () => {
+    const track = song || { id: adamId, type: 'songs', attributes: { name: t('song.fallbackTitle', { id: adamId }), playParams: {} } };
+    openAlacCheck({
+      kind: 'song', id: adamId, country, resource: track, tracks: [track], toast,
+      wrapperMasters: wrapperMaster ? new Map([[adamId, wrapperMaster]]) : null,
+    }).catch((err) => toast(err.message));
+  });
+  $('buttons').append(favoriteToggle.button, checkBtn, moreBtn);
 
   const appleUrl = () => (song && song.attributes.url) || songUrl;
 
@@ -250,6 +269,7 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
         el('span', { className: 'variant-label', textContent: v.info.name }),
         qualityIcon(qualityBadge(v)),
         ...v.info.tags.map((tag) => el('span', { className: 'variant-tag', textContent: tag })),
+        wrapperOnly(v) ? el('span', { className: 'variant-tag info', textContent: t('song.wrapperOnly'), title: t('song.wrapperOnlyTitle') }) : null,
         playable ? null : el('span', { className: 'variant-tag warn', textContent: t('row.downloadOnly'), title: unsupported }));
       const spec = el('div', { className: 'variant-spec' },
         // CHANNELS 形如 16/JOC、2/-/BINAURAL：只显示声道数
@@ -281,6 +301,55 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     $('count').textContent = variants.length ? t('song.count', { total: variants.length, playable: variants.filter((v) => v.mode).length }) : '';
     $('play-best').disabled = !variants.some((v) => v.mode);
     syncPlaying(player.current, !player.transport().paused);
+    renderCompare();
+  }
+
+  /* ---------- 网页版的 master m3u8 ---------- */
+  /** 网页版的 master 是另一份且其中没有这个音质（按 GROUP-ID）：只有 wrapper-lite 给出 */
+  function wrapperOnly(v) {
+    return !!(webMaster && webMaster.variants && wrapperMaster && wrapperMaster.masterUrl !== webMaster.url
+      && !webMaster.variants.some((w) => w.group_id === v.group_id));
+  }
+
+  const alacText = (v) => (v ? `ALAC ${[v.bit_depth && `${v.bit_depth}-bit`, v.sample_rate && `${(v.sample_rate / 1000).toFixed(1).replace(/\.0$/, '')} kHz`].filter(Boolean).join(' / ')}` : t('song.noAlac'));
+
+  /** 音质列表标题下的一行：网页版的 master 与 wrapper-lite 的是否相同，最高音质 ALAC 各是什么 */
+  function renderCompare() {
+    const line = $('compare');
+    line.classList.remove('is-better');
+    if (!webMaster || !wrapperMaster || variantsLoading) { line.replaceChildren(); return; }
+    if (webMaster.error) { line.replaceChildren(t('song.webFailed', { msg: webMaster.error })); return; }
+    let text;
+    if (webMaster.url === wrapperMaster.masterUrl) {
+      text = t('song.webSame');
+    } else {
+      const web = pickAlac(webMaster.variants);
+      const wrapper = pickAlac(wrapperMaster.variants);
+      const order = web && wrapper ? compareAlac(wrapper, web) : wrapper ? 1 : web ? -1 : 0;
+      const extra = webMaster.variants.filter((w) => !wrapperMaster.variants.some((v) => v.group_id === w.group_id)).length;
+      text = [t('song.webDiffer', { web: alacText(web), wrapper: alacText(wrapper) }),
+        order > 0 ? t('song.wrapperBetter') : order < 0 ? t('song.webBetter') : '',
+        extra ? t('song.webExtra', { n: extra }) : ''].filter(Boolean).join(' · ');
+      line.classList.toggle('is-better', order !== 0);
+    }
+    const copyBtn = el('button', { type: 'button', className: 'song-compare-copy', textContent: t('song.copyWebMaster'), title: webMaster.url });
+    copyBtn.addEventListener('click', () => copyText(webMaster.url, () => toast(t('action.copied'))));
+    line.replaceChildren(el('span', { textContent: text }), copyBtn);
+  }
+
+  async function loadWebMaster() {
+    const url = song && song.attributes.extendedAssetUrls && song.attributes.extendedAssetUrls.enhancedHls;
+    if (!url) { webMaster = null; renderVariants(); return; }
+    if (webMaster && webMaster.url === url && !webMaster.error) return;
+    try {
+      const res = await fetch(url, { signal });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      webMaster = { url, variants: AmWrapper.parseSongMaster(await res.text(), res.url || url) };
+    } catch (err) {
+      if (signal.aborted) return;
+      webMaster = { url, error: err.message || String(err) };
+    }
+    if (!signal.aborted) renderVariants();
   }
 
   function syncPlaying(current, playing) {
@@ -312,6 +381,7 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     renderVariants();
     try {
       const data = await AmWrapper.songMaster(adamId, signal);
+      wrapperMaster = data;
       variants = data.variants.map((v) => ({
         ...v,
         info: describe(v),
@@ -483,6 +553,7 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     metaLoaded = true;
     renderMeta();
     favoriteToggle.refresh();
+    loadWebMaster();
   }
 
   // 切换语言：重绘所有动态生成的文字（播放、下载不受影响）；歌名等由 amp-api 按语言返回，重新获取
@@ -493,6 +564,7 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
     variants.forEach((v) => { v.info = describe(v); });
     renderVariants();
     renderAlert();
+    labelCheck();
   });
 
   syncPlaying(player.current, !player.transport().paused);
