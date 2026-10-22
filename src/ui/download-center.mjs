@@ -163,6 +163,25 @@ export function mountDownloadCenter({ root, navigate }) {
     }
   }
 
+  /** 下载时检测 ALAC 的结论：单曲的标记文字，以及专辑 / 歌单卡片上的总结 */
+  function checkText(check) {
+    return check.failed ? t('dlc.checkFailed') : check.bad ? t('dlc.checkBad', { n: check.bad }) : t('dlc.checkOk');
+  }
+
+  function checkSummary(job) {
+    const checks = job.tasks.map((x) => x.check).filter(Boolean);
+    if (!checks.length) return null;
+    const bad = checks.filter((c) => c.bad);
+    const failed = checks.filter((c) => c.failed).length;
+    const ok = checks.length - bad.length - failed;
+    const parts = [
+      bad.length && t('dlc.checkSumBad', { n: bad.length, frames: bad.reduce((sum, c) => sum + c.bad, 0) }),
+      failed && t('dlc.checkSumFailed', { n: failed }),
+      ok && t('dlc.checkSumOk', { n: ok }),
+    ].filter(Boolean);
+    return { text: t('dlc.checkSummary', { parts: parts.join(' · ') }), level: bad.length ? 'bad' : failed ? 'failed' : 'ok' };
+  }
+
   function jobNode(job) {
     let n = nodes.get(job.id);
     if (n) return n;
@@ -171,6 +190,7 @@ export function mountDownloadCenter({ root, navigate }) {
     name.addEventListener('click', (e) => { e.preventDefault(); setOpen(false); navigate(name.getAttribute('href')); });
     const subline = el('span', { className: 'dl-job-sub' });
     const status = el('span', { className: 'dl-job-status' });
+    const check = el('span', { className: 'dl-job-check', hidden: true });
     const actions = el('span', { className: 'dl-job-actions' });
     const toggle = el('button', { className: 'dl-icon-btn dl-job-toggle', type: 'button', innerHTML: ICON.expand });
     toggle.addEventListener('click', () => {
@@ -180,9 +200,9 @@ export function mountDownloadCenter({ root, navigate }) {
     const progress = el('div', { className: 'dl-job-progress' }, el('i'));
     const tasks = el('ol', { className: 'dl-tasks' });
     const item = el('li', { className: 'dl-job' },
-      el('div', { className: 'dl-job-head' }, toggle, img, el('div', { className: 'dl-job-text' }, name, subline, status), actions),
+      el('div', { className: 'dl-job-head' }, toggle, img, el('div', { className: 'dl-job-text' }, name, subline, status, check), actions),
       progress, tasks);
-    n = { item, img, name, subline, status, actions, toggle, progress: progress.firstChild, tasks, taskNodes: new Map(), sig: '' };
+    n = { item, img, name, subline, status, check, actions, toggle, progress: progress.firstChild, tasks, taskNodes: new Map(), sig: '' };
     nodes.set(job.id, n);
     return n;
   }
@@ -216,11 +236,12 @@ export function mountDownloadCenter({ root, navigate }) {
         const idx = el('span', { className: 'dl-task-index' });
         const nm = el('span', { className: 'dl-task-name' });
         const q = el('span', { className: 'dl-task-quality' });
+        const ck = el('span', { className: 'dl-task-check', hidden: true });
         const st = el('span', { className: 'dl-task-status' });
         const bar = el('div', { className: 'dl-task-progress' }, el('i'));
         const act = el('span', { className: 'dl-task-actions' });
-        const li = el('li', { className: 'dl-task' }, idx, el('div', { className: 'dl-task-main' }, el('div', { className: 'dl-task-line' }, nm, q), st, bar), act);
-        r = { li, idx, nm, q, st, bar: bar.firstChild, act, sig: '' };
+        const li = el('li', { className: 'dl-task' }, idx, el('div', { className: 'dl-task-main' }, el('div', { className: 'dl-task-line' }, nm, q, ck), st, bar), act);
+        r = { li, idx, nm, q, ck, st, bar: bar.firstChild, act, sig: '' };
         n.taskNodes.set(task.id, r);
       }
       r.li.className = `dl-task is-${task.state}`;
@@ -228,6 +249,12 @@ export function mountDownloadCenter({ root, navigate }) {
       r.nm.textContent = task.name;
       r.nm.title = task.artist ? `${task.name} — ${task.artist}` : task.name;
       r.q.textContent = task.quality || '';
+      r.q.title = r.q.textContent;
+      r.ck.hidden = !task.check;
+      if (task.check) {
+        r.ck.textContent = checkText(task.check);
+        r.ck.className = `dl-task-check is-${task.check.failed ? 'failed' : task.check.bad ? 'bad' : 'ok'}`;
+      }
       r.st.textContent = taskStatus(task);
       r.st.title = task.state === 'error' ? task.error : '';
       const ratio = task.state === 'downloading' && task.total ? task.done / task.total : ['done', 'skipped', 'tagging', 'saving'].includes(task.state) ? 1 : 0;
@@ -263,6 +290,12 @@ export function mountDownloadCenter({ root, navigate }) {
       n.subline.textContent = [kind, job.subtitle, mode].filter(Boolean).join(' · ');
       n.status.textContent = statusText(job);
       n.status.title = n.status.textContent;
+      const summary = checkSummary(job);
+      n.check.hidden = !summary;
+      if (summary) {
+        n.check.textContent = summary.text;
+        n.check.className = `dl-job-check is-${summary.level}`;
+      }
       const ratio = state === 'done' ? 1 : downloads.jobProgress(job);
       n.progress.style.width = `${ratio * 100}%`;
       renderActions(job, n);

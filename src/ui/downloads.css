@@ -79,10 +79,16 @@ body.has-downloads.has-player { padding-bottom: calc(var(--player-height, 110px)
 .dl-job-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .dl-job-title { overflow: hidden; color: var(--text); font-size: 14px; font-weight: 600; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
 .dl-job-title:hover { color: var(--accent); text-decoration: underline; }
-.dl-job-sub, .dl-job-status { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.dl-job-status { font-variant-numeric: tabular-nums; }
+.dl-job-sub { overflow: hidden; color: var(--muted); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+/* 状态行可换行，较长的说明（部分失败、保存位置等）也能显示完整 */
+.dl-job-status { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .dl-job.is-error .dl-job-status, .dl-job.is-partial .dl-job-status { color: var(--warn); }
 .dl-job.is-done .dl-job-status { color: var(--ok); }
+/* 下载时检测 ALAC 的总结：可换行，窄屏也显示完整 */
+.dl-job-check { color: var(--ok); font-size: 12px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.dl-job-check.is-bad { color: var(--error); }
+.dl-job-check.is-failed { color: var(--warn); }
+.dl-job-check[hidden] { display: none; }
 .dl-job-actions { display: flex; align-items: center; }
 .dl-job-progress { height: 3px; margin: 8px 6px 0 32px; border-radius: 2px; background: var(--surface-3); overflow: hidden; }
 .dl-job-progress i { display: block; height: 100%; width: 0; background: var(--accent); transition: width .3s ease; }
@@ -97,6 +103,10 @@ body.has-downloads.has-player { padding-bottom: calc(var(--player-height, 110px)
 .dl-task-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
 .dl-task-name { flex: 1 1 auto; min-width: 0; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
 .dl-task-quality { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--faint); font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.dl-task-check { flex: 0 0 auto; padding: 0 5px; border-radius: 4px; background: var(--ok-soft); color: var(--ok); font-size: 11px; line-height: 16px; white-space: nowrap; }
+.dl-task-check.is-bad { background: var(--error-soft); color: var(--error); font-weight: 600; }
+.dl-task-check.is-failed { background: var(--warn-soft); color: var(--warn); }
+.dl-task-check[hidden] { display: none; }
 .dl-task-status { display: block; overflow: hidden; color: var(--muted); font-size: 11.5px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
 .dl-task.is-error .dl-task-status { color: var(--error); }
 .dl-task.is-done .dl-task-status { color: var(--ok); }
@@ -114,6 +124,10 @@ body.has-downloads.has-player { padding-bottom: calc(var(--player-height, 110px)
   .dlc-bar { width: 100%; }
   .dl-panel { width: 100%; max-height: min(640px, 72dvh); }
   .dl-job-actions .dl-icon-btn { width: 40px; height: 40px; }
+  /* 窄屏：歌名独占第一行，音质与检测结论换到第二行 */
+  .dl-tasks { margin-left: 0; }
+  .dl-task-line { flex-wrap: wrap; row-gap: 2px; }
+  .dl-task-name { flex-basis: 100%; }
 }
 
 /* ---------- 下载对话框 ---------- */

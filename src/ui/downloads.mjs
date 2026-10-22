@@ -374,6 +374,8 @@ async function prepare(job, spec) {
         total: 0,
         attempts: 0,
         quality: '',
+        // 下载时检测 ALAC 的结论：{ bad }（缺陷帧数）或 { failed: true }；未检测时为 null
+        check: null,
         error: '',
       };
     });
@@ -513,6 +515,7 @@ async function runTask(job, task) {
   if (!AbortSignal.any) job.ctl.signal.addEventListener('abort', () => task.ctl.abort(), { once: true });
   task.attempts++;
   task.error = '';
+  task.check = null;
   task.done = 0;
   task.total = 0;
   try {
@@ -619,7 +622,7 @@ async function downloadSong(job, task, info, signal) {
 /**
  * 下载 ALAC 时检测原样帧：下载取得的原始分段在解密、修复之前经 track.inspect 交给 createFragmentScanner
  * （alac-check.mjs），不另发请求，结论与「检测 ALAC」相同。返回 finish()：全部分段下载完后调用，
- * 给出写入标签的文字（见 tagValue；检测失败时为 result=error），结论同时附在下载中心的音质说明后
+ * 给出写入标签的文字（见 tagValue；检测失败时为 result=error），结论同时记在 task.check，显示在下载中心
  */
 function checkWhileDownloading(task, track, v, o) {
   const scanner = createFragmentScanner(track.segments.length);
@@ -629,15 +632,13 @@ function checkWhileDownloading(task, track, v, o) {
     else if (index.has(piece)) scanner.segment(index.get(piece), bytes);
   };
   return () => {
-    const quality = task.quality;
     try {
       const result = scanner.result(v);
-      const bad = result.escapes.filter((e) => DEFECTS.has(e.verdict)).length;
-      task.quality = `${quality} · ${bad ? t('dlc.checkBad', { n: bad }) : t('dlc.checkOk')}`;
+      task.check = { bad: result.escapes.filter((e) => DEFECTS.has(e.verdict)).length };
       return tagValue(result, { repair: o.alacRepair });
     } catch (err) {
       console.warn('[am-hook] ALAC 检测失败', task.id, err);
-      task.quality = `${quality} · ${t('dlc.checkFailed')}`;
+      task.check = { failed: true };
       return `result=error; error=${String((err && err.message) || err).replace(/[;=]/g, ' ')}; by=am-hook`;
     } finally {
       notify();
