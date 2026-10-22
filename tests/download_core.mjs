@@ -6,6 +6,9 @@ import { buildZip, zipParts, crc32, crc32Blob } from '../src/ui/zip.mjs';
 import { buildIlst } from '../src/ui/mp4-tags.mjs';
 import { formatPath, formatName, sanitize, fitFolder, fitFile } from '../src/ui/naming.mjs';
 import { pickMvVideo, pickMvAudio, mvQualityVars } from '../src/ui/mv-hls.mjs';
+// prefs.mjs 在加载时监听 storage 事件（其他标签页修改设置）；Node 中没有全局的 addEventListener
+globalThis.addEventListener ??= () => {};
+const { pickVariant, fallbackChain, DEFAULT_FALLBACK } = await import('../src/ui/prefs.mjs');
 
 const enc = new TextEncoder();
 
@@ -200,4 +203,72 @@ test('file name templates: total path length stays within the Windows limit', ()
   assert.ok(length([...folder, ...file]) + '.ttml.crswap'.length <= 150);
   // 截断不会拆开代理对
   assert.ok([...fitFile([], ['😀'.repeat(100)])[0]].every((c) => c === '😀'));
+});
+
+/* ---------- 音质选择 ---------- */
+const variant = (group_id, extra = {}) => ({ group_id, bandwidth: 0, sample_rate: null, bit_depth: null, ...extra });
+const MASTER = [
+  variant('audio-alac-stereo-44100-16', { sample_rate: 44100, bit_depth: 16 }),
+  variant('audio-alac-stereo-96000-24', { sample_rate: 96000, bit_depth: 24 }),
+  variant('audio-alac-stereo-192000-24', { sample_rate: 192000, bit_depth: 24 }),
+  variant('audio-atmos-2448'),
+  variant('audio-atmos-2768'),
+  variant('audio-stereo-256'),
+  variant('audio-stereo-128'),
+  variant('audio-HE-stereo-64'),
+  variant('audio-stereo-256-binaural'),
+  variant('audio-HE-stereo-32'),
+];
+// /webplayback 的 AAC-LC 256（wrapper.js 的 webplaybackVariant）：没有 master 时唯一的变体
+const WIDEVINE = [variant('audio-stereo-256', { bandwidth: 256000, widevine: true })];
+const options = (o) => ({ codec: 'alac', alacMax: 192000, atmosMax: 2768, fallback: true, fallbackOrder: {}, ...o });
+const pick = (variants, o) => {
+  const r = pickVariant(variants, options(o));
+  return r && [r.variant.group_id, r.fallback];
+};
+
+test('pickVariant: preferred quality within the ALAC / Atmos / bitrate caps', () => {
+  assert.deepEqual(pick(MASTER, {}), ['audio-alac-stereo-192000-24', false]);
+  assert.deepEqual(pick(MASTER, { alacMax: 96000 }), ['audio-alac-stereo-96000-24', false]);
+  assert.deepEqual(pick(MASTER, { alacMax: 48000 }), ['audio-alac-stereo-44100-16', false]);
+  assert.deepEqual(pick(MASTER, { codec: 'atmos' }), ['audio-atmos-2768', false]);
+  assert.deepEqual(pick(MASTER, { codec: 'atmos', atmosMax: 2448 }), ['audio-atmos-2448', false]);
+  assert.deepEqual(pick(MASTER, { codec: 'aac' }), ['audio-stereo-256', false]);
+  assert.deepEqual(pick(MASTER, { codec: 'aac-128' }), ['audio-stereo-128', false]);
+  assert.deepEqual(pick(MASTER, { codec: 'aac-he' }), ['audio-HE-stereo-64', false]);
+  assert.deepEqual(pick(MASTER, { codec: 'aac-binaural' }), ['audio-stereo-256-binaural', false]);
+});
+
+test('pickVariant: default fallback order, and no fallback when switched off', () => {
+  const stereo = MASTER.filter((v) => !/alac|atmos/.test(v.group_id));
+  assert.deepEqual(pick(stereo, { codec: 'atmos' }), ['audio-stereo-256', true]);
+  assert.deepEqual(pick(stereo, { codec: 'atmos', fallback: false }), null);
+  assert.deepEqual(pick(stereo, { codec: 'aac-downmix-128' }), ['audio-stereo-128', true]);
+  // 全景声的上限低于所有变体时同样算没有
+  assert.deepEqual(pick(MASTER, { codec: 'atmos', atmosMax: 2448, fallback: false }), ['audio-atmos-2448', false]);
+  assert.deepEqual(pick([variant('audio-atmos-2768'), ...stereo], { codec: 'atmos', atmosMax: 2448 }), ['audio-stereo-256', true]);
+});
+
+test('pickVariant: custom fallback order per preferred quality', () => {
+  const stereo = MASTER.filter((v) => !/alac|atmos/.test(v.group_id));
+  assert.deepEqual(pick(stereo, { codec: 'atmos', fallbackOrder: { atmos: ['aac-he', 'aac'] } }), ['audio-HE-stereo-64', true]);
+  // 只对该首选音质生效
+  assert.deepEqual(pick(stereo, { codec: 'alac', fallbackOrder: { atmos: ['aac-he'] } }), ['audio-stereo-256', true]);
+  // 空顺序：不降级
+  assert.deepEqual(pick(stereo, { codec: 'atmos', fallbackOrder: { atmos: [] } }), null);
+  // 关闭降级时自定义顺序也不用
+  assert.deepEqual(fallbackChain(options({ fallback: false, fallbackOrder: { alac: ['aac'] } })), []);
+  assert.deepEqual(fallbackChain(options({})), DEFAULT_FALLBACK.alac);
+});
+
+test('pickVariant: a song with only the Widevine AAC-LC 256 follows the fallback setting', () => {
+  // 首选 AAC 256：不算降级
+  assert.deepEqual(pick(WIDEVINE, { codec: 'aac', fallback: false }), ['audio-stereo-256', false]);
+  // 关闭降级：跳过（https://music.apple.com/cn/song/stay-with-me/1569279827 之前仍会降级下载）
+  for (const codec of ['alac', 'atmos', 'aac-128', 'aac-he', 'aac-binaural']) {
+    assert.equal(pick(WIDEVINE, { codec, fallback: false }), null, codec);
+  }
+  // 开启降级：按顺序中的 AAC 256 下载；顺序中没有 AAC 256 时同样跳过
+  assert.deepEqual(pick(WIDEVINE, { codec: 'alac' }), ['audio-stereo-256', true]);
+  assert.equal(pick(WIDEVINE, { codec: 'alac', fallbackOrder: { alac: ['aac-he', 'aac-128'] } }), null);
 });

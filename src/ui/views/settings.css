@@ -73,6 +73,19 @@
 .set-mini:hover { color: var(--text); border-color: var(--line-strong); }
 .set-mini-row { display: flex; gap: 6px; }
 
+/* 降级顺序 */
+.set-chain-box { display: grid; gap: 8px; width: 100%; }
+.set-chain { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; }
+.set-chain-item { display: flex; align-items: center; gap: 6px; min-height: 34px; padding: 0 6px 0 4px; border: 1px solid var(--line); border-radius: 9px; background: var(--surface-2); }
+.set-chain-item.is-first { border-style: dashed; background: none; }
+.set-chain-tag { flex: 0 0 auto; min-width: 22px; padding: 1px 6px; border-radius: 6px; background: var(--surface-3); color: var(--muted); font-size: 11px; text-align: center; }
+.set-chain-item.is-first .set-chain-tag { background: var(--accent); color: #fff; }
+.set-chain-name { flex: 1 1 auto; min-width: 0; overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.set-chain-btn { min-width: 28px; padding: 0 6px; }
+.set-chain-btn:disabled { opacity: .35; cursor: default; }
+.set-chain-empty { padding: 4px 2px; color: var(--muted); font-size: 12px; }
+.set-chain-add { min-width: 0; height: 28px; }
+
 .set-folder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .set-folder-name { font-family: var(--mono); font-size: 12px; }
 .set-folder-name.is-empty { color: var(--faint); font-family: inherit; }

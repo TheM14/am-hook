@@ -1,6 +1,6 @@
 // 设置中心（/settings），由 app.mjs 挂载。通用设置（主地区、曲库语言、界面语言、wrapper-lite）沿用导航底部的选择面板；
 // 下载设置（音质、MV、保存方式、文件名、标签、封面、歌词）保存在 prefs.mjs，修改立即生效（进行中的下载沿用开始时的设置）。
-import { prefs, OPTIONS, CODEC_GROUPS, TAG_FIELDS, TAG_NAME, DEFAULTS } from '../prefs.mjs';
+import { prefs, OPTIONS, CODEC_GROUPS, TAG_FIELDS, TAG_NAME, DEFAULTS, DEFAULT_FALLBACK } from '../prefs.mjs';
 import { formatPath, fitFolder, fitFile, TEMPLATE_VARS } from '../naming.mjs';
 import { downloads } from '../downloads.mjs';
 import { userToken, askToken, onTokenChange } from '../station.mjs';
@@ -136,6 +136,59 @@ export function mount({ root, signal, onLangChange, toast }) {
     return el('div', { className: 'set-template-box' }, el('div', { className: 'set-template-line' }, input, reset), preview);
   }
 
+  /** 降级顺序：当前首选音质之后依次尝试的音质，可上移、下移、移除、添加；按首选音质分别保存 */
+  function fallbackOrder() {
+    const list = el('ol', { className: 'set-chain' });
+    const add = el('select', { className: 'set-select set-chain-add' });
+    add.setAttribute('aria-label', t('set.fallbackAdd'));
+    const reset = el('button', { type: 'button', className: 'set-mini', textContent: t('set.default') });
+    const chain = (v) => (Array.isArray(v.fallbackOrder[v.codec]) ? v.fallbackOrder[v.codec] : DEFAULT_FALLBACK[v.codec] || []);
+    const save = (next) => {
+      const v = get();
+      set({ fallbackOrder: { ...v.fallbackOrder, [v.codec]: next } });
+    };
+    const mini = (text, label, disabled, fn) => {
+      const b = el('button', { type: 'button', className: 'set-mini set-chain-btn', textContent: text, title: label, disabled });
+      b.setAttribute('aria-label', label);
+      b.addEventListener('click', fn);
+      return b;
+    };
+    add.addEventListener('change', () => { if (add.value) save([...chain(get()), add.value]); });
+    reset.addEventListener('click', () => {
+      const v = get();
+      const { [v.codec]: _, ...rest } = v.fallbackOrder;
+      set({ fallbackOrder: rest });
+    });
+    controls.push((v) => {
+      const items = chain(v);
+      const move = (i, d) => {
+        const next = [...items];
+        [next[i], next[i + d]] = [next[i + d], next[i]];
+        save(next);
+      };
+      list.replaceChildren(
+        el('li', { className: 'set-chain-item is-first' },
+          el('span', { className: 'set-chain-tag', textContent: t('set.fallbackFirst') }),
+          el('span', { className: 'set-chain-name', textContent: t(`set.codec.${v.codec}`) })),
+        ...items.map((c, i) => el('li', { className: 'set-chain-item' },
+          el('span', { className: 'set-chain-tag', textContent: String(i + 1) }),
+          el('span', { className: 'set-chain-name', textContent: t(`set.codec.${c}`) }),
+          mini('↑', t('set.fallbackUp'), i === 0, () => move(i, -1)),
+          mini('↓', t('set.fallbackDown'), i === items.length - 1, () => move(i, 1)),
+          mini('✕', t('set.fallbackRemove'), false, () => save(items.filter((x) => x !== c))))),
+        ...(items.length ? [] : [el('li', { className: 'set-chain-empty', textContent: t('set.fallbackEmpty') })]));
+      // 添加：其余音质按首选音质下拉框的分组列出
+      const rest = (c) => c !== v.codec && !items.includes(c);
+      add.replaceChildren(el('option', { value: '', textContent: t('set.fallbackAdd') }),
+        ...CODEC_GROUPS.filter(([, codecs]) => codecs.some(rest)).map(([group, codecs]) => el('optgroup', { label: t(`set.codecGroup.${group}`) },
+          ...codecs.filter(rest).map((c) => el('option', { value: c, textContent: t(`set.codec.${c}`) })))));
+      add.value = '';
+      add.disabled = !OPTIONS.download.codec.some(rest);
+      reset.disabled = !Array.isArray(v.fallbackOrder[v.codec]);
+    });
+    return el('div', { className: 'set-chain-box' }, list, el('div', { className: 'set-mini-row' }, add, reset));
+  }
+
   function section(id, titleKey, ...rows) {
     return el('section', { className: 'set-group', id }, el('h2', { className: 'set-group-title', textContent: t(titleKey) }), el('div', { className: 'set-card' }, ...rows));
   }
@@ -148,11 +201,14 @@ export function mount({ root, signal, onLangChange, toast }) {
 
     // 检测结果的标签名：清空时恢复默认
     const tagNameRow = row(t('set.alacCheckTagName'), t('set.alacCheckTagNameDesc'), text('alacCheckTagName', DEFAULTS.download.alacCheckTagName, t('set.alacCheckTagName'), TAG_NAME));
+    const orderRow = row(t('set.fallbackOrder'), t('set.fallbackOrderDesc'), fallbackOrder(), { wide: true });
+    controls.push((v) => { orderRow.hidden = !v.fallback; });
     const quality = section('quality', 'set.quality',
       row(t('set.codec'), t('set.codecDesc'), select('codec', CODEC_GROUPS.map(([group, list]) => [t(`set.codecGroup.${group}`), list.map((c) => [c, t(`set.codec.${c}`)])]))),
       row(t('set.alacMax'), t('set.alacMaxDesc'), select('alacMax', o.alacMax.map((n) => [n, `${n / 1000} kHz`]))),
       row(t('set.atmosMax'), t('set.atmosMaxDesc'), select('atmosMax', o.atmosMax.map((n) => [n, `${n} (${n % 1000} kbps)`]))),
       row(t('set.fallback'), t('set.fallbackDesc'), toggle('fallback', t('set.fallback'))),
+      orderRow,
       row(t('set.alacRepair'), t('set.alacRepairDesc'), toggle('alacRepair', t('set.alacRepair'))),
       row(t('set.alacCheckTag'), t('set.alacCheckTagDesc'), toggle('alacCheckTag', t('set.alacCheckTag'))),
       tagNameRow);

@@ -18,7 +18,7 @@
 //   downloads.stats()            { active, queued, done, failed, total, ratio, speed }
 //   downloads.folder             保存到文件夹：{ supported, name(), pick() }
 
-import { prefs } from './prefs.mjs';
+import { prefs, classify, pickVariant } from './prefs.mjs';
 import { buildIlst, imageType } from './mp4-tags.mjs';
 import { buildZip, crc32 } from './zip.mjs';
 import { formatPath, formatName, fitFolder, fitFile } from './naming.mjs';
@@ -62,60 +62,7 @@ const playable = (r) => playableSong(r) || playableMv(r);
 /** 只有一首（一个 MV）的任务：不打包，不建专辑文件夹（保存到文件夹时除外） */
 const single = (job) => job.kind === 'song' || job.kind === 'music-video';
 
-/* ---------- 音质选择 ---------- */
-/** master 变体的种类与排序值（GROUP-ID：audio-alac-stereo-96000-24、audio-atmos-2768、audio-stereo-256[-binaural|-downmix]、audio-HE-stereo-64…） */
-function classify(v) {
-  const g = (v.group_id || '').toLowerCase();
-  if (g.includes('alac')) return { kind: 'alac', rank: (v.sample_rate || 0) * 100 + (v.bit_depth || 0) };
-  if (g.includes('atmos')) return { kind: 'atmos', rank: Number((g.match(/atmos-(\d+)/) || [])[1]) || 0 };
-  const kbps = Number((g.match(/stereo-(\d+)/) || [])[1]) || 0;
-  const he = g.includes('he-');
-  if (g.includes('binaural')) return { kind: he ? 'he-binaural' : 'aac-binaural', rank: kbps };
-  if (g.includes('downmix')) return { kind: he ? 'he-downmix' : 'aac-downmix', rank: kbps };
-  return { kind: he ? 'aac-he' : 'aac', rank: kbps };
-}
-
-/** 带码率上限的首选音质（master 有 audio-stereo-128[-binaural|-downmix]）；其余取值就是 classify 的种类 */
-const CAPPED = {
-  'aac-128': { kind: 'aac', kbps: 128 },
-  'aac-binaural-128': { kind: 'aac-binaural', kbps: 128 },
-  'aac-downmix-128': { kind: 'aac-downmix', kbps: 128 },
-};
-
-const FALLBACK = {
-  alac: ['alac', 'aac', 'aac-he'],
-  atmos: ['atmos', 'alac', 'aac', 'aac-he'],
-  aac: ['aac', 'aac-he', 'alac'],
-  'aac-128': ['aac-128', 'aac-he', 'aac', 'alac'],
-  'aac-he': ['aac-he', 'aac-128', 'aac', 'alac'],
-  'aac-binaural': ['aac-binaural', 'aac', 'aac-he', 'alac'],
-  'aac-binaural-128': ['aac-binaural-128', 'he-binaural', 'aac-128', 'aac-he', 'aac', 'alac'],
-  'he-binaural': ['he-binaural', 'aac-binaural-128', 'aac-he', 'aac-128', 'aac', 'alac'],
-  'aac-downmix': ['aac-downmix', 'aac', 'aac-he', 'alac'],
-  'aac-downmix-128': ['aac-downmix-128', 'he-downmix', 'aac-128', 'aac-he', 'aac', 'alac'],
-  'he-downmix': ['he-downmix', 'aac-downmix-128', 'aac-he', 'aac-128', 'aac', 'alac'],
-};
-
-/**
- * 按首选音质（及上限）选变体；fallback 时依次降级。返回 { variant, fallback } 或 null。
- * 没有 master 的歌曲只有 /webplayback 的 AAC-LC（wrapper.js），与参考实现一样不论设置都下载它
- */
-export function pickVariant(variants, { codec, alacMax, atmosMax, fallback }) {
-  if (variants.length === 1 && variants[0].widevine) return { variant: variants[0], fallback: codec !== 'aac' };
-  const order = fallback ? FALLBACK[codec] || [codec] : [codec];
-  for (const choice of order) {
-    const { kind, kbps } = CAPPED[choice] || { kind: choice };
-    const list = variants.map((v) => ({ v, c: classify(v) })).filter(({ v, c }) => c.kind === kind
-      && (kind !== 'alac' || !v.sample_rate || v.sample_rate <= alacMax)
-      && (kind !== 'atmos' || c.rank <= atmosMax)
-      && (!kbps || c.rank <= kbps));
-    if (!list.length) continue;
-    list.sort((a, b) => b.c.rank - a.c.rank || (b.v.bandwidth || 0) - (a.v.bandwidth || 0));
-    return { variant: list[0].v, fallback: choice !== codec };
-  }
-  return null;
-}
-
+/* ---------- 音质 ---------- */
 /** 文件名变量 codec / quality / bit_depth / sample_rate */
 function qualityVars(v) {
   const { kind, rank } = classify(v);

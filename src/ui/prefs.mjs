@@ -6,6 +6,7 @@
 //   prefs.reset(section)        恢复默认
 //   prefs.onChange(fn)          设置变化后回调 fn(section, value)，返回取消订阅的函数
 //   DEFAULTS / OPTIONS          默认值与各选项的可选值（设置页据此渲染）
+//   pickVariant(variants, o)    按首选音质与降级顺序（fallbackChain）选歌曲的变体，classify 为变体的种类
 
 const STORAGE_KEY = 'am-hook:settings';
 
@@ -15,13 +16,75 @@ export const TAG_FIELDS = [
   'lyrics', 'cover', 'copyright', 'record_company', 'upc', 'isrc', 'rtng', 'song_id', 'album_id', 'artist_id',
 ];
 
-/** 首选音质按下拉框的分组排列（set.codecGroup.*）；取值见 downloads.mjs 的 pickVariant */
+/** 首选音质按下拉框的分组排列（set.codecGroup.*）；取值见下面的 pickVariant */
 export const CODEC_GROUPS = [
   ['hires', ['alac', 'atmos']],
   ['stereo', ['aac', 'aac-128', 'aac-he']],
   ['binaural', ['aac-binaural', 'aac-binaural-128', 'he-binaural']],
   ['downmix', ['aac-downmix', 'aac-downmix-128', 'he-downmix']],
 ];
+
+/* ---------- 音质选择（downloads.mjs 下载歌曲时调用） ---------- */
+/** 各首选音质默认的降级顺序（不含首选本身）；设置中心可按首选音质改写，存在 fallbackOrder 中 */
+export const DEFAULT_FALLBACK = {
+  alac: ['aac', 'aac-he'],
+  atmos: ['alac', 'aac', 'aac-he'],
+  aac: ['aac-he', 'alac'],
+  'aac-128': ['aac-he', 'aac', 'alac'],
+  'aac-he': ['aac-128', 'aac', 'alac'],
+  'aac-binaural': ['aac', 'aac-he', 'alac'],
+  'aac-binaural-128': ['he-binaural', 'aac-128', 'aac-he', 'aac', 'alac'],
+  'he-binaural': ['aac-binaural-128', 'aac-he', 'aac-128', 'aac', 'alac'],
+  'aac-downmix': ['aac', 'aac-he', 'alac'],
+  'aac-downmix-128': ['he-downmix', 'aac-128', 'aac-he', 'aac', 'alac'],
+  'he-downmix': ['aac-downmix-128', 'aac-he', 'aac-128', 'aac', 'alac'],
+};
+
+/** 实际使用的降级顺序：fallback 关闭时为空，否则为该首选音质自定义的顺序或默认顺序 */
+export function fallbackChain(options) {
+  if (!options.fallback) return [];
+  const custom = options.fallbackOrder && options.fallbackOrder[options.codec];
+  return Array.isArray(custom) ? custom : DEFAULT_FALLBACK[options.codec] || [];
+}
+
+/** master 变体的种类与排序值（GROUP-ID：audio-alac-stereo-96000-24、audio-atmos-2768、audio-stereo-256[-binaural|-downmix]、audio-HE-stereo-64…） */
+export function classify(v) {
+  const g = (v.group_id || '').toLowerCase();
+  if (g.includes('alac')) return { kind: 'alac', rank: (v.sample_rate || 0) * 100 + (v.bit_depth || 0) };
+  if (g.includes('atmos')) return { kind: 'atmos', rank: Number((g.match(/atmos-(\d+)/) || [])[1]) || 0 };
+  const kbps = Number((g.match(/stereo-(\d+)/) || [])[1]) || 0;
+  const he = g.includes('he-');
+  if (g.includes('binaural')) return { kind: he ? 'he-binaural' : 'aac-binaural', rank: kbps };
+  if (g.includes('downmix')) return { kind: he ? 'he-downmix' : 'aac-downmix', rank: kbps };
+  return { kind: he ? 'aac-he' : 'aac', rank: kbps };
+}
+
+/** 带码率上限的首选音质（master 有 audio-stereo-128[-binaural|-downmix]）；其余取值就是 classify 的种类 */
+const CAPPED = {
+  'aac-128': { kind: 'aac', kbps: 128 },
+  'aac-binaural-128': { kind: 'aac-binaural', kbps: 128 },
+  'aac-downmix-128': { kind: 'aac-downmix', kbps: 128 },
+};
+
+/**
+ * 按首选音质（及上限）选变体；没有时按降级顺序（fallbackChain）依次尝试。返回 { variant, fallback } 或 null。
+ * 没有 master 的歌曲只有 /webplayback 的 AAC-LC 256（wrapper.js，GROUP-ID 同 master 的 AAC 256），同样按顺序判断：
+ * 首选或降级顺序中没有 AAC 256 时跳过
+ */
+export function pickVariant(variants, options) {
+  const { codec, alacMax, atmosMax } = options;
+  for (const choice of [codec, ...fallbackChain(options)]) {
+    const { kind, kbps } = CAPPED[choice] || { kind: choice };
+    const list = variants.map((v) => ({ v, c: classify(v) })).filter(({ v, c }) => c.kind === kind
+      && (kind !== 'alac' || !v.sample_rate || v.sample_rate <= alacMax)
+      && (kind !== 'atmos' || c.rank <= atmosMax)
+      && (!kbps || c.rank <= kbps));
+    if (!list.length) continue;
+    list.sort((a, b) => b.c.rank - a.c.rank || (b.v.bandwidth || 0) - (a.v.bandwidth || 0));
+    return { variant: list[0].v, fallback: choice !== codec };
+  }
+  return null;
+}
 
 export const OPTIONS = {
   download: {
@@ -43,8 +106,10 @@ export const DEFAULTS = {
     codec: 'alac',
     alacMax: 192000,
     atmosMax: 2768,
-    // 首选音质不存在时改用次一级（否则跳过该曲目）
+    // 首选音质不存在时按降级顺序改用其他音质（否则跳过该曲目）
     fallback: true,
+    // 自定义的降级顺序：{ 首选音质: [音质…] }，没有的首选音质用 DEFAULT_FALLBACK
+    fallbackOrder: {},
     // ALAC：为缺少 END 标记的原样帧补上标记（AppleMusicDecrypt#136，见 crates/am-alac）
     alacRepair: true,
     // ALAC：下载时检测原样帧（alac-check.mjs），结果写入自定义标签 ----:com.apple.iTunes:<alacCheckTagName>
@@ -106,6 +171,14 @@ const oneOf = (v, list, fallback) => (list.includes(v) ? v : fallback);
 const bool = (v, fallback) => (typeof v === 'boolean' ? v : fallback);
 const template = (v, fallback) => (typeof v === 'string' && v.trim() && v.length <= 300 ? v : fallback);
 
+/** 降级顺序：只保留已知音质，去掉首选本身与重复项 */
+function cleanOrder(raw) {
+  if (!raw || typeof raw !== 'object') return {};
+  const list = OPTIONS.download.codec;
+  return Object.fromEntries(list.filter((c) => Array.isArray(raw[c]))
+    .map((c) => [c, [...new Set(raw[c])].filter((x) => x !== c && list.includes(x))]));
+}
+
 /** 合并默认值并逐项校验：localStorage 里的值可能来自旧版本或被手动改过 */
 function clean(section, raw) {
   const d = DEFAULTS[section];
@@ -117,6 +190,7 @@ function clean(section, raw) {
     alacMax: oneOf(Number(r.alacMax), o.alacMax, d.alacMax),
     atmosMax: oneOf(Number(r.atmosMax), o.atmosMax, d.atmosMax),
     fallback: bool(r.fallback, d.fallback),
+    fallbackOrder: cleanOrder(r.fallbackOrder),
     alacRepair: bool(r.alacRepair, d.alacRepair),
     alacCheckTag: bool(r.alacCheckTag, d.alacCheckTag),
     alacCheckTagName: typeof r.alacCheckTagName === 'string' && TAG_NAME.test(r.alacCheckTagName.trim()) ? r.alacCheckTagName.trim() : d.alacCheckTagName,
@@ -169,7 +243,11 @@ function emit(section) {
 
 function get(section) {
   const value = state[section];
-  return { ...value, ...(value.embed ? { embed: [...value.embed] } : {}) };
+  return {
+    ...value,
+    ...(value.embed ? { embed: [...value.embed] } : {}),
+    ...(value.fallbackOrder ? { fallbackOrder: Object.fromEntries(Object.entries(value.fallbackOrder).map(([k, v]) => [k, [...v]])) } : {}),
+  };
 }
 
 export const prefs = {
