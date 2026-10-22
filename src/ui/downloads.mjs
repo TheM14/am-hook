@@ -592,7 +592,9 @@ async function downloadSong(job, task, info, signal) {
 
   // 封面、歌词与 ALAC 检测（设置中心「下载时检测 ALAC」）与音频同时获取
   const embed = new Set(o.embed);
-  const wantLyrics = embed.has('lyrics') || o.saveLyrics;
+  // amp-api 明确标出没有歌词（hasLyrics: false）的歌曲不去 wrapper-lite 取；没有这个字段时照常获取
+  const noLyrics = task.song && task.song.attributes && task.song.attributes.hasLyrics === false;
+  const wantLyrics = (embed.has('lyrics') || o.saveLyrics) && !noLyrics;
   const coverPromise = coverFor(job, info, signal, embed.has('cover') || (o.saveCover && job.kind !== 'playlist'));
   const lyricsPromise = wantLyrics ? fetchLyrics(job, task, signal) : Promise.resolve(null);
   const finishCheck = o.alacCheckTag && classify(v).kind === 'alac' ? checkWhileDownloading(task, track, v, o) : null;
@@ -687,12 +689,33 @@ async function downloadVideo(job, task, info, signal) {
   });
 }
 
-/** 歌词：wrapper-lite 返回逐字 TTML，按设置转为 LRC（嵌入的也是 LRC） */
+/** 歌词获取失败（不含没有歌词的 404）时的总尝试次数 */
+const LYRICS_ATTEMPTS = 3;
+
+/** 等待 ms 毫秒；取消时立即以 AbortError 结束 */
+function wait(ms, signal) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal.addEventListener('abort', () => { clearTimeout(timer); reject(signal.reason); }, { once: true });
+  });
+}
+
+/** 歌词：wrapper-lite 返回逐字 TTML，按设置转为 LRC（嵌入的也是 LRC）；获取失败时间隔 1 秒、2 秒重试 */
 async function fetchLyrics(job, task, signal) {
   const o = job.options;
   try {
     const lang = o.lyricsLang || job.lang || undefined;
-    const ttml = await AmWrapper.lyrics(task.id, lang, signal);
+    let ttml;
+    for (let attempt = 1; ; attempt++) {
+      try {
+        ttml = await AmWrapper.lyrics(task.id, lang, signal);
+        break;
+      } catch (err) {
+        if (signal.aborted || attempt >= LYRICS_ATTEMPTS) throw err;
+        console.warn(`[am-hook] 歌词获取失败，${attempt} 秒后重试`, err);
+        await wait(1000 * attempt, signal);
+      }
+    }
     if (!ttml) return null;
     let lrc = '';
     try {
