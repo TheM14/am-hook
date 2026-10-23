@@ -4,14 +4,43 @@
 //   formatPath(template, vars) -> ['文件夹', '文件名']   每一段都已是合法的文件名
 //   formatName(template, vars) -> string                  各段用 ' - ' 连接（ZIP 名、逐个保存时的文件名）
 //   fitFolder(segments) / fitFile(folder, segments)        控制路径总长，避免 Windows 260 字符的路径上限
-//   TEMPLATE_VARS                                          可用的变量名（设置页的说明）
+//   TEMPLATE_VAR_GROUPS / TEMPLATE_SCOPES                  可用的变量（按组）与各模板适用的变量（设置页的说明）
+//   templateIssues(key, template)                           模板中不认识的、不适用于该模板的变量
 
-export const TEMPLATE_VARS = [
-  'title', 'artist', 'album', 'album_artist', 'composer', 'genre', 'tracknum', 'tracktotal', 'disk', 'disktotal',
-  'year', 'release_date', 'codec', 'quality', 'bit_depth', 'sample_rate', 'sample_rate_kHz', 'explicit',
-  'song_id', 'album_id', 'artist_id', 'isrc', 'upc', 'record_label', 'copyright',
-  'playlist', 'playlist_id', 'curator', 'index',
+export const TEMPLATE_VAR_GROUPS = [
+  ['song', ['title', 'artist', 'composer', 'tracknum', 'disk', 'explicit']],
+  ['album', ['album', 'album_artist', 'genre', 'year', 'release_date', 'tracktotal', 'disktotal', 'record_label', 'copyright']],
+  ['quality', ['codec', 'quality', 'bit_depth', 'sample_rate', 'sample_rate_kHz']],
+  ['playlist', ['playlist', 'curator', 'index', 'playlist_id']],
+  ['id', ['song_id', 'album_id', 'artist_id', 'isrc', 'upc']],
 ];
+export const TEMPLATE_VARS = TEMPLATE_VAR_GROUPS.flatMap(([, names]) => names);
+
+// 与 downloads.mjs 实际填入的变量一致：歌单文件夹只有歌单信息；专辑文件夹取自其中第一首歌，
+// 没有音质，歌名、曲目号等单曲的信息也没有意义；专辑和单曲的歌单变量为空
+const groups = (...ids) => TEMPLATE_VAR_GROUPS.filter(([id]) => ids.includes(id)).flatMap(([, names]) => names);
+const SONG_VARS = groups('song', 'album', 'quality', 'id');
+export const TEMPLATE_SCOPES = {
+  albumFolder: ['artist', ...groups('album'), 'album_id', 'artist_id', 'upc'],
+  playlistFolder: ['playlist', 'curator', 'playlist_id'],
+  songFile: SONG_VARS,
+  playlistFile: TEMPLATE_VARS,
+  singleFile: SONG_VARS,
+};
+
+const PLACEHOLDER = /\{([A-Za-z_]+)(?::0?(\d{1,2})d)?\}/g;
+
+/** 模板中不认识的变量（unknown，会原样保留）与不适用于该模板的变量（outside，为空、原样保留或没有意义） */
+export function templateIssues(key, template) {
+  const scope = TEMPLATE_SCOPES[key] || TEMPLATE_VARS;
+  const unknown = new Set();
+  const outside = new Set();
+  for (const [, name] of String(template).matchAll(PLACEHOLDER)) {
+    if (!TEMPLATE_VARS.includes(name)) unknown.add(name);
+    else if (!scope.includes(name)) outside.add(name);
+  }
+  return { unknown: [...unknown], outside: [...outside] };
+}
 
 const FORBIDDEN = /[\\/:*?"<>|\u0000-\u001f\u007f-\u009f]/g;
 // Chrome 的 File System Access（保存至文件夹）还拒绝 Unicode 格式字符（零宽空格、方向标记等）、非字符、
@@ -40,7 +69,7 @@ export function sanitize(name) {
 
 /** 替换一段模板中的占位符：{name} 或 {name:02d}（宽度补零）；不认识的占位符原样保留，方便发现拼写错误 */
 function fill(segment, vars) {
-  return segment.replace(/\{([A-Za-z_]+)(?::0?(\d{1,2})d)?\}/g, (m, key, width) => {
+  return segment.replace(PLACEHOLDER, (m, key, width) => {
     if (!Object.prototype.hasOwnProperty.call(vars, key)) return m;
     const value = vars[key];
     if (value === undefined || value === null) return '';

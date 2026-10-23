@@ -1,7 +1,7 @@
 // 设置中心（/settings），由 app.mjs 挂载。通用设置（主地区、曲库语言、界面语言、wrapper-lite）沿用导航底部的选择面板；
 // 下载设置（音质、MV、保存方式、文件名、标签、封面、歌词）保存在 prefs.mjs，修改立即生效（进行中的下载沿用开始时的设置）。
 import { prefs, OPTIONS, CODEC_GROUPS, TAG_FIELDS, TAG_NAME, DEFAULTS, DEFAULT_FALLBACK } from '../prefs.mjs';
-import { formatPath, fitFolder, fitFile, TEMPLATE_VARS } from '../naming.mjs';
+import { formatPath, fitFolder, fitFile, templateIssues, TEMPLATE_VAR_GROUPS, TEMPLATE_SCOPES } from '../naming.mjs';
 import { downloads } from '../downloads.mjs';
 import { userToken, askToken, onTokenChange } from '../station.mjs';
 
@@ -32,7 +32,7 @@ export function mount({ root, signal, onLangChange, toast }) {
   const host = root.querySelector('#download');
   /** 控件：每项设置变化后刷新显示（正在输入的文本框除外） */
   const controls = [];
-  let lastTemplate = null;
+  let openVars = null;
   let resetArmed = false;
 
   // 电台的 media-user-token：显示是否已填写（只露出末尾几位），点击修改或清除
@@ -115,25 +115,65 @@ export function mount({ root, signal, onLangChange, toast }) {
     return group;
   }
 
+  /** 模板可用的变量：按组列出该模板适用的，点击插入到光标处；ID 一组默认收起 */
+  function templateVars(key, input) {
+    const scope = TEMPLATE_SCOPES[key];
+    const chip = (name) => {
+      const b = el('button', { type: 'button', className: 'set-var', textContent: `{${name}}`, title: t(`set.var.${name}`) });
+      b.addEventListener('mousedown', (e) => e.preventDefault()); // 保留文本框的焦点与光标
+      b.addEventListener('click', () => {
+        const token = name === 'tracknum' || name === 'index' ? `{${name}:02d}` : `{${name}}`;
+        const start = input.selectionStart ?? input.value.length;
+        const end = input.selectionEnd ?? start;
+        input.setRangeText(token, start, end, 'end');
+        input.dispatchEvent(new Event('input'));
+        input.dispatchEvent(new Event('change'));
+        input.focus();
+      });
+      return b;
+    };
+    const groups = TEMPLATE_VAR_GROUPS.map(([id, names]) => [id, names.filter((name) => scope.includes(name))]).filter(([, names]) => names.length)
+      .map(([id, names]) => {
+        const chips = el('div', { className: 'set-vars' }, ...names.map(chip));
+        if (id === 'id') return el('details', { className: 'set-var-group' }, el('summary', { className: 'set-var-label', textContent: t(`set.varGroup.${id}`) }), chips);
+        return el('div', { className: 'set-var-group' }, el('span', { className: 'set-var-label', textContent: t(`set.varGroup.${id}`) }), chips);
+      });
+    return el('div', { className: 'set-var-panel', hidden: true }, ...groups, el('span', { className: 'set-desc', textContent: t('set.varsDesc') }));
+  }
+
   // 预览与实际下载一致：按路径长度限制截断后的结果（文件名按其所在的专辑 / 歌单文件夹计算）
   function template(key, label, kind, folderKey) {
     const input = el('input', { type: 'text', className: 'set-input set-template', spellcheck: false, autocomplete: 'off' });
     input.setAttribute('aria-label', label);
     const preview = el('div', { className: 'set-preview' });
+    const warn = el('div', { className: 'set-template-warn', hidden: true });
+    const vars = templateVars(key, input);
     let saved = {};
     const update = () => {
       const value = input.value.trim() || DEFAULTS.download[key];
       const folder = () => fitFolder(formatPath(saved[folderKey] || DEFAULTS.download[folderKey], SAMPLE));
       const path = kind === 'file' ? fitFile(folder(), formatPath(value, SAMPLE)) : fitFolder(formatPath(value, SAMPLE));
       preview.textContent = kind === 'file' ? `${path.join('/')}.m4a` : kind === 'zip' ? `${path.join(' - ')}.zip  ·  ${path.join('/')}/` : path.join('/');
+      const { unknown, outside } = templateIssues(key, value);
+      const names = (list) => list.map((name) => `{${name}}`).join(' ');
+      warn.replaceChildren(...[
+        unknown.length && t('set.varUnknown', { names: names(unknown) }),
+        outside.length && t('set.varOutside', { names: names(outside) }),
+      ].filter(Boolean).map((text) => el('div', { textContent: text })));
+      warn.hidden = !warn.childElementCount;
     };
-    input.addEventListener('focus', () => { lastTemplate = input; });
+    // 同一时间只展开一个模板的变量：最近获得焦点的那个
+    input.addEventListener('focus', () => {
+      if (openVars && openVars !== vars) openVars.hidden = true;
+      vars.hidden = false;
+      openVars = vars;
+    });
     input.addEventListener('input', update);
     input.addEventListener('change', () => { set({ [key]: input.value.trim() || DEFAULTS.download[key] }); });
     controls.push((v) => { saved = v; if (document.activeElement !== input) input.value = v[key]; update(); });
     const reset = el('button', { type: 'button', className: 'set-mini', textContent: t('set.default'), title: DEFAULTS.download[key] });
     reset.addEventListener('click', () => { input.value = DEFAULTS.download[key]; set({ [key]: DEFAULTS.download[key] }); });
-    return el('div', { className: 'set-template-box' }, el('div', { className: 'set-template-line' }, input, reset), preview);
+    return el('div', { className: 'set-template-box' }, el('div', { className: 'set-template-line' }, input, reset), vars, preview, warn);
   }
 
   /** 降级顺序：当前首选音质之后依次尝试的音质，可上移、下移、移除、添加；按首选音质分别保存 */
@@ -256,32 +296,13 @@ export function mount({ root, signal, onLangChange, toast }) {
       skipRow.hidden = !folder;
     });
 
-    // 文件名：模板 + 预览；点击变量插入到最近编辑的模板中
-    const chips = el('div', { className: 'set-vars' }, ...TEMPLATE_VARS.map((name) => {
-      const chip = el('button', { type: 'button', className: 'set-var', textContent: `{${name}}`, title: t(`set.var.${name}`) });
-      chip.addEventListener('mousedown', (e) => e.preventDefault()); // 保留文本框的焦点与光标
-      chip.addEventListener('click', () => {
-        const input = lastTemplate;
-        if (!input) return;
-        const token = name === 'tracknum' || name === 'index' ? `{${name}:02d}` : `{${name}}`;
-        const start = input.selectionStart ?? input.value.length;
-        const end = input.selectionEnd ?? start;
-        input.setRangeText(token, start, end, 'end');
-        input.dispatchEvent(new Event('input'));
-        input.dispatchEvent(new Event('change'));
-        input.focus();
-      });
-      return chip;
-    }));
+    // 文件名：模板 + 可用变量 + 预览
     const naming = section('naming', 'set.naming',
       row(t('set.albumFolder'), t('set.albumFolderDesc'), template('albumFolder', t('set.albumFolder'), 'zip'), { wide: true }),
       row(t('set.songFile'), t('set.songFileDesc'), template('songFile', t('set.songFile'), 'file', 'albumFolder'), { wide: true }),
       row(t('set.playlistFolder'), '', template('playlistFolder', t('set.playlistFolder'), 'zip'), { wide: true }),
       row(t('set.playlistFile'), '', template('playlistFile', t('set.playlistFile'), 'file', 'playlistFolder'), { wide: true }),
-      row(t('set.singleFile'), t('set.singleFileDesc'), template('singleFile', t('set.singleFile'), 'file', 'albumFolder'), { wide: true }),
-      el('div', { className: 'set-row set-row-wide set-vars-row' },
-        el('span', { className: 'set-label' }, el('span', { textContent: t('set.vars') }), el('span', { className: 'set-desc', textContent: t('set.varsDesc') })),
-        chips));
+      row(t('set.singleFile'), t('set.singleFileDesc'), template('singleFile', t('set.singleFile'), 'file', 'albumFolder'), { wide: true }));
 
     // 标签：嵌入字段
     const checks = TAG_FIELDS.map((field) => {
