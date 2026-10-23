@@ -22,8 +22,8 @@ const WRAPPER_TIMEOUT = 30000;
 /** 目录与搜索结果的缓存时间（秒）；地区表几乎不变 */
 const CATALOG_TTL = 300;
 const STOREFRONTS_TTL = 24 * 3600;
-/** 固定 key 的模板已内嵌在 wasm 中，不经过 /key（同 am_mp4::FIXED_KEY_URI） */
-const FIXED_KEY_URI = 'skd://itunes.apple.com/P000000000/s1/e1';
+/** 预取 key 的模板已内嵌在 wasm 中，不经过 /key（同 am_mp4::PREFETCH_KEY_URI） */
+const PREFETCH_KEY_URI = 'skd://itunes.apple.com/P000000000/s1/e1';
 
 const SCRIPT_RE = /src="(\/assets\/index[~-][0-9A-Za-z_-]+\.js)"/;
 const JWT_RE = /eyJ[0-9A-Za-z_-]{10,}\.eyJ[0-9A-Za-z_-]{10,}\.[0-9A-Za-z_-]{10,}/;
@@ -522,7 +522,7 @@ async function lyrics(wrapper, adamId, language) {
 /** 浏览器端解密所需的轨道模板：转发 wrapper-lite `/key` 返回的 `data` */
 async function key(wrapper, adamId, uri) {
   if (!/^[0-9]+$/.test(adamId)) return fail(400, 'Invalid adamId');
-  if (!uri.startsWith('skd://') || uri === FIXED_KEY_URI) return fail(400, 'Invalid key uri');
+  if (!uri.startsWith('skd://') || uri === PREFETCH_KEY_URI) return fail(400, 'Invalid key uri');
   try {
     const { payload } = await wrapperData(wrapper, `/key?${query({ adamId, uri })}`);
     if (payload.code !== 0) throw new Error(`wrapper-lite returned error code ${payload.code}: ${payload.msg ?? 'unknown error'}`);

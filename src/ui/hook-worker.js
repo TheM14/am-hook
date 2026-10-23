@@ -2,7 +2,7 @@
  * am-hook 浏览器端 Worker（由 decrypt.js 管理），消息格式 { id, op, ... } -> { id, ok, result | error }
  *
  *   decrypt     用 hook.wasm 原地处理一段数据并以 transfer 方式交回：
- *               kind=init 改写 init segment；kind=frag 用固定模板（key=fixed）或轨道模板解密 fragment，
+ *               kind=init 改写 init segment；kind=frag 用预取模板（key=prefetch）或轨道模板解密 fragment，
  *               带 cenc（{ key, init }：内容密钥与原始 init）时按 CENC/CBCS 解密
  *   file-open   在 OPFS 中创建下载文件并取得同步访问句柄（createSyncAccessHandle 只能在 Worker 中使用）
  *   file-write  把解密后的数据写到文件的指定偏移
@@ -69,7 +69,7 @@ function inWasm(w, bytes, fn) {
 }
 
 function templateHandle(w, key, json) {
-  if (key === 'fixed') return w.hook_fixed_template();
+  if (key === 'prefetch') return w.hook_prefetch_template();
   const cached = templates.get(key);
   if (cached) return cached;
   if (!json) throw new Error(msg('noTemplate'));

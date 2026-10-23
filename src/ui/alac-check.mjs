@@ -11,11 +11,11 @@
 //   2. 长度超过一帧 PCM 的 sample 就是受影响的帧；cbcs 只加密整 16 字节块，原样帧（16388 / 24580 字节）
 //      末尾不足一块的 4 字节是明文，只下载这 4 字节，检查 PCM 之后的位是否恰为 111 加零填充；
 //   3. init 段：mvhd 的创建时间即打包（编码）日期，udta/swre 为打包软件版本，ALAC magic cookie 给出帧长、位深与采样率；
-//   4. 可选：第一个分段（约 15 秒）使用固定密钥，在浏览器内解密（decrypt.js，同样不请求 /key）后解码，
+//   4. 可选：第一个分段（约 15 秒）使用预取密钥，在浏览器内解密（decrypt.js，同样不请求 /key）后解码，
 //      分析实际位深（低位是否全为零）与频宽（是否由低采样率升频），见 crates/am-flac-wasm/src/analysis.rs。
 
-/** 每条轨道第一个分段使用的 FairPlay 固定密钥（与 decrypt.js 相同） */
-const FIXED_KEY_URI = 'skd://itunes.apple.com/P000000000/s1/e1';
+/** 每条轨道开头的分段使用的 FairPlay 预取密钥（与 decrypt.js 相同） */
+const PREFETCH_KEY_URI = 'skd://itunes.apple.com/P000000000/s1/e1';
 /** mvhd 时间的起点：1904-01-01 UTC */
 const MAC_EPOCH = Date.UTC(1904, 0, 1);
 /** 估计 moof 大小：每个 sample 在 trun（4 字节）与 senc（8 字节）中各占一项，再留出余量 */
@@ -185,10 +185,10 @@ export function pickAlac(variants) {
 }
 
 /**
- * 第一个分段的 FairPlay 密钥是否为固定密钥。只看 skd:// 的 EXT-X-KEY：较新的 media m3u8 在每个密钥周期同时列出
- * FairPlay、PlayReady 与 Widevine，decrypt.js 的 parseMediaPlaylist 此时取 Widevine，分段的 key 不再是 'fixed'。
+ * 第一个分段的 FairPlay 密钥是否为预取密钥。只看 skd:// 的 EXT-X-KEY：较新的 media m3u8 在每个密钥周期同时列出
+ * FairPlay、PlayReady 与 Widevine，decrypt.js 的 parseMediaPlaylist 此时取 Widevine，分段的 key 不再是 'prefetch'。
  */
-export function firstSegmentFixed(text) {
+export function firstSegmentPrefetch(text) {
   let fairplay = null;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
@@ -197,7 +197,7 @@ export function firstSegmentFixed(text) {
       if (/METHOD=NONE/.test(line)) fairplay = null;
       else if (uri && uri.startsWith('skd://')) fairplay = uri;
     } else if (line.startsWith('#EXTINF:')) {
-      return fairplay === FIXED_KEY_URI;
+      return fairplay === PREFETCH_KEY_URI;
     }
   }
   return false;
@@ -303,10 +303,10 @@ export async function checkVariant(variant, { adamId, signal, limit = (fn) => fn
   const info = parseInit(await fetchBytes(playlist.url, playlist.init.start, playlist.init.end));
   const layout = frameLayout(info);
 
-  // 第一个分段使用固定密钥时，与扫描同时解密并分析。只解密这一段，按固定密钥（FairPlay）处理；
+  // 第一个分段使用预取密钥时，与扫描同时解密并分析。只解密这一段，按预取密钥（FairPlay）处理；
   // 构造 Track 而不用 Track.open：后者会预取轨道模板，即 /key
-  const first = { ...playlist.segments[0], key: 'fixed' };
-  const analysis = analyzer && firstSegmentFixed(media.text)
+  const first = { ...playlist.segments[0], key: 'prefetch' };
+  const analysis = analyzer && firstSegmentPrefetch(media.text)
     ? analysisLimit(async () => {
       signal?.throwIfAborted();
       const track = new AmDecrypt.Track({ ...playlist, cenc: false, keyUri: null, segments: [first] });

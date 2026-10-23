@@ -302,7 +302,7 @@ Like music.apple.com's Library and Playlists, but **stored only in your browser*
   - **Check while downloading** (Settings, off by default): ALAC downloads are checked as they download: the moofs and escape-frame ends are read from the raw segments before decryption and repair, with no extra requests. The result shows in the download center and goes into the custom tag `----:com.apple.iTunes:ALAC_CHECK` (name configurable), e.g. `result=damaged; noEnd=25; hidden=0; oversize=0; frames=2108; escapes=25; format=16/44100; bad=#124@11.517:noEnd,…; packaged=…; endTagRepair=on; checked=…`
   - **Damaged escape-frame ends** ([AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)): Apple packages ALAC into an output buffer only as large as one frame of raw PCM, so the 4 extra bytes of an escape (uncompressed) frame are copied after the buffer is freed and hold heap metadata. The master m3u8 comes from amp-api's `extendedAssetUrls.enhancedHls`; only the moof at the start of each segment (a few KB) is downloaded, and for samples larger than one frame of PCM (16388 bytes in 16-bit stereo, 24580 in 24-bit) only the last 4 bytes, which cbcs leaves unencrypted because it encrypts whole 16-byte blocks only. If the PCM is not followed by the END tag `111` the frame is reported as "END tag missing" (FFmpeg and others drop it); with `111` but non-zero padding as "Hidden damage" (it decodes, but the last sample is wrong). Frame numbers, times and the last 4 bytes are listed
   - **Packaging**: the creation time in the init segment's `mvhd` (packaging date) and `udta/swre` (packager version)
-  - **Real bit depth and bandwidth** (optional): the first segment (about 15 s) uses the fixed key, so it is decrypted in the browser and decoded by `flac.wasm` (`crates/am-flac-wasm/src/analysis.rs`): whether the low bits are always zero (16-bit audio in a 24-bit container), and the highest frequency of the average spectrum that is 20 dB above the container's quantization noise. Only a steep drop above it is reported as likely upsampled (for example 96 kHz with nothing above 22 kHz) or, at 44.1 / 48 kHz, as a likely lossy source; the spectrum is drawn
+  - **Real bit depth and bandwidth** (optional): the first segment (about 15 s) uses the prefetch key, so it is decrypted in the browser and decoded by `flac.wasm` (`crates/am-flac-wasm/src/analysis.rs`): whether the low bits are always zero (16-bit audio in a 24-bit container), and the highest frequency of the average spectrum that is 20 dB above the container's quantization noise. Only a steep drop above it is reported as likely upsampled (for example 96 kHz with nothing above 22 kHz) or, at 44.1 / 48 kHz, as a likely lossy source; the spectrum is drawn
 
 ## How It Works
 
@@ -326,7 +326,7 @@ In the browser (`src/ui/decrypt.js`):
 
 1. With the master m3u8 URL from wrapper-lite, the browser fetches the master directly from the Apple CDN and parses its variants (`src/ui/wrapper.js`).
 2. The media m3u8 is fetched directly from `aod.itunes.apple.com` (the CDN allows CORS and Range requests) and parsed into the init segment, fragment byte ranges and the key used by each fragment.
-3. The first fragment uses the fixed template embedded in the wasm (`skd://itunes.apple.com/P000000000/s1/e1`); the rest use the track template from `/key`.
+3. Fragments under the prefetch key (`skd://itunes.apple.com/P000000000/s1/e1`, usually only the first one, sometimes more) use the template embedded in the wasm; once the playlist switches to the track key, the rest use the track template from `/key`.
 4. Fragments are fetched with Range requests and decrypted in place by a Worker pool (one `hook.wasm` instance per Worker). The decryption code lives in `crates/am-mp4`.
 5. **Playback**: decrypted fragments feed MSE when the original codec is supported. If ALAC is unavailable but FLAC-in-MP4 is, the on-demand `flac.wasm` losslessly converts ALAC packets to FLAC frames and remuxes them into small fMP4 fragments. EC-3 uses MSE when supported, otherwise the on-demand `ec3.wasm` decoder plays 5.1/7.1 PCM through Web Audio (no Atmos object rendering). Seeking jumps to the matching source fragment.
 6. **Download**: 4 lanes fetch and decrypt concurrently and write each result at its original offset into an OPFS temporary file, which is then converted to a progressive MP4 like the reference downloader's `DefragmentMP4` (`M4A ` ftyp, `moov` before the media data) and handed to the browser to save. Without OPFS it falls back to in-memory Blobs.
@@ -444,7 +444,7 @@ Browser-side tests are plain Node scripts. `<playwright>` is the path to a Playw
 | `node tests/mv_hls.cjs`, `node tests/mv_captions.cjs` | MV playlists and captions |
 | `node --test tests/serverless.mjs` | The serverless backend and the `dist/` layout; also run in CI |
 | `node --test tests/download_core.mjs` | ZIP / ZIP64, iTunes tags, file name templates |
-| `node --test tests/alac_check.mjs` | ALAC check: escape-frame end verdicts (including the cases from issue #136), moof / init parsing, the fixed key in multi-DRM playlists, bandwidth verdicts; also run by CI |
+| `node --test tests/alac_check.mjs` | ALAC check: escape-frame end verdicts (including the cases from issue #136), moof / init parsing, the prefetch key in multi-DRM playlists, bandwidth verdicts; also run by CI |
 
 </details>
 
@@ -521,7 +521,7 @@ src/
     media-worker.js / media.wasm                          Worker for MVs and song defragmentation; build output of crates/am-media-wasm
     mv-captions.mjs / mv-cea608.mjs                       CEA-608 captions
 crates/
-  am-mp4/              ISOBMFF parsing, box patching, sample decryption (shared by server and wasm); embeds the fixed first-fragment template
+  am-mp4/              ISOBMFF parsing, box patching, sample decryption (shared by server and wasm); embeds the prefetch-key template
   am-alac/             Conservative ALAC end-tag repair
   am-wasm/             Browser C ABI exports of am-mp4 (wasm32-unknown-unknown)
   am-flac-wasm/        ALAC packet decoder and FLAC frame writer for the browser; PCM analysis (real bit depth, bandwidth, analysis.rs)

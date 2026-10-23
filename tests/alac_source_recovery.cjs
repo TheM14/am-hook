@@ -24,9 +24,9 @@ const origin = process.env.AM_HOOK_URL || 'http://127.0.0.1:8888';
       handle = input(Buffer.from(json), (ptr, len) => w.hook_template_load(ptr, len));
       assert(handle);
     });
-    await page.exposeFunction('verifySource', (encrypted, clear, fixed) => {
+    await page.exposeFunction('verifySource', (encrypted, clear, prefetch) => {
       const before = input(Buffer.from(encrypted, 'base64'), (ptr, len) => {
-        assert.equal(w.hook_decrypt_fragment(fixed ? w.hook_fixed_template() : handle, ptr, len), 1);
+        assert.equal(w.hook_decrypt_fragment(prefetch ? w.hook_prefetch_template() : handle, ptr, len), 1);
         return Buffer.from(new Uint8Array(w.memory.buffer, ptr, len));
       });
       const after = Buffer.from(clear, 'base64');
@@ -75,7 +75,7 @@ const origin = process.env.AM_HOOK_URL || 'http://127.0.0.1:8888';
         await Promise.all(track.segments.slice(start, start + 4).map(async segment => {
           const encrypted = await track.fetchPiece(segment);
           const clear = await track.decryptPiece(segment, encrypted.slice(0));
-          await verifySource(base64(encrypted), base64(clear), segment.key === 'fixed');
+          await verifySource(base64(encrypted), base64(clear), segment.key === 'prefetch');
         }));
       }
     });

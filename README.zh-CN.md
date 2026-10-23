@@ -302,7 +302,7 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
   - **下载时检测**（设置中心，默认关闭）：下载 ALAC 时同时检测实际下载的那一份：原始分段在解密、修复之前顺带读出 moof 与原样帧末尾，不另发请求。结论显示在下载中心，并写入自定义标签 `----:com.apple.iTunes:ALAC_CHECK`（名称可改），内容如 `result=damaged; noEnd=25; hidden=0; oversize=0; frames=2108; escapes=25; format=16/44100; bad=#124@11.517:noEnd,…; packaged=…; endTagRepair=on; checked=…`
   - **原样帧末尾缺陷**（[AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)）：Apple 打包时输出缓冲区只有一帧原始 PCM 大，原样帧（未压缩帧）多出的末尾 4 字节在缓冲区释放后才被复制，内容是堆管理数据。master m3u8 取自 amp-api 的 `extendedAssetUrls.enhancedHls`；每个分段只下载开头的 moof（几 KB），长度超过一帧 PCM 的 sample（16-bit 立体声 16388 字节、24-bit 24580 字节）再只读末尾 4 字节——cbcs 只加密整 16 字节块，这 4 字节是明文。PCM 之后不是 END 标记 `111` 的为「缺 END 标记」（FFmpeg 等会丢弃该帧）；是 `111` 但填充位不为零的为「隐藏缺陷」（解码不报错，最后一个样本已损坏）。列出帧号、时间与末尾 4 字节
   - **打包信息**：init 段 `mvhd` 的创建时间（打包日期）与 `udta/swre`（打包软件版本）
-  - **实际位深与频宽**（可关闭）：第一个分段（约 15 秒）使用固定密钥，在浏览器内解密后由 `flac.wasm` 解码分析（`crates/am-flac-wasm/src/analysis.rs`）：低位是否全为零（如 24-bit 中实为 16-bit），以及平均频谱高于容器量化噪声 20 dB 的最高频率；只有其上方陡降时才判断为疑似升频（如 96 kHz 中只有 22 kHz 以下的内容）或 44.1 / 48 kHz 的有损来源，并画出频谱
+  - **实际位深与频宽**（可关闭）：第一个分段（约 15 秒）使用预取密钥，在浏览器内解密后由 `flac.wasm` 解码分析（`crates/am-flac-wasm/src/analysis.rs`）：低位是否全为零（如 24-bit 中实为 16-bit），以及平均频谱高于容器量化噪声 20 dB 的最高频率；只有其上方陡降时才判断为疑似升频（如 96 kHz 中只有 22 kHz 以下的内容）或 44.1 / 48 kHz 的有损来源，并画出频谱
 
 ## 工作原理
 
@@ -326,7 +326,7 @@ flowchart LR
 
 1. 从 wrapper-lite 取得 master m3u8 地址后，浏览器直接从 Apple CDN 获取 master 并解析出各音质变体（`src/ui/wrapper.js`）。
 2. 直接从 `aod.itunes.apple.com` 获取 media m3u8（CDN 允许跨域和 Range 请求），解析出 init 段、各分片的字节范围，以及每个分片对应的 key。
-3. 首个分片使用内嵌在 wasm 中的固定模板（`skd://itunes.apple.com/P000000000/s1/e1`），其余分片使用经 `/key` 获取的轨道模板。
+3. 预取 key（`skd://itunes.apple.com/P000000000/s1/e1`）下的分片（通常只有第一个，也可能更多）使用内嵌在 wasm 中的模板，播放列表换成轨道 key 后，其余分片使用经 `/key` 获取的轨道模板。
 4. 分片用 Range 请求拉取，交给 Worker 池（每个 Worker 一个 `hook.wasm` 实例）原地解密；解密逻辑位于 `crates/am-mp4`。
 5. **播放**：浏览器支持原编码时，解密后的分片直接喂给 MSE。不支持 ALAC 但支持 FLAC-in-MP4 时，按需加载 `flac.wasm`，把 ALAC packet 无损转成 FLAC frame 并重新封装成较小的 fMP4 fragment。EC-3 在 MSE 支持时直接播放，否则按需加载 `ec3.wasm`，通过 Web Audio 播放 5.1/7.1 声道 PCM（不渲染 Atmos 对象）。拖动时直接定位到对应原始分片。
 6. **下载**：4 路并发拉取和解密，结果按原始偏移写入 OPFS 临时文件，完成后像参考下载器的 `DefragmentMP4` 那样转为 progressive MP4（`M4A ` ftyp，`moov` 位于媒体数据之前），再交给浏览器保存。不支持 OPFS 时退回内存 Blob。
@@ -444,7 +444,7 @@ cargo test --test e2e_test -- --ignored
 | `node tests/mv_hls.cjs`、`node tests/mv_captions.cjs` | MV 清单与字幕 |
 | `node --test tests/serverless.mjs` | serverless 后端与 `dist/` 的生成，CI 也会运行 |
 | `node --test tests/download_core.mjs` | ZIP / ZIP64、iTunes 标签、文件名模板 |
-| `node --test tests/alac_check.mjs` | ALAC 检测：原样帧末尾的判定（含 issue #136 中的实例）、moof / init 解析、多 DRM 清单中的固定密钥、频宽结论；CI 也会运行 |
+| `node --test tests/alac_check.mjs` | ALAC 检测：原样帧末尾的判定（含 issue #136 中的实例）、moof / init 解析、多 DRM 清单中的预取密钥、频宽结论；CI 也会运行 |
 
 </details>
 
@@ -521,7 +521,7 @@ src/
     media-worker.js / media.wasm                          MV 与歌曲 defrag 共用的 Worker；crates/am-media-wasm 的编译产物
     mv-captions.mjs / mv-cea608.mjs                       CEA-608 字幕
 crates/
-  am-mp4/              ISOBMFF 解析、box 修补、sample 解密（服务端与 wasm 共用）；内嵌首段固定模板
+  am-mp4/              ISOBMFF 解析、box 修补、sample 解密（服务端与 wasm 共用）；内嵌预取 key 模板
   am-alac/             保守的 ALAC 包尾修复
   am-wasm/             am-mp4 的浏览器端 C ABI 导出（wasm32-unknown-unknown）
   am-flac-wasm/        浏览器端 ALAC 解码与 FLAC frame 写入；PCM 分析（实际位深、频宽，analysis.rs）

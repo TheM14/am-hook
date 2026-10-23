@@ -1,7 +1,7 @@
 // Run with: node --test tests/alac_check.mjs
 // Offline: covers the album page's ALAC check (src/ui/alac-check.mjs) with synthetic fMP4 data and a stubbed fetch:
 // escape-frame tail classification (the real tails from AppleMusicDecrypt#136), moof / init parsing, the FairPlay
-// fixed-key detection of multi-DRM playlists, the analysis verdicts, and a whole checkTrack run that must never request /key.
+// prefetch-key detection of multi-DRM playlists, the analysis verdicts, and a whole checkTrack run that must never request /key.
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import vm from 'node:vm';
 
 import {
-  checkSources, checkTrack, classifyTail, compareAlac, createFragmentScanner, createLimiter, firstSegmentFixed, frameLayout, interpretAnalysis, parseFragmentHead, parseInit,
+  checkSources, checkTrack, classifyTail, compareAlac, createFragmentScanner, createLimiter, firstSegmentPrefetch, frameLayout, interpretAnalysis, parseFragmentHead, parseInit,
   pickAlac, tagValue,
 } from '../src/ui/alac-check.mjs';
 
@@ -103,13 +103,13 @@ test('moof: sample offsets, sizes and times; asks for more bytes when the moof i
 
 test('first segment key: only the FairPlay key counts in multi-DRM playlists', () => {
   const widevine = '#EXT-X-KEY:METHOD=SAMPLE-AES,URI="data:text/plain;base64,AAAA",KEYFORMAT="urn:uuid:edef8ba9-79d6-4ace-a3c8-27dcd51d21ed"';
-  const fixed = '#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://itunes.apple.com/P000000000/s1/e1",KEYFORMAT="com.apple.streamingkeydelivery"';
+  const prefetch = '#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://itunes.apple.com/P000000000/s1/e1",KEYFORMAT="com.apple.streamingkeydelivery"';
   const track = '#EXT-X-KEY:METHOD=SAMPLE-AES,URI="skd://itunes.apple.com/p1/c6",KEYFORMAT="com.apple.streamingkeydelivery"';
   const playlist = (...keys) => ['#EXTM3U', ...keys, '#EXT-X-MAP:URI="a.mp4",BYTERANGE="10@0"', '#EXTINF:15,', '#EXT-X-BYTERANGE:5@10', 'a.mp4'].join('\n');
-  assert.equal(firstSegmentFixed(playlist(fixed)), true);
-  assert.equal(firstSegmentFixed(playlist(fixed, widevine)), true);
-  assert.equal(firstSegmentFixed(playlist(track, widevine)), false);
-  assert.equal(firstSegmentFixed(playlist(widevine)), false);
+  assert.equal(firstSegmentPrefetch(playlist(prefetch)), true);
+  assert.equal(firstSegmentPrefetch(playlist(prefetch, widevine)), true);
+  assert.equal(firstSegmentPrefetch(playlist(track, widevine)), false);
+  assert.equal(firstSegmentPrefetch(playlist(widevine)), false);
 });
 
 test('best ALAC variant: sample rate, then bit depth, then bandwidth', () => {

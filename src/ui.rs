@@ -264,7 +264,7 @@ pub struct KeyQuery {
 }
 
 /// 浏览器端解密所需的轨道模板：转发 wrapper-lite `/key` 返回的 `data`。
-/// 固定 key 的模板已内嵌在 wasm 中，不经过这里。
+/// 预取 key 的模板已内嵌在 wasm 中，不经过这里。
 pub async fn key_handler(
     State(state): State<Arc<AppState>>,
     axum::extract::Query(query): axum::extract::Query<KeyQuery>,
@@ -272,7 +272,7 @@ pub async fn key_handler(
     if query.adam_id.is_empty() || !query.adam_id.chars().all(|c| c.is_ascii_digit()) {
         return bad_request("Invalid adamId");
     }
-    if !query.uri.starts_with("skd://") || query.uri == am_mp4::FIXED_KEY_URI {
+    if !query.uri.starts_with("skd://") || query.uri == am_mp4::PREFETCH_KEY_URI {
         return bad_request("Invalid key uri");
     }
     match state.wrapper.fetch_key_json(&query.adam_id, &query.uri).await {

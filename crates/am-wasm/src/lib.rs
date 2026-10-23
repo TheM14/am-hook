@@ -6,7 +6,7 @@
 use std::alloc::{alloc, dealloc, Layout};
 use std::cell::RefCell;
 
-use am_mp4::{decrypt_fragment_in_place, fixed_template, patch_init_in_place, template_from_json, Template};
+use am_mp4::{decrypt_fragment_in_place, prefetch_template, patch_init_in_place, template_from_json, Template};
 
 thread_local! {
     static LAST_ERROR: RefCell<String> = const { RefCell::new(String::new()) };
@@ -41,10 +41,10 @@ pub unsafe extern "C" fn hook_free(ptr: *mut u8, len: usize) {
     }
 }
 
-/// 内嵌的固定 key 模板（每条轨道第一个 fragment 使用），无需释放。
+/// 内嵌的预取 key 模板（每条轨道开头的 fragment 使用），无需释放。
 #[no_mangle]
-pub extern "C" fn hook_fixed_template() -> *const Template {
-    fixed_template()
+pub extern "C" fn hook_prefetch_template() -> *const Template {
+    prefetch_template()
 }
 
 /// 解析 wrapper-lite `/key` 返回的 `data` JSON，返回模板句柄，需用 `hook_template_free` 释放。

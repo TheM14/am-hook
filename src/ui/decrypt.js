@@ -17,7 +17,7 @@
 (function (global) {
   'use strict';
 
-  const FIXED_KEY_URI = 'skd://itunes.apple.com/P000000000/s1/e1';
+  const PREFETCH_KEY_URI = 'skd://itunes.apple.com/P000000000/s1/e1';
   const WORKER_URL = '/assets/hook-worker.js';
   /** 媒体 Worker（media.wasm，crates/am-media），与 MV 共用，其中含移植自参考实现的 defrag */
   const MEDIA_WORKER_URL = '/assets/media-worker.js';
@@ -217,7 +217,7 @@
 
   /**
    * 解析 Apple 原始 media m3u8（含 EXT-X-KEY），返回 init 段与各 segment 的字节 / 时间范围。
-   * 每个 segment 记录其适用的 key：fixed（内嵌固定模板）、track（轨道模板或 CENC 内容密钥）或 null（未加密）。
+   * 每个 segment 记录其适用的 key：prefetch（内嵌的预取模板）、track（轨道模板或 CENC 内容密钥）或 null（未加密）。
    * cenc 为 true 时 keyUri 是 data: URI（Widevine KID），否则是 FairPlay 的 skd:// URI。
    * adamId 取自文件名（…_A<adamId>_… 或 …_A<adamId>.…），也可以由地址的 #adamId= 给出。
    */
@@ -245,7 +245,7 @@
         // 同时列出多个 DRM 的 key 时只取 Widevine 的
         if (uri && uri.startsWith('data:') && format && format.toLowerCase() !== WIDEVINE_KEYFORMAT) continue;
         currentKey = method === 'NONE' || !uri ? null : uri;
-        if (currentKey && currentKey !== FIXED_KEY_URI && !keyUri) keyUri = currentKey;
+        if (currentKey && currentKey !== PREFETCH_KEY_URI && !keyUri) keyUri = currentKey;
       } else if (line.startsWith('#EXT-X-MAP:')) {
         const uri = /URI="([^"]+)"/.exec(line);
         const range = /BYTERANGE="([^"]+)"/.exec(line);
@@ -258,7 +258,7 @@
         const r = byterange(line.slice(17), next);
         next = r.end + 1;
         const dur = pendingDuration || 0;
-        const key = currentKey === FIXED_KEY_URI ? 'fixed' : currentKey ? 'track' : null;
+        const key = currentKey === PREFETCH_KEY_URI ? 'prefetch' : currentKey ? 'track' : null;
         segments.push({ ...r, time: duration, duration: dur, key });
         duration += dur;
         pendingDuration = null;
@@ -333,7 +333,7 @@
       // init 用于修复 ALAC 的 END 标记；repair 为 false 时（设置中心关闭了修复，见 downloads.mjs）保留原始数据
       const init = this.repair === false ? undefined : await this.initData();
       if (this.cenc && piece.key === 'track') return pool.run({ kind: 'frag', cenc: { key: await this.template(), init: this.rawInit }, init, buf });
-      if (piece.key === 'fixed') return pool.run({ kind: 'frag', key: 'fixed', init, buf });
+      if (piece.key === 'prefetch') return pool.run({ kind: 'frag', key: 'prefetch', init, buf });
       if (piece.key === 'track') return pool.run({ kind: 'frag', key: this.keyUri, template: await this.template(), init, buf });
       return pool.run({ kind: 'frag', init, buf });
     }
