@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## v0.5.9 (2026-10-23)
+
+### New
+- ✨ Settings, File names: variables now follow the template being edited and list only the ones it supports (e.g. the playlist folder has just the playlist name, curator and playlist ID), grouped by song / album / quality / playlist / ID with IDs collapsed; the preview warns about unknown variables and ones that don't apply to that template
+- ✨ Playback errors show a retry countdown and a "Retry now" button
+
+### Fixes
+- 🐛 Segment or key load failures were retried every 3 s forever, and pumps while buffered audio was still playing bypassed the timer: retries now back off 3 / 6 / 12 / 24 / 48 s with jitter and stop after 5 attempts
+
+### Changed
+- ♻️ The FairPlay key used for the leading segments (`P000000000/s1/e1`) is now called the prefetch key: it does not always cover only the first segment (some songs switch to the track key at the third). Decryption already followed each segment's own EXT-X-KEY; only names and wording changed (including the ALAC check option)
+
 ## v0.5.8 (2026-10-22)
 
 ### New
