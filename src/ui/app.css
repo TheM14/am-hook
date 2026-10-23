@@ -968,6 +968,8 @@ html[dir="rtl"] .volume-pop { transform-origin: left center; }
 .player-notice { left: 0; max-width: min(300px, calc(100vw - 32px)); }
 .player-msg { left: 50%; max-width: min(520px, calc(100vw - 32px)); max-height: 30dvh; overflow-y: auto; transform: translateX(-50%); color: var(--error); }
 .player-notice[hidden], .player-msg[hidden] { display: none; }
+.player-retry-status { opacity: .75; }
+.player-retry { padding: 0; border: 0; background: none; color: inherit; font: inherit; text-decoration: underline; cursor: pointer; }
 @keyframes notice-in { from { opacity: 0; translate: 0 4px; } }
 
 /* 待播清单：播放条右侧按钮打开，浮在播放条上方，右边缘与播放条对齐（位置由 player.js 设置）。

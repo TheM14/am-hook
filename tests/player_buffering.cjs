@@ -127,3 +127,55 @@ test('stall at a hole in appended audio re-buffers even with work ahead', () => 
   clearTimeout(mse.stallTimer);
   assert.equal(interrupted, true);
 });
+
+test('failed loads back off, ignore timeupdate pumps, and stop after five retries', async () => {
+  const { setTimeout: realSetTimeout, clearTimeout: realClearTimeout } = global;
+  const timers = [];
+  global.setTimeout = (fn, delay) => timers.push({ fn, delay });
+  global.clearTimeout = () => {};
+  try {
+    const mse = engine();
+    let fetches = 0;
+    let fail = true;
+    mse.fetchRange = async () => { fetches++; if (fail) throw new Error('no available instance'); return [new ArrayBuffer(1)]; };
+    mse.append = async () => {};
+    mse.evict = async () => {};
+    const errors = [];
+    mse.onError = (err) => errors.push(err.message);
+    let recovered = 0;
+    mse.onRecover = () => recovered++;
+
+    await mse.pump(0);
+    assert.equal(fetches, 1);
+    assert.deepEqual(errors, ['no available instance']);
+    // timeupdate while waiting must not bypass the backoff
+    await mse.pump(0);
+    assert.equal(fetches, 1);
+
+    for (let i = 0; i < 5; i++) {
+      const { fn, delay } = timers[i];
+      const base = 3000 * 2 ** i;
+      assert.ok(delay >= base * 0.8 && delay <= base * 1.2, `retry ${i + 1} waited ${delay}ms`);
+      fn();
+      await new Promise(setImmediate);
+    }
+    assert.equal(fetches, 6);
+    assert.equal(timers.length, 5);
+    assert.equal(mse.gaveUp, true);
+    await mse.pump(0);
+    assert.equal(fetches, 6);
+    assert.equal(errors.length, 1);
+
+    fail = false;
+    mse.retryNow();
+    await new Promise(setImmediate);
+    assert.ok(fetches >= 7);
+    assert.equal(mse.failed, false);
+    assert.equal(mse.gaveUp, false);
+    assert.equal(mse.failures, 0);
+    assert.equal(recovered, 1);
+  } finally {
+    global.setTimeout = realSetTimeout;
+    global.clearTimeout = realClearTimeout;
+  }
+});

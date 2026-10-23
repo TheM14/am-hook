@@ -23,6 +23,8 @@
   const FLAC_MIN_AHEAD_SECONDS = 4;
   const FLAC_BEHIND_SECONDS = 2;
   const BEHIND_SECONDS = 30;
+  /** 分段加载失败后自动重试的次数（间隔 3、6、12、24、48 秒），之后等用户点「立即重试」 */
+  const MAX_RETRIES = 5;
 
   /** time 所在 segment 下标 */
   function segmentAt(segments, time) {
@@ -575,6 +577,9 @@
       this.nextSerial = 0;
       this.trackSerial = 0;
       this.stallLastTime = null;
+      this.failures = 0;
+      this.retryAt = null;
+      this.gaveUp = false;
     }
 
     /** m3u8Url：Apple CDN 上的原始 media m3u8 */
@@ -899,6 +904,8 @@
 
     async pump(gen) {
       if (this.busy || gen !== this.generation || !this.sb) return;
+      // 失败后等待重试或已停止重试：timeupdate 等触发的 pump 不能绕过退避
+      if (this.retryAt || this.gaveUp) return;
       // 配额已满：等播放前进、已播部分可以淘汰后再试，不在每次 timeupdate 重复追加
       if (this.audio.currentTime < this.quotaWaitUntil) return;
       if (this.discardFrom !== undefined && this.discardFrom !== null) {
@@ -999,6 +1006,7 @@
           if (stale()) throw new DOMException('stale seek', 'AbortError');
           track.appendedSegments.add(target);
         }
+        this.failures = 0;
         if (this.failed) {
           this.failed = false;
           if (this.onRecover) this.onRecover();
@@ -1006,11 +1014,25 @@
       } catch (err) {
         if (pumpSerial === this.pumpSerial && (!err || err.name !== 'AbortError')) {
           this.busy = false;
-          // 网络中断等错误：提示后继续重试，不让缓冲耗尽后一直卡住
+          // 网络中断、wrapper-lite 暂不可用等错误：提示后自动重试，不让缓冲耗尽后一直卡住。
+          // 间隔从 3 秒起按连续失败次数翻倍，加 ±20% 抖动，避免故障期间所有客户端同步打过去；
+          // 重试 MAX_RETRIES 次仍失败后停止，等用户点「立即重试」（retryNow）
           if (!this.failed && this.onError) this.onError(err);
           this.failed = true;
           clearTimeout(this.retryTimer);
-          this.retryTimer = setTimeout(() => this.pump(gen), 3000);
+          if (this.failures >= MAX_RETRIES) {
+            this.gaveUp = true;
+          } else {
+            const delay = 3000 * 2 ** this.failures * (0.8 + Math.random() * 0.4);
+            this.failures++;
+            this.retryAt = Date.now() + delay;
+            this.retryTimer = setTimeout(() => {
+              this.retryAt = null;
+              if (this.onRetry) this.onRetry();
+              this.pump(gen);
+            }, delay);
+          }
+          if (this.onRetry) this.onRetry();
           return;
         }
       }
@@ -1018,6 +1040,17 @@
         this.busy = false;
         if (!waitForPlayback && gen === this.generation) this.pump(gen);
       }
+    }
+
+    /** 失败后立即重试，并重新计算自动重试次数 */
+    retryNow() {
+      if (!this.failed) return;
+      clearTimeout(this.retryTimer);
+      this.failures = 0;
+      this.retryAt = null;
+      this.gaveUp = false;
+      if (this.onRetry) this.onRetry();
+      this.pump(this.generation);
     }
 
     destroy(bump = true) {
@@ -1044,6 +1077,9 @@
       this.stallLastTime = null;
       this.busy = false;
       this.failed = false;
+      this.failures = 0;
+      this.retryAt = null;
+      this.gaveUp = false;
     }
   }
 
@@ -2007,6 +2043,7 @@
         return;
       }
       this.mse.onRecover = () => this.showError('');
+      this.mse.onRetry = () => this.renderError();
       await this.mse.load(item.m3u8Url, item.codecs, (err) => this.showError(err.message || String(err)), mode === 'flac');
       if (token !== this.playToken) return;
       this.current.duration = this.mse.playlist ? this.mse.playlist.duration : 0;
@@ -2145,6 +2182,30 @@
       const el = this.$('.player-msg');
       const msg = this.errorMsg;
       el.textContent = typeof msg === 'function' ? msg() : (msg || '');
+      // 分段加载失败（MseEngine 自动重试中或已停止）：错误后面显示重试状态与「立即重试」
+      const retrying = !!msg && !this.pcm && this.mse.failed;
+      clearInterval(this.retryTick);
+      if (retrying) {
+        const status = document.createElement('span');
+        status.className = 'player-retry-status';
+        el.append(' ', status);
+        const update = () => {
+          const { retryAt, gaveUp } = this.mse;
+          status.textContent = gaveUp ? t('player.retryStopped')
+            : retryAt ? t('player.retryIn', { s: Math.max(1, Math.ceil((retryAt - Date.now()) / 1000)) })
+            : t('player.retrying');
+        };
+        update();
+        if (this.mse.retryAt) this.retryTick = setInterval(update, 1000);
+        if (this.mse.retryAt || this.mse.gaveUp) {
+          const button = document.createElement('button');
+          button.type = 'button';
+          button.className = 'player-retry';
+          button.textContent = t('player.retryNow');
+          button.addEventListener('click', () => this.mse.retryNow());
+          el.append(' ', button);
+        }
+      }
       el.hidden = !msg;
       if (msg) this.closeNotice();
       this.layout();
