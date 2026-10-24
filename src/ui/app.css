@@ -1837,6 +1837,77 @@ html[dir="rtl"] .lyrics-controls .player .volume::-moz-range-track { background:
 .quality-panel-joc-option[aria-checked="true"] { background: rgba(255, 255, 255, .2); color: #fff; font-weight: 600; }
 @media (hover: hover) and (pointer: fine) { .quality-panel-joc-option[aria-checked="false"]:hover { background: rgba(255, 255, 255, .1); } }
 .quality-panel-joc-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.quality-panel-spatial {
+  display: flex; flex-direction: column; align-items: flex-start; gap: 2px; width: calc(100% - 12px); margin: 6px 6px 0; padding: 8px 10px;
+  border: 0; border-radius: 9px; background: linear-gradient(120deg, rgba(250, 45, 72, .22), rgba(90, 209, 255, .14)); color: #fff; text-align: start;
+}
+.quality-panel-spatial-name { font-weight: 600; }
+.quality-panel-spatial-hint { color: rgba(255, 255, 255, .6); font-size: 11px; }
+@media (hover: hover) and (pointer: fine) { .quality-panel-spatial:hover { background: linear-gradient(120deg, rgba(250, 45, 72, .32), rgba(90, 209, 255, .22)); } }
+.quality-panel-spatial:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+/* 空间声场（joc-scene.mjs）：铺满视口的画布，上面浮着标题栏、提示与底部的对象条和控制项 */
+.joc-scene {
+  position: fixed; inset: 0; z-index: 100; display: flex; flex-direction: column; justify-content: space-between;
+  color: rgba(255, 255, 255, .88); font-size: 13px; outline: none; animation: notice-in .2s ease-out;
+  background: radial-gradient(ellipse at 50% 40%, #1d1a24 0%, #0d0c10 70%);
+}
+.joc-scene-canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+.joc-scene-canvas:active { cursor: grabbing; }
+.joc-scene-top, .joc-scene-bottom, .joc-scene-message { position: relative; pointer-events: none; }
+.joc-scene-top > *, .joc-scene-bottom > * { pointer-events: auto; }
+.joc-scene-top { display: flex; align-items: center; gap: 12px; padding: max(14px, env(safe-area-inset-top)) 16px 0; }
+.joc-scene-title { margin: 0; color: #fff; font-size: 17px; font-weight: 700; }
+.joc-scene-status { flex: 1; min-width: 0; overflow: hidden; color: rgba(255, 255, 255, .5); font-size: 12px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
+.joc-scene-close {
+  display: grid; place-items: center; width: 34px; height: 34px; padding: 0; border: 0; border-radius: 50%;
+  background: rgba(255, 255, 255, .1); color: #fff;
+}
+.joc-scene-close svg { width: 18px; height: 18px; }
+.joc-scene-message {
+  align-self: center; max-width: min(520px, calc(100% - 32px)); margin: 10px 16px 0; padding: 8px 12px; border-radius: 10px;
+  background: rgba(245, 180, 84, .14); color: var(--warn); font-size: 12px; line-height: 1.45; text-align: center;
+}
+.joc-scene-message[hidden] { display: none; }
+.joc-scene-bottom { display: flex; flex-direction: column; gap: 10px; margin-top: auto; padding: 0 16px max(14px, env(safe-area-inset-bottom)); }
+.joc-scene-mixer { display: flex; gap: 4px; align-self: center; max-width: 100%; overflow-x: auto; padding: 4px; border-radius: 12px; background: rgba(0, 0, 0, .35); scrollbar-width: none; }
+.joc-scene-chip {
+  position: relative; display: grid; grid-template-columns: 1fr 1fr; grid-template-rows: 30px auto auto; gap: 2px; flex: none; width: 40px;
+  padding: 4px 3px 3px; border-radius: 8px; background: rgba(255, 255, 255, .05);
+}
+.joc-scene-chip.is-silent { opacity: .45; }
+.joc-scene-meter { grid-column: 1 / -1; display: flex; align-items: flex-end; overflow: hidden; border-radius: 4px; background: rgba(255, 255, 255, .06); }
+.joc-scene-meter-fill { width: 100%; height: 0; background: hsl(var(--chip-hue), 85%, 62%); }
+.joc-scene-chip-name { grid-column: 1 / -1; overflow: hidden; color: hsl(var(--chip-hue), 80%, 78%); font-size: 11px; font-weight: 700; text-align: center; white-space: nowrap; }
+.joc-scene-chip button {
+  height: 18px; padding: 0; border: 0; border-radius: 4px; background: rgba(255, 255, 255, .08); color: rgba(255, 255, 255, .6);
+  font-size: 10px; font-weight: 700;
+}
+.joc-scene-chip-solo[aria-pressed="true"] { background: #f5b454; color: #1a1205; }
+.joc-scene-chip-mute[aria-pressed="true"] { background: var(--accent); color: #fff; }
+.joc-scene-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 8px; }
+.joc-scene-segment { display: flex; gap: 2px; padding: 2px; border-radius: 9px; background: rgba(255, 255, 255, .08); }
+.joc-scene-segment-option, .joc-scene-toggle, .joc-scene-action {
+  min-height: 30px; padding: 0 12px; border: 0; border-radius: 8px; background: transparent; color: rgba(255, 255, 255, .75); font: inherit;
+}
+.joc-scene-toggle, .joc-scene-action { background: rgba(255, 255, 255, .08); }
+.joc-scene-segment-option[aria-checked="true"] { background: rgba(255, 255, 255, .2); color: #fff; font-weight: 600; }
+.joc-scene-toggle[aria-pressed="true"] { background: rgba(250, 45, 72, .85); color: #fff; font-weight: 600; }
+@media (hover: hover) and (pointer: fine) {
+  .joc-scene-close:hover, .joc-scene-toggle[aria-pressed="false"]:hover, .joc-scene-action:hover, .joc-scene-chip button:hover { background: rgba(255, 255, 255, .16); }
+  .joc-scene-segment-option[aria-checked="false"]:hover { background: rgba(255, 255, 255, .1); }
+}
+.joc-scene button:focus-visible, .joc-scene input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.joc-scene-slider { display: flex; align-items: center; gap: 6px; min-height: 30px; padding: 0 10px; border-radius: 8px; background: rgba(255, 255, 255, .08); }
+.joc-scene-slider input { width: 92px; accent-color: var(--accent); }
+.joc-scene-slider-value { min-width: 34px; color: rgba(255, 255, 255, .55); font-size: 12px; font-variant-numeric: tabular-nums; }
+.joc-scene-readout { color: rgba(255, 255, 255, .5); font-size: 12px; font-variant-numeric: tabular-nums; }
+.joc-scene-hint { align-self: center; max-width: 760px; margin: 0; color: rgba(255, 255, 255, .4); font-size: 11px; line-height: 1.5; text-align: center; }
+.joc-scene-notice { color: rgba(255, 255, 255, .3); }
+@media (max-width: 600px) {
+  .joc-scene-slider input { width: 72px; }
+  .joc-scene-notice { display: none; }
+}
 .quality-panel-list { display: flex; flex-direction: column; gap: 2px; }
 .quality-option {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 6px; border: 0; border-radius: 8px;

@@ -8,6 +8,7 @@
 use std::alloc::{alloc, dealloc, Layout};
 use std::cell::RefCell;
 
+use joc_core::sofa_binaural::head_rotation;
 use joc_core::stream::{BinauralProfile, Mode, Stream, StreamConfig, StreamInfo};
 
 thread_local! {
@@ -182,6 +183,79 @@ pub unsafe extern "C" fn joc_set_gain(stream: *mut Stream, gain_db: f64) -> i32 
         }
         None => report("null stream"),
     }
+}
+
+/// Interactive binaural controls, applied from the next 512-sample block: the head turned left by
+/// `yaw`, up by `pitch` and its right ear down by `roll` (radians), standing `x` / `y` / `z` metres
+/// right / ahead / above the listening position, `focus` (0..1), the height scale, and `gains`
+/// (16 linear gains: LFE, then the 15 objects; null keeps the current ones).  Speaker 2.0 ignores
+/// them.
+///
+/// # Safety
+/// `stream` must come from `joc_open`; `gains` must point to 16 floats, or be null.
+#[no_mangle]
+pub unsafe extern "C" fn joc_set_controls(
+    stream: *mut Stream,
+    yaw: f64,
+    pitch: f64,
+    roll: f64,
+    x: f64,
+    y: f64,
+    z: f64,
+    focus: f64,
+    height: f64,
+    gains: *const f32,
+) -> i32 {
+    let Some(stream) = stream.as_mut() else {
+        return report("null stream");
+    };
+    let Some(mut controls) = stream.controls() else {
+        return 0;
+    };
+    let finite = |value: f64| if value.is_finite() { value } else { 0.0 };
+    controls.head = head_rotation(finite(yaw), finite(pitch), finite(roll));
+    controls.walk = [finite(x), finite(y), finite(z)];
+    controls.focus = focus;
+    controls.height = height;
+    if !gains.is_null() {
+        for (slot, value) in controls.gains.iter_mut().zip(std::slice::from_raw_parts(gains, 16)) {
+            *slot = f64::from(*value);
+        }
+    }
+    stream.set_controls(&controls);
+    0
+}
+
+/// Floats written by `joc_scene`: 15 object positions (ADM x, y, z), 16 RMS levels (LFE, then the
+/// objects) and the listener's offset in metres after clamping to the room.
+pub const SCENE_FLOATS: usize = 15 * 3 + 16 + 3;
+
+/// Fills `out` with the scene since the previous call (see `SCENE_FLOATS`); returns 1, or 0 for
+/// speaker 2.0 (nothing written).
+///
+/// # Safety
+/// `stream` must come from `joc_open`; `out` must hold `SCENE_FLOATS` floats.
+#[no_mangle]
+pub unsafe extern "C" fn joc_scene(stream: *mut Stream, out: *mut f32) -> i32 {
+    let Some(stream) = stream.as_mut() else {
+        return report("null stream");
+    };
+    let (Some(scene), Some(controls)) = (stream.take_scene(), stream.controls()) else {
+        return 0;
+    };
+    let out = std::slice::from_raw_parts_mut(out, SCENE_FLOATS);
+    for (index, position) in scene.positions.iter().enumerate() {
+        for axis in 0..3 {
+            out[index * 3 + axis] = position[axis] as f32;
+        }
+    }
+    for (index, level) in scene.levels.iter().enumerate() {
+        out[45 + index] = *level as f32;
+    }
+    for axis in 0..3 {
+        out[61 + axis] = controls.walk[axis] as f32;
+    }
+    1
 }
 
 /// Renders the frame group still pending at a fragment boundary.

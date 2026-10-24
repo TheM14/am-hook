@@ -100,6 +100,9 @@ pub static ASSETS: &[Asset] = &[
     asset!("/assets/joc-hrtf-H18.jochrtf", BIN, "joc-hrtf-H18.jochrtf"),
     asset!("/assets/joc-hrtf-H19.jochrtf", BIN, "joc-hrtf-H19.jochrtf"),
     asset!("/assets/joc-hrtf-H20.jochrtf", BIN, "joc-hrtf-H20.jochrtf"),
+    // JOC 的低延迟播放输出端（AudioWorklet），与双耳的声场界面（虚拟头部、对象可视化与交互控制，按需加载）
+    asset!("/assets/joc-output-worklet.js", JS, "joc-output-worklet.js"),
+    asset!("/assets/joc-scene.mjs", JS, "joc-scene.mjs"),
     // MV 播放器
     asset!("/assets/mv/hls.mjs", JS, "mv-hls.mjs"),
     asset!("/assets/mv/engine.mjs", JS, "mv-engine.mjs"),

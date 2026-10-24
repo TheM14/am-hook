@@ -7,6 +7,10 @@
  * 主线程每次发一个已解密的 fMP4 分段，收到交错的立体声 Float32Array 与本段的峰值。
  * Seek 是 reset + 预滚（前 skipFrames 帧不输出），与参考实现的流式 API 相同。
  * Worker 在曲目之间复用：open 关闭旧的流并重启 EC-3 解码器，两个 wasm 与 HRTF 不必重新加载。
+ *
+ * 低延迟模式（open 带 port，AudioWorklet 可用时）：分段只拆出 syncframe 排队，按 joc-output-worklet.js 报回的播放进度
+ * 逐帧渲染，只比播放位置提前约 0.1 秒，头部朝向、站位、独奏等交互控制（controls）立刻听得到。渲染好的立体声经 port
+ * 直接交给 AudioWorklet（不经主线程），主线程只收 primed / scene / peak / error 事件。
  */
 import createEc3 from '/assets/ec3-runtime.mjs';
 
@@ -40,6 +44,11 @@ const PULL_FRAMES = 4096;
 const PREROLL_SAMPLES = 64 * 1536;
 /** 一个分段（Apple Music 约 15 秒）分批渲染，每批约 0.75 秒先发回主线程排进 Web Audio，开始播放与 Seek 不必等整段 */
 const BATCH_PACKETS = 24;
+/** 低延迟模式比播放位置提前渲染的帧数：起始约 96 ms，播放端断粮时每次加一个 syncframe，最多约 0.4 秒 */
+const LIVE_TARGET = 3 * 1536;
+const LIVE_MAX_TARGET = 12 * 1536;
+/** joc_scene 写出的 float 数（crates/joc-wasm 的 SCENE_FLOATS）：15 个对象的位置、16 路电平与听者站位 */
+const SCENE_FLOATS = 64;
 
 let ec3Promise = null;
 let ec3 = null;
@@ -59,6 +68,15 @@ let scratchCapacity = 0;
 let hrtfCache = null;
 /** reset / open / close / abort 时加一：进行中的分段在下一批之前发现已过时就停下，Seek 不必等它解完 */
 let epoch = 0;
+/**
+ * 低延迟模式的状态：{ port, queue（待渲染的 syncframe）, sent / played（本轮发出 / 已播放的帧数）, target, out（本轮输出的帧数）,
+ * inputEnded, ended, primed, running, scene（主线程要不要场景）, peakAt }；普通模式为 null
+ */
+let live = null;
+/** 交互控制（双耳）：头部朝向（弧度）、站位（米）、聚焦、高度倍率与 16 路增益；新打开的流照此设置 */
+const controls = { yaw: 0, pitch: 0, roll: 0, x: 0, y: 0, z: 0, focus: 0, height: 1, gains: new Float32Array(16).fill(1) };
+let gainsPtr = 0;
+let scenePtr = 0;
 
 // 两批之间让出线程，排在后面的 abort / reset 消息才能先处理（MessageChannel 没有 setTimeout 的最小间隔）
 const yielder = new MessageChannel();
@@ -175,6 +193,8 @@ async function loadJoc() {
     pcmCapacity = 8 * 1536;
     pcmPtr = alloc(pcmCapacity * 4);
     outPtr = alloc(PULL_FRAMES * 2 * 4);
+    gainsPtr = alloc(16 * 4);
+    scenePtr = alloc(SCENE_FLOATS * 4);
   }
 }
 
@@ -221,9 +241,15 @@ async function hrtfBytes(dataset) {
   return bytes;
 }
 
-/** options: { mode: 'speaker' | 'binaural', gainDb, dataset } */
+/**
+ * options: { mode: 'speaker' | 'binaural', gainDb, dataset, controls, port, live }。
+ * port（MessagePort，接 joc-output-worklet.js）进入低延迟模式；之后重新打开（换模式或 HRTF）带 live: true 沿用它
+ */
 async function open(options) {
   close();
+  if (options.port) attachLive(options.port);
+  else if (!options.live) detachLive();
+  if (options.controls) setControls(options.controls);
   const mine = epoch;
   await Promise.all([loadEc3(), loadJoc()]);
   const binaural = options.mode === 'binaural';
@@ -247,7 +273,138 @@ async function open(options) {
   }
   restartEc3();
   pendingSkip = 0;
-  return { mode: binaural ? 'binaural' : 'speaker', dataset };
+  applyControls();
+  if (live) restartLive();
+  return { mode: binaural ? 'binaural' : 'speaker', dataset, live: Boolean(live) };
+}
+
+/** 合并主线程发来的控制项（只带变了的字段也可以）并交给渲染器 */
+function setControls(patch) {
+  for (const key of ['yaw', 'pitch', 'roll', 'x', 'y', 'z', 'focus', 'height']) {
+    if (Number.isFinite(patch[key])) controls[key] = patch[key];
+  }
+  if (patch.gains && patch.gains.length === 16) controls.gains.set(patch.gains);
+  applyControls();
+}
+
+function applyControls() {
+  if (!handle) return;
+  new Float32Array(joc.memory.buffer, gainsPtr, 16).set(controls.gains);
+  const c = controls;
+  check(joc.joc_set_controls(handle, c.yaw, c.pitch, c.roll, c.x, c.y, c.z, c.focus, c.height, gainsPtr));
+}
+
+function attachLive(port) {
+  detachLive();
+  live = {
+    port, queue: [], sent: 0, played: 0, target: LIVE_TARGET, out: 0,
+    inputEnded: false, ended: false, primed: false, running: false, scene: false, peakAt: -Infinity,
+  };
+  const state = live;
+  // 播放端每播约 1024 帧报一次进度；断粮（starved）时加大提前量
+  port.onmessage = ({ data }) => {
+    if (live !== state || data.epoch !== epoch) return;
+    state.played = data.played;
+    if (data.starved && state.target < LIVE_MAX_TARGET) state.target += 1536;
+    pumpLive();
+  };
+}
+
+function detachLive() {
+  if (!live) return;
+  live.port.onmessage = null;
+  live.port.close();
+  live = null;
+}
+
+/** 新的一轮（打开或 Seek）：清空队列与计数，播放端丢掉旧的音频并等主线程的 start */
+function restartLive() {
+  Object.assign(live, { queue: [], sent: 0, played: 0, out: 0, inputEnded: false, ended: false, primed: false, peakAt: -Infinity });
+  live.port.postMessage({ epoch, flush: true });
+}
+
+/** 低延迟模式的 decode：只拆出 syncframe 排队 */
+function queueFragment(buffer) {
+  if (!handle) throw new Error('JOC stream is not open');
+  const packets = samplesFromFragment(new Uint8Array(buffer));
+  for (const packet of packets) live.queue.push(packet);
+  pumpLive();
+  return { queued: packets.length };
+}
+
+/**
+ * 按需渲染：预滚阶段全速（每 8 帧让出一次），之后只渲染到比播放位置提前 target 帧，每帧之间让出线程，
+ * 控制项与进度消息随时插进来。Seek（reset）在让出期间清空队列，循环接着处理新的一轮
+ */
+async function pumpLive() {
+  const state = live;
+  if (!state || state.running || !handle) return;
+  state.running = true;
+  try {
+    let since = 0;
+    while (live === state && handle) {
+      if (state.queue.length) {
+        const prerolling = pendingSkip > 0;
+        if (!prerolling && state.sent - state.played >= state.target) break;
+        const packet = state.queue.shift();
+        const length = frameSamples(packet);
+        if (pendingSkip - length >= PREROLL_SAMPLES) {
+          pendingSkip -= length;
+          continue;
+        }
+        const chunks = [];
+        const stats = { peak: 0, over: 0 };
+        decodePacket(packet, chunks, stats);
+        sendLive(state, chunks, stats);
+        if (++since >= (prerolling ? 8 : 1)) {
+          since = 0;
+          await yieldToMessages();
+        }
+      } else if (state.inputEnded && !state.ended) {
+        // 输入结束：取出渲染器留着的帧（双耳内核的 961 个样本与房间尾音），播放端放完就停，不算断粮
+        state.ended = true;
+        check(joc.joc_flush(handle));
+        pendingSkip = 0;
+        const chunks = [];
+        const stats = { peak: 0, over: 0 };
+        drain(chunks, stats);
+        sendLive(state, chunks, stats);
+        state.port.postMessage({ epoch, end: true });
+        if (!state.primed) {
+          state.primed = true;
+          self.postMessage({ event: 'primed', epoch });
+        }
+      } else {
+        break;
+      }
+    }
+  } catch (error) {
+    if (live === state) self.postMessage({ event: 'error', epoch, error: error.message || String(error) });
+  } finally {
+    state.running = false;
+  }
+}
+
+/** 渲染好的立体声交给播放端；第一批到了通知主线程（primed），需要时附上这一帧的对象场景，削波最多每秒报一次 */
+function sendLive(state, chunks, stats) {
+  if (!chunks.length) return;
+  const frames = joinChunks(chunks);
+  const samples = frames.length / 2;
+  state.port.postMessage({ epoch, frames }, [frames.buffer]);
+  state.sent += samples;
+  state.out += samples;
+  if (!state.primed) {
+    state.primed = true;
+    self.postMessage({ event: 'primed', epoch });
+  }
+  if (stats.peak > 1 && state.out - state.peakAt >= RATE) {
+    state.peakAt = state.out;
+    self.postMessage({ event: 'peak', peak: stats.peak });
+  }
+  if (state.scene && check(joc.joc_scene(handle, scenePtr))) {
+    const data = new Float32Array(joc.memory.buffer, scenePtr, SCENE_FLOATS).slice();
+    self.postMessage({ event: 'scene', epoch, at: state.out, lead: state.sent - state.played, data }, [data.buffer]);
+  }
 }
 
 function close() {
@@ -371,13 +528,18 @@ self.onmessage = async ({ data }) => {
         result = await open(data);
         break;
       case 'decode':
+        if (live) {
+          result = queueFragment(data.buf);
+          break;
+        }
         result = await decodeFragment(data.buf, (part) => {
           self.postMessage({ id: data.id, ok: true, part: true, result: part }, [part.frames.buffer]);
         });
         break;
       case 'abort':
-        // Seek 开始：让进行中的分段在下一批之前停下（reset 随后才到）
+        // Seek 开始：让进行中的分段在下一批之前停下（reset 随后才到）；低延迟模式不再渲染排着的旧位置
         epoch++;
+        if (live) live.queue = [];
         break;
       case 'reset':
         if (!handle) throw new Error('JOC stream is not open');
@@ -385,16 +547,30 @@ self.onmessage = async ({ data }) => {
         check(joc.joc_reset(handle));
         restartEc3();
         pendingSkip = Math.max(0, Math.round(Number(data.skipFrames)) || 0);
+        if (live) restartLive();
         break;
       case 'gain':
         if (handle) check(joc.joc_set_gain(handle, Number(data.gainDb) || 0));
         break;
+      case 'controls':
+        setControls(data.controls || {});
+        break;
+      case 'scene':
+        // 声场界面打开时才每帧发场景
+        if (live) live.scene = Boolean(data.on);
+        break;
       case 'finish':
+        if (live) {
+          live.inputEnded = true;
+          pumpLive();
+          break;
+        }
         result = finish();
         transfer = [result.frames.buffer];
         break;
       case 'close':
         close();
+        detachLive();
         break;
       default:
         throw new Error(`Unknown JOC worker operation ${data.op}`);

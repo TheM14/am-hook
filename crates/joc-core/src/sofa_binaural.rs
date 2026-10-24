@@ -693,6 +693,13 @@ pub struct BinauralRenderer {
     allpass_gains: [f64; 2],
     enable_early_reflections: bool,
     enable_late_room: bool,
+    /// Listener pose (an am-hook extension, not in the reference): the world -> head rotation and
+    /// the head's offset from the room's listening position in metres.  While the head is not
+    /// turned and has not moved, every path is computed exactly as the reference does.
+    head: [[f64; 3]; 3],
+    head_turned: bool,
+    walk: [f64; 3],
+    walking: bool,
     latency_to_discard: u32,
     processed_input_samples: u64,
     processed_slots: i64,
@@ -754,6 +761,10 @@ impl BinauralRenderer {
             allpass_gains: [0.0; 2],
             enable_early_reflections: true,
             enable_late_room: true,
+            head: IDENTITY,
+            head_turned: false,
+            walk: [0.0; 3],
+            walking: false,
             latency_to_discard: LATENCY as u32,
             processed_input_samples: 0,
             processed_slots: 0,
@@ -870,6 +881,33 @@ impl BinauralRenderer {
         self.hybrid_analysis.reset();
         self.synthesis.reset();
         self.reset_state();
+    }
+
+    /// Turns and moves the listener: `rotation` maps world (ADM) directions into the head's frame
+    /// (see [`head_rotation`]) and `walk` is the head's offset from the listening position in
+    /// metres, kept inside the room.  The room stays where it is, so the early reflections change
+    /// with the pose too.  Sources pick the new pose up on their next `set_source`, through the
+    /// usual crossfade.
+    pub fn set_listener_pose(&mut self, rotation: &[[f64; 3]; 3], walk: &[f64; 3]) {
+        let mut clamped = [0.0f64; 3];
+        for axis in 0..3 {
+            let margin = 0.5f64.min(self.dims[axis] / 2.0);
+            let low = margin - self.listener[axis];
+            let high = self.dims[axis] - margin - self.listener[axis];
+            clamped[axis] = if walk[axis].is_finite() { walk[axis].clamp(low.min(0.0), high.max(0.0)) } else { 0.0 };
+        }
+        self.head = *rotation;
+        self.head_turned = *rotation != IDENTITY;
+        self.walk = clamped;
+        self.walking = clamped != [0.0; 3];
+        for state in &mut self.sources {
+            state.memo_valid = false;
+        }
+    }
+
+    /// The listener's offset after clamping to the room.
+    pub fn walk(&self) -> [f64; 3] {
+        self.walk
     }
 
     fn reset_state(&mut self) {
@@ -1018,6 +1056,7 @@ impl BinauralRenderer {
 
     fn make_path(&self, direction: &[f64; 3], extra_delay: f64, amplitude: f64) -> Path {
         let mut basis = [0.0f64; TERMS];
+        let direction = if self.head_turned { rotate(&self.head, direction) } else { *direction };
         // ADM (+X right, +Y front, +Z up) -> SOFA listener (+X front, +Y left).
         let listener_direction = [direction[1], -direction[0], direction[2]];
         RealSh::evaluate(&listener_direction, &mut basis);
@@ -1085,17 +1124,36 @@ impl BinauralRenderer {
         gain: f64,
     ) -> Vec<Path> {
         let mut paths = Vec::new();
-        paths.push(self.make_path(
-            direction,
-            0.0,
-            gain * Self::direct_level_gain(profile, distance),
-        ));
+        let source = [
+            self.listener[0] + direction[0] * distance,
+            self.listener[1] + direction[1] * distance,
+            self.listener[2] + direction[2] * distance,
+        ];
+        // The ears: the listening position, or where the listener has walked to (`walk` is zero
+        // otherwise, and adding zero keeps the reference's values)
+        let ear = [
+            self.listener[0] + self.walk[0],
+            self.listener[1] + self.walk[1],
+            self.listener[2] + self.walk[2],
+        ];
+        let mut direction = *direction;
+        let mut distance = distance;
+        let mut direct_gain = gain * Self::direct_level_gain(profile, distance);
+        if self.walking {
+            // The object stays where the mix put it: aim at it from the new position, and let its
+            // level follow the change of distance (+6 dB at half the distance, within +-12 dB)
+            let vector = [source[0] - ear[0], source[1] - ear[1], source[2] - ear[2]];
+            let length = (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
+            if length > 1.0e-9 {
+                direction = [vector[0] / length, vector[1] / length, vector[2] / length];
+            }
+            let walked = MINIMUM_DISTANCE.max(length);
+            let proximity = (distance / walked).clamp(0.25, 4.0);
+            distance = walked;
+            direct_gain = gain * Self::direct_level_gain(profile, distance) * proximity;
+        }
+        paths.push(self.make_path(&direction, 0.0, direct_gain));
         if self.enable_early_reflections {
-            let source = [
-                self.listener[0] + direction[0] * distance,
-                self.listener[1] + direction[1] * distance,
-                self.listener[2] + direction[2] * distance,
-            ];
             for axis in 0..3 {
                 for side in 0..2 {
                     let mut image = source;
@@ -1105,9 +1163,9 @@ impl BinauralRenderer {
                         2.0 * self.dims[axis] - image[axis]
                     };
                     let vector = [
-                        image[0] - self.listener[0],
-                        image[1] - self.listener[1],
-                        image[2] - self.listener[2],
+                        image[0] - ear[0],
+                        image[1] - ear[1],
+                        image[2] - ear[2],
                     ];
                     let path_distance =
                         (vector[0] * vector[0] + vector[1] * vector[1] + vector[2] * vector[2]).sqrt();
@@ -1420,6 +1478,56 @@ impl BinauralRenderer {
 
 }
 
+const IDENTITY: [[f64; 3]; 3] = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]];
+
+fn rotate(matrix: &[[f64; 3]; 3], vector: &[f64; 3]) -> [f64; 3] {
+    let mut out = [0.0f64; 3];
+    for row in 0..3 {
+        out[row] = matrix[row][0] * vector[0] + matrix[row][1] * vector[1] + matrix[row][2] * vector[2];
+    }
+    out
+}
+
+/// The world -> head rotation for [`BinauralRenderer::set_listener_pose`], in ADM axes (+X right,
+/// +Y front, +Z up): the head turns left by `yaw`, then looks up by `pitch`, then tilts its right
+/// ear down by `roll` (radians).  All zero gives the identity.
+pub fn head_rotation(yaw: f64, pitch: f64, roll: f64) -> [[f64; 3]; 3] {
+    if yaw == 0.0 && pitch == 0.0 && roll == 0.0 {
+        return IDENTITY;
+    }
+    let (sy, cy) = yaw.sin_cos();
+    let (sp, cp) = pitch.sin_cos();
+    let (sr, cr) = roll.sin_cos();
+    let turn = [[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]];
+    let nod = [[1.0, 0.0, 0.0], [0.0, cp, -sp], [0.0, sp, cp]];
+    let tilt = [[cr, 0.0, sr], [0.0, 1.0, 0.0], [-sr, 0.0, cr]];
+    let product = |a: &[[f64; 3]; 3], b: &[[f64; 3]; 3]| {
+        let mut out = [[0.0f64; 3]; 3];
+        for row in 0..3 {
+            for column in 0..3 {
+                out[row][column] = (0..3).map(|k| a[row][k] * b[k][column]).sum();
+            }
+        }
+        out
+    };
+    // The head's orientation in the world, transposed: world directions in the head's frame
+    let orientation = product(&product(&turn, &nod), &tilt);
+    let mut inverse = [[0.0f64; 3]; 3];
+    for row in 0..3 {
+        for column in 0..3 {
+            inverse[row][column] = orientation[column][row];
+        }
+    }
+    inverse
+}
+
+/// Where the renderer places an ADM position, in metres from the listening position: the
+/// position scaled by the profile's distance (the visualisation and the focus use this too).
+pub fn source_offset(position: &[f64; 3], profile: u32) -> [f64; 3] {
+    let scale = DISTANCE_M[(profile as usize).min(2)];
+    [position[0] * scale, position[1] * scale, position[2] * scale]
+}
+
 fn normalize_adm(position: &[f64; 3]) -> ([f64; 3], f64) {
     let r = (position[0] * position[0] + position[1] * position[1] + position[2] * position[2]).sqrt();
     if r > 1.0e-15 {
@@ -1438,12 +1546,23 @@ mod hrtf_regression {
     const H3: &[u8] = include_bytes!("../../../src/ui/joc-hrtf-H3.jochrtf");
 
     fn render_impulse(field: &crate::jochrtf::Field, position: [f64; 3]) -> (f64, f64) {
+        render_posed(field, position, None)
+    }
+
+    fn render_posed(
+        field: &crate::jochrtf::Field,
+        position: [f64; 3],
+        pose: Option<([[f64; 3]; 3], [f64; 3])>,
+    ) -> (f64, f64) {
         let mut renderer = Box::new(BinauralRenderer::new());
         renderer
             .configure_kernels(&builtin_kernels())
             .expect("kernels");
         renderer.configure_field(field).expect("field");
         renderer.configure_room(&RoomConstants::default()).expect("room");
+        if let Some((rotation, walk)) = pose {
+            renderer.set_listener_pose(&rotation, &walk);
+        }
         renderer
             .set_source(0, &position, 1, 1.0, true, false, false)
             .expect("source");
@@ -1494,5 +1613,42 @@ mod hrtf_regression {
             .expect("spawn")
             .join()
             .expect("hrtf direction test");
+    }
+
+    #[test]
+    fn head_rotation_turns_the_scene_the_other_way() {
+        let left = head_rotation(std::f64::consts::FRAC_PI_2, 0.0, 0.0);
+        let front = rotate(&left, &[0.0, 1.0, 0.0]);
+        assert!((front[0] - 1.0).abs() < 1e-12 && front[1].abs() < 1e-12, "{front:?}");
+        let up = rotate(&head_rotation(0.0, std::f64::consts::FRAC_PI_2, 0.0), &[0.0, 1.0, 0.0]);
+        assert!((up[2] + 1.0).abs() < 1e-12, "looking up puts the front below: {up:?}");
+        assert_eq!(head_rotation(0.0, 0.0, 0.0), IDENTITY);
+    }
+
+    #[test]
+    fn listener_pose_moves_the_image() {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(|| {
+                let field = load_jochrtf(D2).expect("D2");
+                let front = [0.0, 1.0, 0.0];
+                let plain = render_impulse(&field, front);
+                // The identity pose renders exactly as without one
+                assert_eq!(render_posed(&field, front, Some((IDENTITY, [0.0; 3]))), plain);
+                let quarter = std::f64::consts::FRAC_PI_2;
+                let (l, r) = render_posed(&field, front, Some((head_rotation(quarter, 0.0, 0.0), [0.0; 3])));
+                assert!(r > l * 1.2, "head turned left: the front source is on the right: L={l} R={r}");
+                let (l, r) = render_posed(&field, front, Some((head_rotation(-quarter, 0.0, 0.0), [0.0; 3])));
+                assert!(l > r * 1.2, "head turned right: the front source is on the left: L={l} R={r}");
+                // Walking 1.5 m towards the source (2.19 m ahead) brings it closer and louder
+                let (l, r) = render_posed(&field, front, Some((IDENTITY, [0.0, 1.5, 0.0])));
+                assert!(l + r > (plain.0 + plain.1) * 2.0, "closer: {} vs {}", l + r, plain.0 + plain.1);
+                // Walking past it puts it behind, still centred
+                let (l, r) = render_posed(&field, front, Some((IDENTITY, [0.0, 4.0, 0.0])));
+                assert!((l - r).abs() / (l + r) < 0.2, "behind is centred: L={l} R={r}");
+            })
+            .expect("spawn")
+            .join()
+            .expect("pose test");
     }
 }

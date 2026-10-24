@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 
-use crate::binaural::BinauralRuntime;
+use crate::binaural::{BinauralRuntime, Controls, Scene};
 use crate::eac3::{Frame, FrameReader, Next};
 use crate::id14::{self, BedPlan, CrossLayerNotes, FrameParams};
 use crate::jochrtf::{self, Field};
@@ -188,6 +188,22 @@ impl Stream {
     pub fn set_gain_db(&mut self, gain_db: f64) {
         self.config.gain_db = gain_db;
         self.gain = 10f64.powf(gain_db / 20.0) as f32;
+    }
+
+    /// Interactive binaural controls (pose, object gains, focus, height); ignored by speaker 2.0.
+    pub fn set_controls(&mut self, controls: &Controls) {
+        if let Some(binaural) = self.binaural.as_mut() {
+            binaural.set_controls(controls);
+        }
+    }
+
+    pub fn controls(&self) -> Option<Controls> {
+        self.binaural.as_ref().map(BinauralRuntime::controls)
+    }
+
+    /// The binaural objects' positions and levels since the previous call (`None` for speaker 2.0).
+    pub fn take_scene(&mut self) -> Option<Scene> {
+        self.binaural.as_mut().map(BinauralRuntime::take_scene)
     }
 
     pub fn reset(&mut self) {

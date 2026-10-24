@@ -182,6 +182,7 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
 - 待播清单：点播放条右侧的列表按钮打开。单击选中、双击播放，拖动整行调整顺序；悬停时封面左上角的 − 移出清单，「清除」清空后续歌曲。键盘 ↑/↓ 选择、Enter 播放、Delete 移除、Alt+↑/↓ 移动。触屏上点按播放、拖动右侧把手排序，随机 / 重复按钮在清单标题旁。
 - 空格 / 方向键在任何页面都能控制播放；播放 MV 时会暂停音乐，反之亦然。
 - **杜比全景声对象渲染（JOC）**，默认关闭：在设置中心「JOC 对象渲染」选择 Speaker 2.0 或双耳后，E-AC-3（Dolby Atmos）歌曲在浏览器内渲染，而不是只播放 5.1 声道或交给系统。内置的 EC-3 解码器输出核心声道，再用同一码流中的 JOC 与对象元数据重建 15 个对象与 LFE，渲染为立体声：Speaker 2.0 用等功率声像，双耳用 HRTF（约克大学 SADIE II 数据库的 20 位受试者，默认 D2），带早期反射与小房间混响。全部在 Web Worker 中完成。开启期间播放队列优先选全景声而不是 ALAC。播放方式、HRTF 与输出衰减对正在播放的歌曲立即生效（全屏播放界面的音质详情里也有同样的开关），按当前音量输出削波时每首提示一次。
+- **空间声场**（音质详情里的「空间声场」，双耳）：一个虚拟头部与码流里的 15 个对象（按 OAMD 位置实时移动，光球大小随电平）。拖动转头，渲染器按新的朝向重算每个对象的 HRTF 与房间反射，约 0.15 秒后就能听到；可以在房间里走动（走近对象变响，反射跟着变）、切到第一人称视角、点光球独奏或静音（JOC 对象是重建出来的空间分组而不是分轨，会有残留）、用「聚焦」让面朝的对象更响、放大对象的仰角，手机上可以用陀螺仪转头。为了让交互立刻听到，有 AudioWorklet 时（HTTPS 或 localhost）JOC 改为按播放进度逐帧渲染，只提前约 0.1 秒。
 
 ### 页面一览
 
@@ -329,7 +330,7 @@ flowchart LR
 2. 直接从 `aod.itunes.apple.com` 获取 media m3u8（CDN 允许跨域和 Range 请求），解析出 init 段、各分片的字节范围，以及每个分片对应的 key。
 3. 预取 key（`skd://itunes.apple.com/P000000000/s1/e1`）下的分片（通常只有第一个，也可能更多）使用内嵌在 wasm 中的模板，播放列表换成轨道 key 后，其余分片使用经 `/key` 获取的轨道模板。
 4. 分片用 Range 请求拉取，交给 Worker 池（每个 Worker 一个 `hook.wasm` 实例）原地解密；解密逻辑位于 `crates/am-mp4`。
-5. **播放**：浏览器支持原编码时，解密后的分片直接喂给 MSE。不支持 ALAC 但支持 FLAC-in-MP4 时，按需加载 `flac.wasm`，把 ALAC packet 无损转成 FLAC frame 并重新封装成较小的 fMP4 fragment。EC-3 在 MSE 支持时直接播放，否则按需加载 `ec3.wasm`，通过 Web Audio 播放 5.1/7.1 声道 PCM（不渲染 Atmos 对象）。开启 JOC 对象渲染时由 `joc-decode-worker.js` 用 `ec3.wasm` 解码核心声道、用 `joc.wasm`（`crates/joc-core`）渲染对象；每个约 15 秒的分片分批渲染、到一批排一批，Seek 时从目标前 64 个 syncframe 重新开始渲染（分片中更早的帧直接跳过，不解码）。拖动时直接定位到对应原始分片。
+5. **播放**：浏览器支持原编码时，解密后的分片直接喂给 MSE。不支持 ALAC 但支持 FLAC-in-MP4 时，按需加载 `flac.wasm`，把 ALAC packet 无损转成 FLAC frame 并重新封装成较小的 fMP4 fragment。EC-3 在 MSE 支持时直接播放，否则按需加载 `ec3.wasm`，通过 Web Audio 播放 5.1/7.1 声道 PCM（不渲染 Atmos 对象）。开启 JOC 对象渲染时由 `joc-decode-worker.js` 用 `ec3.wasm` 解码核心声道、用 `joc.wasm`（`crates/joc-core`）渲染对象；有 AudioWorklet 时分片只拆成 syncframe 排队，按 `joc-output-worklet.js` 报回的播放进度逐帧渲染（只提前约 0.1 秒，空间声场的转头、走动等立刻听到），音频经 MessagePort 从 Worker 直接送到 AudioWorklet；否则每个约 15 秒的分片分批渲染、到一批排一批。Seek 时从目标前 64 个 syncframe 重新开始渲染（分片中更早的帧直接跳过，不解码）。拖动时直接定位到对应原始分片。
 6. **下载**：4 路并发拉取和解密，结果按原始偏移写入 OPFS 临时文件，完成后像参考下载器的 `DefragmentMP4` 那样转为 progressive MP4（`M4A ` ftyp，`moov` 位于媒体数据之前），再交给浏览器保存。不支持 OPFS 时退回内存 Blob。
 
 `hook.wasm` 会在解密后修复可确认的 ALAC 包尾错误（如歌曲 `1691044818`）：根据 init 中的轨道与 sample description，定位 PCM 完整的未压缩单声道／立体声包，将缺失或损坏的 3-bit `TYPE_END` 恢复为 `111`，解码器因此不再丢弃该帧；但这类包末尾 4 字节在 Apple 打包时已被覆盖（[AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)），最后一个样本的原始数据不在文件中，修复无法还原它。修复不改变 sample 长度或 Range 偏移。也可在设置中心关闭修复：被覆盖的样本无论如何都已丢失，关闭只是让保存的文件与 Apple 提供的逐字节相同（缺 END 标记的帧会被 FFmpeg 等丢弃）。「检测 ALAC」可以列出受影响的帧。压缩包、PCM 截断及没有足够尾部空间的包不做原地修复；转 FLAC 时仍保留可追加结束标记的兜底。
@@ -518,6 +519,7 @@ src/
     alac-check.mjs     专辑页的 ALAC 检测（原样帧末尾缺陷、打包信息、实际位深与频宽）；对话框在 views/alac-check-dialog.mjs
     ec3.wasm / ec3-runtime.mjs / ec3-decode-worker.js      EC-3 PCM 回退
     joc.wasm / joc-decode-worker.js / joc-hrtf-*.jochrtf   杜比全景声对象渲染（JOC）：crates/joc-wasm 的编译产物与 SADIE II HRTF 场
+    joc-output-worklet.js / joc-scene.mjs                  JOC 低延迟播放的 AudioWorklet 输出端，空间声场界面（虚拟头部与对象）
     lyrics/            歌词界面（打包好的 AMLL，见 browser/amll；ttml.mjs 解析 TTML，panel.mjs 接入播放器，backdrop*.mjs 绘制经典背景）
     station.mjs        电台需要 media-user-token 的接口：token 的保存与填写、next-tracks、play assets、license 请求格式
     mv-radio.mjs       电台的 HLS 播放与下载（直播与广播单集，与 MV 共用媒体 Worker）

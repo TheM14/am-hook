@@ -6,6 +6,8 @@
 //! harness from the same sources; the browser build must produce the same
 //! samples, so any change to the DSP shows up here first.
 
+use joc_core::binaural::{Controls, Scene};
+use joc_core::sofa_binaural::head_rotation;
 use joc_core::stream::{Mode, Stream, StreamConfig};
 use joc_core::FRAME_SAMPLES;
 use sha2::{Digest, Sha256};
@@ -168,6 +170,73 @@ fn reset_starts_from_a_clean_state() {
             }
         }
         assert_eq!(digest(&out), BINAURAL_SHA256);
+    });
+}
+
+/// Renders the fixture with interactive controls set before the first frame.
+fn render_with(controls: &Controls) -> (Vec<f32>, Vec<Scene>) {
+    let frames = frames();
+    let bed = bed(frames.len());
+    let config = StreamConfig { mode: Mode::Binaural, hrtf: Some(D2.to_vec()), ..StreamConfig::default() };
+    let mut stream = Stream::new(config).expect("open");
+    stream.set_controls(controls);
+    let mut out = Vec::new();
+    let mut scenes = Vec::new();
+    let mut buffer = vec![0.0f32; 4096 * 2];
+    for (index, frame) in frames.iter().enumerate() {
+        stream.push_eac3(frame).expect("push_eac3");
+        stream
+            .push_pcm(&bed[index * FRAME_SAMPLES * CHANNELS..(index + 1) * FRAME_SAMPLES * CHANNELS], CHANNELS)
+            .expect("push_pcm");
+        stream.flush_pending().expect("flush_pending");
+        scenes.push(stream.take_scene().expect("binaural scene"));
+        loop {
+            let count = stream.pull(&mut buffer, 4096).expect("pull");
+            if count == 0 {
+                break;
+            }
+            out.extend_from_slice(&buffer[..count * 2]);
+        }
+    }
+    (out, scenes)
+}
+
+#[test]
+fn default_controls_keep_the_reference_output() {
+    on_big_stack(|| {
+        let (out, scenes) = render_with(&Controls::default());
+        assert_eq!(digest(&out), BINAURAL_SHA256);
+        // The scene follows the programme: the tone bed is audible and the objects have positions
+        let last = scenes.last().expect("scenes");
+        assert!(last.levels.iter().any(|level| *level > 1e-3), "levels: {:?}", last.levels);
+        assert!(last.positions.iter().all(|p| p.iter().all(|v| v.is_finite() && v.abs() <= 1.0)));
+    });
+}
+
+#[test]
+fn controls_change_the_render() {
+    on_big_stack(|| {
+        let muted = Controls { gains: [0.0; 16], ..Controls::default() };
+        let (out, _) = render_with(&muted);
+        assert!(peak(&out) < 1e-6, "every source muted: peak {}", peak(&out));
+
+        let turned = Controls {
+            head: head_rotation(2.0, 0.3, 0.1),
+            walk: [1.0, -2.0, 0.0],
+            focus: 1.0,
+            height: 2.0,
+            ..Controls::default()
+        };
+        let (out, _) = render_with(&turned);
+        assert_ne!(digest(&out), BINAURAL_SHA256);
+        assert!(peak(&out) > 0.01 && peak(&out) < 2.0, "peak {}", peak(&out));
+
+        // A walk outside the room is kept inside it
+        let config = StreamConfig { mode: Mode::Binaural, hrtf: Some(D2.to_vec()), ..StreamConfig::default() };
+        let mut stream = Stream::new(config).expect("open");
+        stream.set_controls(&Controls { walk: [100.0, -100.0, f64::NAN], ..Controls::default() });
+        let walk = stream.controls().expect("controls").walk;
+        assert_eq!(walk, [8.5, -8.5, 0.0]);
     });
 }
 
