@@ -137,33 +137,33 @@ impl<'a> NpyArray<'a> {
         let mut out = Vec::with_capacity(count);
         match self.descr.as_str() {
             "<f8" | "=f8" => {
-                for chunk in self.data[..count * 8].chunks_exact(8) {
-                    out.push(f64::from_le_bytes(chunk.try_into().unwrap()));
+                for chunk in self.data[..count * 8].as_chunks::<8>().0 {
+                    out.push(f64::from_le_bytes(*chunk));
                 }
             }
             "<c16" | "=c16" => {
-                for chunk in self.data[..count * 16].chunks_exact(8) {
-                    out.push(f64::from_le_bytes(chunk.try_into().unwrap()));
+                for chunk in self.data[..count * 16].as_chunks::<8>().0 {
+                    out.push(f64::from_le_bytes(*chunk));
                 }
             }
             "<f4" | "=f4" => {
-                for chunk in self.data[..count * 4].chunks_exact(4) {
-                    out.push(f64::from(f32::from_le_bytes(chunk.try_into().unwrap())));
+                for chunk in self.data[..count * 4].as_chunks::<4>().0 {
+                    out.push(f64::from(f32::from_le_bytes(*chunk)));
                 }
             }
             "<i8" | "=i8" => {
-                for chunk in self.data[..count * 8].chunks_exact(8) {
-                    out.push(i64::from_le_bytes(chunk.try_into().unwrap()) as f64);
+                for chunk in self.data[..count * 8].as_chunks::<8>().0 {
+                    out.push(i64::from_le_bytes(*chunk) as f64);
                 }
             }
             "<i4" | "=i4" => {
-                for chunk in self.data[..count * 4].chunks_exact(4) {
-                    out.push(i32::from_le_bytes(chunk.try_into().unwrap()) as f64);
+                for chunk in self.data[..count * 4].as_chunks::<4>().0 {
+                    out.push(i32::from_le_bytes(*chunk) as f64);
                 }
             }
             "<i2" | "=i2" => {
-                for chunk in self.data[..count * 2].chunks_exact(2) {
-                    out.push(i16::from_le_bytes(chunk.try_into().unwrap()) as f64);
+                for chunk in self.data[..count * 2].as_chunks::<2>().0 {
+                    out.push(i16::from_le_bytes(*chunk) as f64);
                 }
             }
             other => {
@@ -182,18 +182,18 @@ impl<'a> NpyArray<'a> {
         let mut out = Vec::with_capacity(count);
         match self.descr.as_str() {
             "<i2" | "=i2" => {
-                for chunk in self.data[..count * 2].chunks_exact(2) {
-                    out.push(i16::from_le_bytes(chunk.try_into().unwrap()));
+                for chunk in self.data[..count * 2].as_chunks::<2>().0 {
+                    out.push(i16::from_le_bytes(*chunk));
                 }
             }
             "<i4" | "=i4" => {
-                for chunk in self.data[..count * 4].chunks_exact(4) {
-                    out.push(i32::from_le_bytes(chunk.try_into().unwrap()) as i16);
+                for chunk in self.data[..count * 4].as_chunks::<4>().0 {
+                    out.push(i32::from_le_bytes(*chunk) as i16);
                 }
             }
             "<i8" | "=i8" => {
-                for chunk in self.data[..count * 8].chunks_exact(8) {
-                    out.push(i64::from_le_bytes(chunk.try_into().unwrap()) as i16);
+                for chunk in self.data[..count * 8].as_chunks::<8>().0 {
+                    out.push(i64::from_le_bytes(*chunk) as i16);
                 }
             }
             other => {
@@ -215,8 +215,8 @@ impl<'a> NpyArray<'a> {
         let count = self.element_count().max(1);
         let bytes = &self.data[..count * length * 4];
         let mut text = String::new();
-        for chunk in bytes.chunks_exact(4) {
-            let code = u32::from_le_bytes(chunk.try_into().unwrap());
+        for chunk in bytes.as_chunks::<4>().0 {
+            let code = u32::from_le_bytes(*chunk);
             if code == 0 {
                 break;
             }
