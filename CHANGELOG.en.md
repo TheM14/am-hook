@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v0.6.0 (2026-10-24)
+
+### New
+- ✨ The full-screen player is rebuilt on AMLL react-full: a horizontal layout (cover, title and controls on the left, lyrics on the right, toggles along the bottom; the left column slides to the centre when lyrics are hidden) and a vertical layout (small cover above the lyrics, or a big cover, moving on a spring); react-full icons and press animations for play/pause, previous/next (arrow animation), shuffle, repeat and the lyrics and queue toggles, stretchy progress and volume sliders; slides in and out, drag the handle down to close on touch, click the total time for remaining time, and the queue opens in the lyrics area on desktop too
+- ✨ The full-screen player shows a quality badge under the progress bar; click it for the current quality's specs and playback method, plus the song's other qualities to switch to
+
+### Changed
+- 💄 The bottom player bar uses the full-screen player's icons (playback controls, shuffle / repeat, lyrics, queue, volume); shuffle and repeat show a filled rounded square when on. The quality badge is no longer shown on the bar
+- 💄 The Dolby Atmos quality icon is now the one-line "Dolby Atmos" wordmark, sized to match the other quality icons
+
 ## v0.5.9 (2026-10-23)
 
 ### New
