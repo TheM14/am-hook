@@ -54,7 +54,7 @@
 
 - **全部音质**：无损 ALAC（最高 24-bit / 192 kHz）、杜比全景声、AAC、HE-AAC、双耳与缩混版本，以及最高 4K 杜比视界、全景声音轨的 MV。
 - **浏览器内解密**：Web Worker 中的 WebAssembly 完成解密，媒体数据不经过服务器。
-- **到处都能播**：内置无缝衔接的播放器与播放队列，ALAC 转 FLAC、EC-3 转 PCM 兜底，支持系统媒体控制。
+- **到处都能播**：内置无缝衔接的播放器与播放队列，ALAC 转 FLAC、EC-3 转 PCM 兜底，支持系统媒体控制；还可以在浏览器内把杜比全景声对象（JOC）渲染为立体声扬声器或双耳耳机输出。
 - **与 music.apple.com 一样的体验**：搜索、新发现、排行榜、广播，专辑 / 歌单 / 艺人 / 编辑页，以及由 [AMLL](https://github.com/amll-dev/applemusic-like-lyrics) 渲染的逐字歌词。
 - **完整的下载**：单曲或整张专辑 / 歌单，写入 iTunes 标签、封面与歌词，可保存为 ZIP / 文件夹 / 逐个文件，支持文件名模板。
 - **ALAC 检测**：不请求 `/key`，找出整张专辑中末尾被覆盖的 ALAC 原样帧，并给出打包日期与前 15 秒的实际位深、频宽。
@@ -181,6 +181,7 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
 - 播放控件与 music.apple.com 相同：随机播放、上一首（已播放超过 3 秒时回到开头）、播放 / 暂停、下一首、重复播放（关 → 全部 → 单曲）。随机与重复状态会记住；专辑、歌单、艺人页的「随机播放」开启随机，「播放」按顺序播放。快退 / 快进用 ← / → 键或系统媒体控制。
 - 待播清单：点播放条右侧的列表按钮打开。单击选中、双击播放，拖动整行调整顺序；悬停时封面左上角的 − 移出清单，「清除」清空后续歌曲。键盘 ↑/↓ 选择、Enter 播放、Delete 移除、Alt+↑/↓ 移动。触屏上点按播放、拖动右侧把手排序，随机 / 重复按钮在清单标题旁。
 - 空格 / 方向键在任何页面都能控制播放；播放 MV 时会暂停音乐，反之亦然。
+- **杜比全景声对象渲染（JOC）**，默认关闭：在设置中心「JOC 对象渲染」选择 Speaker 2.0 或双耳后，E-AC-3（Dolby Atmos）歌曲在浏览器内渲染，而不是只播放 5.1 声道或交给系统。内置的 EC-3 解码器输出核心声道，再用同一码流中的 JOC 与对象元数据重建 15 个对象与 LFE，渲染为立体声：Speaker 2.0 用等功率声像，双耳用 HRTF（约克大学 SADIE II 数据库的 20 位受试者，默认 D2），带早期反射与小房间混响。全部在 Web Worker 中完成。开启期间播放队列优先选全景声而不是 ALAC。播放方式、HRTF 与输出衰减对正在播放的歌曲立即生效（全屏播放界面的音质详情里也有同样的开关），按当前音量输出削波时每首提示一次。
 
 ### 页面一览
 
@@ -328,7 +329,7 @@ flowchart LR
 2. 直接从 `aod.itunes.apple.com` 获取 media m3u8（CDN 允许跨域和 Range 请求），解析出 init 段、各分片的字节范围，以及每个分片对应的 key。
 3. 预取 key（`skd://itunes.apple.com/P000000000/s1/e1`）下的分片（通常只有第一个，也可能更多）使用内嵌在 wasm 中的模板，播放列表换成轨道 key 后，其余分片使用经 `/key` 获取的轨道模板。
 4. 分片用 Range 请求拉取，交给 Worker 池（每个 Worker 一个 `hook.wasm` 实例）原地解密；解密逻辑位于 `crates/am-mp4`。
-5. **播放**：浏览器支持原编码时，解密后的分片直接喂给 MSE。不支持 ALAC 但支持 FLAC-in-MP4 时，按需加载 `flac.wasm`，把 ALAC packet 无损转成 FLAC frame 并重新封装成较小的 fMP4 fragment。EC-3 在 MSE 支持时直接播放，否则按需加载 `ec3.wasm`，通过 Web Audio 播放 5.1/7.1 声道 PCM（不渲染 Atmos 对象）。拖动时直接定位到对应原始分片。
+5. **播放**：浏览器支持原编码时，解密后的分片直接喂给 MSE。不支持 ALAC 但支持 FLAC-in-MP4 时，按需加载 `flac.wasm`，把 ALAC packet 无损转成 FLAC frame 并重新封装成较小的 fMP4 fragment。EC-3 在 MSE 支持时直接播放，否则按需加载 `ec3.wasm`，通过 Web Audio 播放 5.1/7.1 声道 PCM（不渲染 Atmos 对象）。开启 JOC 对象渲染时由 `joc-decode-worker.js` 用 `ec3.wasm` 解码核心声道、用 `joc.wasm`（`crates/joc-core`）渲染对象；每个约 15 秒的分片分批渲染、到一批排一批，Seek 时从目标前 64 个 syncframe 重新开始渲染（分片中更早的帧直接跳过，不解码）。拖动时直接定位到对应原始分片。
 6. **下载**：4 路并发拉取和解密，结果按原始偏移写入 OPFS 临时文件，完成后像参考下载器的 `DefragmentMP4` 那样转为 progressive MP4（`M4A ` ftyp，`moov` 位于媒体数据之前），再交给浏览器保存。不支持 OPFS 时退回内存 Blob。
 
 `hook.wasm` 会在解密后修复可确认的 ALAC 包尾错误（如歌曲 `1691044818`）：根据 init 中的轨道与 sample description，定位 PCM 完整的未压缩单声道／立体声包，将缺失或损坏的 3-bit `TYPE_END` 恢复为 `111`，解码器因此不再丢弃该帧；但这类包末尾 4 字节在 Apple 打包时已被覆盖（[AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)），最后一个样本的原始数据不在文件中，修复无法还原它。修复不改变 sample 长度或 Range 偏移。也可在设置中心关闭修复：被覆盖的样本无论如何都已丢失，关闭只是让保存的文件与 Apple 提供的逐字节相同（缺 END 标记的帧会被 FFmpeg 等丢弃）。「检测 ALAC」可以列出受影响的帧。压缩包、PCM 截断及没有足够尾部空间的包不做原地修复；转 FLAC 时仍保留可追加结束标记的兜底。
@@ -415,6 +416,7 @@ cargo build --release
 | `mv-cea608.mjs` | `browser/cea608` | `node scripts/build-cea608.cjs <typescript 包路径>` |
 | `lyrics/amll-core.mjs`、`lyrics/amll.css` | `@applemusic-like-lyrics/core`，见 [browser/amll](browser/amll/README.md) | `node scripts/build-amll.cjs <node_modules 路径>` |
 | `ec3.wasm`、`ec3-runtime.mjs` | `@mediabunny/ac3` 1.59.1 | `node scripts/extract-ec3.mjs`，见 [EC3-SOURCE.md](src/ui/EC3-SOURCE.md) |
+| `joc.wasm` | `crates/joc-wasm`、`crates/joc-core`（来自 [am-hook-joc](https://github.com/TheM14/am-hook-joc)） | 与 `hook.wasm` 相同，运行 `scripts/build-wasm.sh`；`joc-core` 要实时渲染，保持 `opt-level` 3。`joc-hrtf-*.jochrtf` 是编译好的 SADIE II HRTF 场，见 [JOC-NOTICE.md](src/ui/JOC-NOTICE.md) |
 
 ### 测试
 
@@ -423,7 +425,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings   # CI 也会运行；workspace 现为零警告
 ```
 
-单元测试覆盖浏览器媒体核心（PlayReady 与 Widevine license 解密、CENC/CBCS（含长度不变的原地解密）、字幕修复、defrag）、URL 解析、m3u8 解析、MP4 box 修补（含 wasm 原地解密路径与并行路径结果一致）、缓存去重和 MV 接口。离线集成测试还检查 Apple CDN 地址不会被代理。
+单元测试覆盖浏览器媒体核心（PlayReady 与 Widevine license 解密、CENC/CBCS（含长度不变的原地解密）、字幕修复、defrag）、URL 解析、m3u8 解析、MP4 box 修补（含 wasm 原地解密路径与并行路径结果一致）、缓存去重和 MV 接口。`crates/joc-core` 用真实全景声元数据制作的样本逐位比对 am-hook-joc 的参考摘要（Speaker 2.0、双耳、reset、每组 HRTF）。离线集成测试还检查 Apple CDN 地址不会被代理。
 
 需要真实 Apple CDN 或 wrapper-lite 的测试默认忽略，不在 GitHub Actions 中运行。请在本地能访问 Apple CDN 且 wrapper-lite 已启动时运行（默认 `http://127.0.0.1:12340`，可用环境变量 `AM_HOOK_WRAPPER` 覆盖）：
 
@@ -445,6 +447,7 @@ cargo test --test e2e_test -- --ignored
 | `node --test tests/serverless.mjs` | serverless 后端与 `dist/` 的生成，CI 也会运行 |
 | `node --test tests/download_core.mjs` | ZIP / ZIP64、iTunes 标签、文件名模板 |
 | `node --test tests/alac_check.mjs` | ALAC 检测：原样帧末尾的判定（含 issue #136 中的实例）、moof / init 解析、多 DRM 清单中的预取密钥、频宽结论；CI 也会运行 |
+| `node --test tests/joc_wasm.mjs` | `src/ui/joc.wasm` 与 `crates/joc-core` 相同的参考摘要、20 组 HRTF、无效 HRTF，以及两种模式的实时倍率；CI 也会运行 |
 
 </details>
 
@@ -514,6 +517,7 @@ src/
     flac.wasm / flac-transcode-worker.js / flac-init.bin   ALAC 转 FLAC 播放；ALAC 检测的解码分析
     alac-check.mjs     专辑页的 ALAC 检测（原样帧末尾缺陷、打包信息、实际位深与频宽）；对话框在 views/alac-check-dialog.mjs
     ec3.wasm / ec3-runtime.mjs / ec3-decode-worker.js      EC-3 PCM 回退
+    joc.wasm / joc-decode-worker.js / joc-hrtf-*.jochrtf   杜比全景声对象渲染（JOC）：crates/joc-wasm 的编译产物与 SADIE II HRTF 场
     lyrics/            歌词界面（打包好的 AMLL，见 browser/amll；ttml.mjs 解析 TTML，panel.mjs 接入播放器，backdrop*.mjs 绘制经典背景）
     station.mjs        电台需要 media-user-token 的接口：token 的保存与填写、next-tracks、play assets、license 请求格式
     mv-radio.mjs       电台的 HLS 播放与下载（直播与广播单集，与 MV 共用媒体 Worker）
@@ -528,6 +532,8 @@ crates/
   am-media/            浏览器媒体核心：PlayReady、Widevine、CENC/CBCS、字幕修复、MP4 合并与 defrag
   am-media-wasm/       am-media 的浏览器端 C ABI 导出
   temari/              内置的 Temari FairPlay 解密库
+  joc-core/            E-AC-3 JOC 对象重建、Speaker 2.0 与双耳渲染（来自 am-hook-joc）
+  joc-wasm/            joc-core 的浏览器 C ABI 导出
 browser/
   cea608/              来自 hls.js 的 CEA-608 解析器
   amll/                AMLL 歌词播放器的打包入口与构建说明
@@ -550,4 +556,4 @@ docs/                  发布指南（RELEASE.md）与 README 截图
 
 am-hook 以 [GNU Affero 通用公共许可证 v3.0（仅此版本）](LICENSE)（AGPL-3.0-only）发布，因为 Web 界面内嵌了以 AGPL 授权的 [AMLL](https://github.com/amll-dev/applemusic-like-lyrics) 歌词播放器。如果将修改后的版本作为网络服务运行，需要向其用户提供对应的源代码。
 
-内置的第三方组件保留各自的许可证：`crates/temari`（MIT）、hls.js CEA-608 解析器（Apache-2.0，`browser/cea608/LICENSE`）、`@mediabunny/ac3`（MPL-2.0，`src/ui/EC3-LICENSE.txt`），以及 AMLL 及其依赖（AGPL-3.0-only，`browser/amll`）。
+内置的第三方组件保留各自的许可证：`crates/temari`（MIT）、hls.js CEA-608 解析器（Apache-2.0，`browser/cea608/LICENSE`）、`@mediabunny/ac3`（MPL-2.0，`src/ui/EC3-LICENSE.txt`）、AMLL 及其依赖（AGPL-3.0-only，`browser/amll`）、来自 am-hook-joc 的 JOC 渲染器（AGPL-3.0-only 或 MIT，`crates/joc-core/LICENSE`），以及 SADIE II HRTF 场（Apache-2.0，见 `src/ui/JOC-NOTICE.md`）。

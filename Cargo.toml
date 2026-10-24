@@ -32,10 +32,14 @@ lru = "0.12"
 tokio = { version = "1", features = ["test-util"] }
 
 [workspace]
-members = [".", "crates/temari", "crates/am-alac", "crates/am-mp4", "crates/am-wasm", "crates/am-flac-wasm", "crates/am-media", "crates/am-media-wasm"]
+members = [".", "crates/temari", "crates/am-alac", "crates/am-mp4", "crates/am-wasm", "crates/am-flac-wasm", "crates/am-media", "crates/am-media-wasm", "crates/joc-core", "crates/joc-wasm"]
 
 # 解密是热点，debug 构建下也优化 temari，否则测试与本地调试会很慢
 [profile.dev.package.temari]
+opt-level = 3
+
+# JOC 对象渲染（crates/joc-core）的 DSP 同样是热点，测试要跑完整的双耳渲染
+[profile.dev.package.joc-core]
 opt-level = 3
 
 [profile.release]
@@ -53,4 +57,8 @@ opt-level = "z"
 opt-level = 3
 
 [profile.wasm.package.aes]
+opt-level = 3
+
+# JOC 对象渲染在播放路径上，要实时跑完（opt-level 3 的双耳渲染比 z 快约 30%，wasm 大约 60 KB）
+[profile.wasm.package.joc-core]
 opt-level = 3

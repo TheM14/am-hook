@@ -1694,6 +1694,8 @@ html[dir="rtl"] .lyrics-controls .player .seek-fill { transform-origin: right; }
 }
 .lyrics-controls .player .player-mode[hidden] { display: none; }
 .lyrics-controls .player .player-mode .q-icon { height: 14px; color: inherit; }
+/* JOC 对象渲染时图标后的「JOC 2.0」「JOC 双耳」（player.js 的 renderMode） */
+.lyrics-controls .player .player-mode .player-mode-joc { margin-inline-start: .5em; padding-inline-start: .5em; border-inline-start: 1px solid rgba(255, 255, 255, .3); }
 @media (hover: hover) { .lyrics-controls .player .player-mode:hover { background: rgba(255, 255, 255, .18); } }
 .lyrics-controls .player .player-mode[aria-expanded="true"] { background: rgba(255, 255, 255, .18); }
 .lyrics-controls .player .player-mode:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
@@ -1826,6 +1828,15 @@ html[dir="rtl"] .lyrics-controls .player .volume::-moz-range-track { background:
   color: rgba(255, 255, 255, .5); font-size: 11px; font-weight: 600;
 }
 .quality-panel-status { margin: 4px 0; padding: 0 6px; color: rgba(255, 255, 255, .55); font-size: 12px; }
+/* E-AC-3 曲目的 JOC 开关（关闭 / Speaker 2.0 / 双耳），同设置中心的分段按钮 */
+.quality-panel-joc { display: flex; gap: 2px; margin: 0 6px; padding: 2px; border-radius: 9px; background: rgba(255, 255, 255, .08); }
+.quality-panel-joc-option {
+  flex: 1; min-width: 0; padding: 5px 4px; border: 0; border-radius: 7px; background: transparent; color: rgba(255, 255, 255, .7);
+  font: inherit; font-size: 12px; white-space: nowrap; cursor: pointer; -webkit-tap-highlight-color: transparent;
+}
+.quality-panel-joc-option[aria-checked="true"] { background: rgba(255, 255, 255, .2); color: #fff; font-weight: 600; }
+@media (hover: hover) and (pointer: fine) { .quality-panel-joc-option[aria-checked="false"]:hover { background: rgba(255, 255, 255, .1); } }
+.quality-panel-joc-option:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .quality-panel-list { display: flex; flex-direction: column; gap: 2px; }
 .quality-option {
   display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 6px; border: 0; border-radius: 8px;

@@ -52,8 +52,23 @@
   const failedCodecs = new Set();
 
   /**
+   * JOC 对象渲染（E-AC-3 Dolby Atmos，见 joc-decode-worker.js）的设置：{ mode: off / speaker / binaural, gain（dB）, dataset }。
+   * app.mjs 用 useJocSettings 接上 prefs.mjs 的 'joc' 分组（{ get, set }）；没有接上时（如 Node 测试）按关闭处理
+   */
+  const JOC_OFF = { mode: 'off', gain: 0, dataset: 'D2' };
+  let jocStore = null;
+  function useJocSettings(store) { jocStore = store; }
+  function jocSettings() { return jocStore ? jocStore.get() : JOC_OFF; }
+
+  function isEc3(codecs) { return /^(ec-3|ec3)$/i.test(String(codecs)); }
+  /** JOC 的两种输出：joc2 = Speaker 2.0，jocbin = 双耳 */
+  function isJocMode(mode) { return mode === 'joc2' || mode === 'jocbin'; }
+  /** 自己调度 PCM（Web Audio）的播放方式：内置 EC-3 解码与 JOC 渲染 */
+  function isPcmMode(mode) { return mode === 'ec3' || isJocMode(mode); }
+
+  /**
    * 该编码在当前浏览器中可尝试的播放方式（按优先级），空数组表示不支持。
-   * 全部由浏览器端解密；EC-3 按 MSE -> PCM 检测，ALAC 可回退为 FLAC。
+   * 全部由浏览器端解密；EC-3 按 JOC（设置中心开启时：双耳 -> Speaker 2.0）-> MSE -> PCM 检测，ALAC 可回退为 FLAC。
    */
   function detectModes(codecs) {
     if (failedCodecs.has(codecs)) return [];
@@ -61,10 +76,14 @@
     const modes = [];
     const decrypt = global.AmDecrypt && global.AmDecrypt.supported();
     const MS = global.ManagedMediaSource || global.MediaSource;
+    const pcm = decrypt && global.Worker && global.WebAssembly && (global.AudioContext || global.webkitAudioContext);
+    const joc = isEc3(codecs) && pcm ? jocSettings().mode : 'off';
+    // 双耳失败（如 HRTF 无效）时退回 Speaker 2.0，再失败才用浏览器自己的解码
+    if (joc === 'binaural') modes.push('jocbin');
+    if (joc !== 'off') modes.push('joc2');
     if (MS && MS.isTypeSupported && MS.isTypeSupported(mime) && decrypt) modes.push('mse');
-    if (/^(ec-3|ec3)$/i.test(String(codecs))) {
-      if (decrypt && global.Worker && global.WebAssembly &&
-          (global.AudioContext || global.webkitAudioContext)) modes.push('ec3');
+    if (isEc3(codecs)) {
+      if (pcm) modes.push('ec3');
       return modes;
     }
     if (String(codecs).toLowerCase() === 'alac' && MS && MS.isTypeSupported &&
@@ -97,7 +116,11 @@
   /* ---------- 播放队列的曲目：逐首解析 master，选浏览器能播放的最高音质 ---------- */
   function rankVariant(v) {
     const g = v.group_id.toLowerCase();
-    return g.includes('alac') ? 0 : g.includes('atmos') ? 1 : g.includes('he-') ? 3 : 2;
+    // 开启 JOC 对象渲染时全景声排在 ALAC 前面：队列播放选它，否则只有手动换音质时才用得上
+    const atmosFirst = jocSettings().mode !== 'off';
+    if (g.includes('alac')) return atmosFirst ? 1 : 0;
+    if (g.includes('atmos')) return atmosFirst ? 0 : 1;
+    return g.includes('he-') ? 3 : 2;
   }
 
   function variantLabel(v) {
@@ -420,15 +443,94 @@
     }
   }
 
+  /** 空闲的 JOC Worker：换曲时复用，ec3.wasm、joc.wasm 与 HRTF 不必重新加载；空闲 30 秒后终止 */
+  const idleJocWorkers = [];
+
+  /** joc-decode-worker.js 的主线程一侧：每个请求一个 id，按 id 回复 */
+  class JocDecoder {
+    constructor() {
+      this.worker = idleJocWorkers.pop() || new Worker('/assets/joc-decode-worker.js', { type: 'module' });
+      clearTimeout(this.worker.idleTimer);
+      this.pending = new Map();
+      this.seq = 0;
+      this.worker.onmessage = ({ data }) => {
+        const job = this.pending.get(data.id);
+        if (!job) return;
+        // 分段分批渲染：每批先交给 onPart，整段结束才 resolve
+        if (data.part) { if (job.onPart) job.onPart(data.result); return; }
+        this.pending.delete(data.id);
+        if (data.ok) job.resolve(data.result);
+        else job.reject(new Error(data.error));
+      };
+      this.worker.onerror = (event) => {
+        for (const job of this.pending.values()) job.reject(new Error(event.message || 'JOC Worker failed'));
+        this.pending.clear();
+        this.broken = true;
+      };
+    }
+
+    request(op, payload = {}, transfer = [], onPart = null) {
+      if (!this.worker) return Promise.reject(new DOMException('stale', 'AbortError'));
+      const id = ++this.seq;
+      return new Promise((resolve, reject) => {
+        this.pending.set(id, { resolve, reject, onPart });
+        this.worker.postMessage({ id, op, ...payload }, transfer);
+      });
+    }
+
+    /** options: { mode: 'speaker' | 'binaural', gainDb, dataset } */
+    open(options) { return this.request('open', options); }
+    /** 解一个分段：已渲染的部分分批交给 onPart({ frames, samples, peak })；被 abort 时结果为 { aborted: true } */
+    decode(buf, onPart) { return this.request('decode', { buf }, [buf], onPart); }
+    /** 让进行中的分段在下一批之前停下（Seek 开始时，不必等它解完） */
+    abort() { if (this.worker) this.worker.postMessage({ op: 'abort' }); }
+    /** Seek：清空渲染器与 EC-3 解码器，之后输出的前 skipFrames 帧丢掉（预滚） */
+    reset(skipFrames) { return this.request('reset', { skipFrames }); }
+    setGain(gainDb) { return this.request('gain', { gainDb }); }
+    /** 输入结束：取回渲染器还留着的帧（双耳的 961 样本延迟与房间尾音） */
+    finish() { return this.request('finish'); }
+
+    destroy() {
+      const worker = this.worker;
+      if (!worker) return;
+      this.worker = null;
+      // 有进行中的任务（或 Worker 出过错）时终止，否则关闭流后放回空闲列表
+      if (this.pending.size || this.broken || idleJocWorkers.length) {
+        worker.terminate();
+        for (const job of this.pending.values()) job.reject(new DOMException('stale', 'AbortError'));
+        this.pending.clear();
+        return;
+      }
+      worker.onmessage = worker.onerror = null;
+      worker.postMessage({ op: 'close' });
+      worker.idleTimer = setTimeout(() => {
+        idleJocWorkers.splice(idleJocWorkers.indexOf(worker), 1);
+        worker.terminate();
+      }, 30000);
+      idleJocWorkers.push(worker);
+    }
+  }
+
+  /**
+   * EC-3 与 JOC 都是 48 kHz：AudioContext 也用 48 kHz，设备采样率不同时由浏览器在输出端整体重采样
+   * （AudioBuffer 与上下文采样率不同时，各 AudioBufferSourceNode 只做线性插值）。不支持该选项的浏览器用默认值
+   */
+  function pcmContext() {
+    const Context = global.AudioContext || global.webkitAudioContext;
+    try { return new Context({ sampleRate: 48000, latencyHint: 'playback' }); } catch { return new Context(); }
+  }
+
   /** Bounded, on-demand multichannel PCM playback for EC-3. */
   class PcmEngine {
     constructor(onUpdate, onError, onEnded) {
       this.onUpdate = onUpdate;
       this.onError = onError;
       this.onEnded = onEnded;
-      this.context = new (global.AudioContext || global.webkitAudioContext)();
+      this.context = pcmContext();
       this.gain = this.context.createGain();
       this.gain.connect(this.context.destination);
+      /** 各 AudioBufferSourceNode 接到这里（JocEngine 在 gain 前面加一级淡入淡出） */
+      this.input = this.gain;
       this.nodes = new Set();
       this.paused = true;
       this.anchorTime = 0;
@@ -507,7 +609,7 @@
             chunk.pcm = null;
             const node = this.context.createBufferSource();
             node.buffer = buffer;
-            node.connect(this.gain);
+            node.connect(this.input);
             node.onended = () => { this.nodes.delete(node); node.disconnect(); };
             this.nodes.add(node);
             const when = Math.max(this.context.currentTime + 0.01,
@@ -559,18 +661,17 @@
       this.resumeAfterSeek = !this.paused || (this.seeking && this.resumeAfterSeek);
       this.seeking = true;
       this.paused = true;
-      for (const node of this.nodes) { try { node.stop(); } catch {} node.disconnect(); }
-      this.nodes.clear();
+      this.stopNodes();
       this.anchorTime = Math.max(0, Math.min(time, this.duration));
       this.anchorContextTime = this.context.currentTime + 0.03;
       this.loadedUntil = this.anchorTime;
-      this.nextIndex = segmentAt(this.playlist.segments, this.anchorTime);
+      const restart = this.locate(this.anchorTime);
       this.onUpdate();
       const task = (async () => {
         await this.context.suspend();
         while (this.busy && gen === this.generation) await new Promise((resolve) => setTimeout(resolve, 10));
         if (gen !== this.generation) return;
-        await this.decoder.flush();
+        await restart();
         if (gen !== this.generation) return;
         this.anchorContextTime = this.context.currentTime + 0.03;
         await this.pump(true);
@@ -592,6 +693,18 @@
       return task;
     }
 
+    /** Seek 时停掉已排好的缓冲 */
+    stopNodes() {
+      for (const node of this.nodes) { try { node.stop(); } catch {} node.disconnect(); }
+      this.nodes.clear();
+    }
+
+    /** Seek：从哪个分段开始解码（nextIndex），返回重置解码器的异步函数 */
+    locate(time) {
+      this.nextIndex = segmentAt(this.playlist.segments, time);
+      return () => this.decoder.flush();
+    }
+
     destroy() {
       this.generation++;
       clearInterval(this.timer);
@@ -600,6 +713,202 @@
       for (const node of this.nodes) { try { node.stop(); } catch {} node.disconnect(); }
       this.nodes.clear();
       this.context.close();
+    }
+  }
+
+  /**
+   * JOC 对象渲染播放（E-AC-3 Dolby Atmos）：EC-3 解码、对象重建与渲染都在 Worker（joc-decode-worker.js）里完成，
+   * 主线程只把渲染好的立体声排进 Web Audio。时钟、暂停与 Seek 的流程沿用 PcmEngine，区别在于：
+   *   - 渲染器的输出是连续的（双耳内核在开头扣掉 961 个样本的延迟），缓冲按 cursor 首尾相接排列，不按分段时间；
+   *   - 每个分段（约 15 秒）分批渲染，每批到了就排上，开始播放与 Seek 不必等整段解完；
+   *   - Seek 从目标前 64 个 syncframe（约 2 秒）开始解码以重建渲染器状态，Worker 丢掉目标之前的输出；
+   *   - 解码跟不上（缓冲来晚了）时整体顺延时钟，不让缓冲互相重叠；
+   *   - 输入结束时取回渲染器留着的帧，只播到曲目时长为止（之后的房间尾音丢掉）；
+   *   - Seek 与开始播放时短暂淡出 / 淡入，换渲染状态不出爆音；
+   *   - 输出模式、HRTF 与衰减可以在播放中修改（reconfigure / setGain）。
+   */
+  class JocEngine extends PcmEngine {
+    /** options: { mode: 'speaker' | 'binaural', gainDb, dataset, onClip(peak) } */
+    constructor(onUpdate, onError, onEnded, options) {
+      super(onUpdate, onError, onEnded);
+      this.mode = options.mode === 'binaural' ? 'binaural' : 'speaker';
+      this.gainDb = Number(options.gainDb) || 0;
+      this.dataset = options.dataset;
+      this.onClip = options.onClip || null;
+      this.envelope = this.context.createGain();
+      this.envelope.connect(this.gain);
+      this.input = this.envelope;
+      this.rate = 48000;
+      this.channels = 2;
+      /** 下一个缓冲的位置（曲目时间）；Seek 后第一个缓冲到来前为 null */
+      this.cursor = null;
+      this.finished = false;
+      this.fadeIn = false;
+      this.clipped = false;
+    }
+
+    async load(url) {
+      const gen = this.generation;
+      await this.started;
+      if (gen !== this.generation) throw new DOMException('stale', 'AbortError');
+      this.controller = new AbortController();
+      this.playlist = await global.AmDecrypt.openTrack(url, this.controller.signal);
+      if (gen !== this.generation) throw new DOMException('stale', 'AbortError');
+      this.duration = this.playlist.duration;
+      this.decoder = new JocDecoder();
+      await this.decoder.open({ mode: this.mode, gainDb: this.gainDb, dataset: this.dataset });
+      if (gen !== this.generation) throw new DOMException('stale', 'AbortError');
+      this.nextIndex = 0;
+      this.fadeIn = true;
+      await this.pump(true);
+    }
+
+    setGain(gainDb) {
+      this.gainDb = Number(gainDb) || 0;
+      if (this.decoder) this.decoder.setGain(this.gainDb).catch(() => {});
+    }
+
+    /** 播放中换输出模式或 HRTF：Worker 重新打开渲染器，从当前位置 Seek（预滚按新的状态重建） */
+    reconfigure({ mode, dataset }) {
+      this.mode = mode === 'binaural' ? 'binaural' : 'speaker';
+      this.dataset = dataset;
+      if (!this.playlist || !this.decoder) return Promise.resolve();
+      this.reopen = true;
+      return this.seek(this.currentTime);
+    }
+
+    stopNodes() {
+      // 先在 8 ms 内把淡入淡出级降到 0 再停，旧缓冲不会被截断出爆音；新缓冲开始时淡入（见 schedule）
+      const now = this.context.currentTime;
+      const gain = this.envelope.gain;
+      try {
+        gain.cancelScheduledValues(now);
+        gain.setValueAtTime(gain.value, now);
+        gain.linearRampToValueAtTime(0, now + 0.008);
+      } catch {}
+      for (const node of this.nodes) {
+        try { node.stop(now + 0.012); } catch { try { node.stop(); } catch {} }
+      }
+      this.nodes.clear();
+      this.fadeIn = true;
+    }
+
+    locate(time) {
+      this.cursor = null;
+      this.finished = false;
+      // 与参考实现的流式 API 相同：从目标前 64 个 syncframe 开始解码，重建 QMF、对象矩阵与双耳的状态；
+      // 所在分段里更早的部分由 Worker 直接跳过（不解码）
+      const preroll = (64 * 1536) / this.rate;
+      this.nextIndex = segmentAt(this.playlist.segments, Math.max(0, time - preroll));
+      const segment = this.playlist.segments[this.nextIndex];
+      const skip = Math.max(0, Math.round((time - (segment ? segment.time : time)) * this.rate));
+      // 进行中的分段在下一批之前停下，下面等 busy 结束时不必等它解完
+      this.decoder.abort();
+      return async () => {
+        if (this.reopen) {
+          await this.decoder.open({ mode: this.mode, gainDb: this.gainDb, dataset: this.dataset });
+          this.reopen = false;
+        }
+        await this.decoder.reset(skip);
+      };
+    }
+
+    /** 把一段交错的立体声排在曲目时间 start 处，返回它的时长（秒） */
+    schedule(frames, samples, start) {
+      const buffer = this.context.createBuffer(2, samples, this.rate);
+      const left = buffer.getChannelData(0);
+      const right = buffer.getChannelData(1);
+      for (let i = 0; i < samples; i++) {
+        left[i] = frames[i * 2];
+        right[i] = frames[i * 2 + 1];
+      }
+      const node = this.context.createBufferSource();
+      node.buffer = buffer;
+      node.connect(this.input);
+      node.onended = () => { this.nodes.delete(node); node.disconnect(); };
+      this.nodes.add(node);
+      let when = this.anchorContextTime + start - this.anchorTime;
+      // 来晚了（解码跟不上或分段加载慢）：时钟整体顺延，进度停在这里等音频，而不是让后面的缓冲叠在一起
+      const earliest = this.context.currentTime + 0.02;
+      if (when < earliest) {
+        this.anchorContextTime += earliest - when;
+        when = earliest;
+      }
+      if (this.fadeIn) {
+        this.fadeIn = false;
+        const gain = this.envelope.gain;
+        gain.cancelScheduledValues(when);
+        gain.setValueAtTime(0, when);
+        gain.linearRampToValueAtTime(1, when + 0.02);
+      }
+      node.start(when);
+      return samples / this.rate;
+    }
+
+    /** 削波提示：渲染输出乘上播放器音量后才是送到设备的电平，超过满刻度时每首提示一次 */
+    checkClip(peak) {
+      if (this.clipped || !this.onClip || !(peak * this.gain.gain.value > 1)) return;
+      this.clipped = true;
+      this.onClip(peak);
+    }
+
+    /**
+     * 加载并渲染之后的分段，保持当前位置之后约 20 秒（Apple Music 的分段约 15 秒）。每段分批渲染，每批到了就排进 Web Audio。
+     * first（开始播放与 Seek）：排上第一批音频就返回，这一段的其余部分与之后的分段在后台继续；
+     * 预滚可能整段落在目标之前（没有输出），这时接着解下一段，排上音频才算完成，否则恢复播放后时钟会跑在音频前面
+     */
+    pump(first = false) {
+      if (this.busy || this.failed || !this.playlist || !this.decoder) return Promise.resolve();
+      this.busy = true;
+      const gen = this.generation;
+      let ready = null;
+      const started = first ? new Promise((resolve, reject) => { ready = { resolve, reject }; }) : null;
+      const settle = () => { if (ready) { ready.resolve(); ready = null; } };
+      const run = (async () => {
+        const { segments } = this.playlist;
+        while (this.nextIndex < segments.length && (first || segments[this.nextIndex].time < this.currentTime + 20)) {
+          const seg = segments[this.nextIndex];
+          const encrypted = await this.playlist.load(seg, this.controller.signal);
+          if (gen !== this.generation) return;
+          const decoded = await this.decoder.decode(encrypted, (part) => {
+            if (gen !== this.generation || !part.samples) return;
+            // Seek 后第一批从目标开始（之前的预滚已在 Worker 里丢掉），之后首尾相接
+            const start = this.cursor !== null ? this.cursor : Math.max(seg.time, this.anchorTime);
+            this.cursor = start + this.schedule(part.frames, part.samples, start);
+            this.loadedUntil = Math.max(this.loadedUntil, this.cursor);
+            this.checkClip(part.peak);
+            settle();
+          });
+          if (gen !== this.generation || decoded.aborted) return;
+          this.nextIndex++;
+          if (this.cursor !== null) first = false;
+          this.onUpdate();
+        }
+        if (this.nextIndex >= segments.length && !this.finished) {
+          this.finished = true;
+          const tail = await this.decoder.finish();
+          if (gen !== this.generation) return;
+          // 双耳内核留着的最后 961 个样本属于曲目；之后的房间尾音超出时长，播放在时长处结束
+          const start = this.cursor !== null ? this.cursor : this.anchorTime;
+          const frames = Math.min(tail.samples, Math.round(Math.max(0, (this.duration || 0) - start) * this.rate));
+          if (frames > 0) {
+            this.cursor = start + this.schedule(tail.frames, frames, start);
+            this.loadedUntil = Math.max(this.loadedUntil, this.cursor);
+          }
+        }
+      })().catch((error) => {
+        // 第一批之前出错交给调用方（换下一种播放方式或报错），之后的错误在这里报告
+        if (ready && gen === this.generation) { ready.reject(error); ready = null; return; }
+        if (error.name !== 'AbortError' && gen === this.generation) {
+          this.failed = true;
+          this.pause();
+          this.onError(error);
+        }
+      }).finally(() => {
+        this.busy = false;
+        settle();
+      });
+      return started || run;
     }
   }
 
@@ -1258,19 +1567,24 @@
       if (!this.current) return;
       const c = this.current;
       const badge = this.$('.player-mode');
-      const icon = qualityIcon(c.badge, this.root.ownerDocument);
+      const doc = this.root.ownerDocument;
+      const icon = qualityIcon(c.badge, doc);
       if (icon) icon.removeAttribute('title');
       const label = icon ? icon.getAttribute('aria-label') : this.modeText();
-      badge.replaceChildren(icon || label);
+      // JOC 渲染时图标后面注明，否则看不出没有走浏览器自己的解码
+      const joc = isJocMode(c.mode) ? t(c.mode === 'jocbin' ? 'player.jocBadgeBinaural' : 'player.jocBadgeSpeaker') : '';
+      badge.replaceChildren(icon || label, ...(joc ? [el(doc, 'span', 'player-mode-joc', joc)] : []));
       badge.hidden = false;
       badge.title = t('player.qualityInfo');
-      badge.setAttribute('aria-label', `${t('player.qualityInfo')}: ${[label, c.label].filter(Boolean).join(' · ')}`);
+      badge.setAttribute('aria-label', `${t('player.qualityInfo')}: ${[label, joc, c.label].filter(Boolean).join(' · ')}`);
       this.renderQualityPanel();
     }
 
-    /** 播放方式：MSE · ALAC（浏览器直接解码）、ALAC → FLAC（转码）、E-AC-3 → 5.1 PCM（解码为多声道 PCM） */
+    /** 播放方式：MSE · ALAC（浏览器直接解码）、ALAC → FLAC（转码）、E-AC-3 → 5.1 PCM（解码为多声道 PCM）、E-AC-3 → JOC（对象渲染） */
     modeText() {
       const c = this.current;
+      if (c.mode === 'joc2') return `E-AC-3 → ${t('player.jocSpeaker')}`;
+      if (c.mode === 'jocbin') return `E-AC-3 → ${t('player.jocBinaural', { dataset: this.pcm ? this.pcm.dataset : jocSettings().dataset })}`;
       if (c.mode === 'flac') return 'ALAC → FLAC';
       if (c.mode === 'ec3') {
         const channels = this.pcm && this.pcm.channels;
@@ -1289,17 +1603,21 @@
       if (panel.hidden || !c) return;
       const doc = this.root.ownerDocument;
       const v = c.variant || {};
+      const joc = isJocMode(c.mode);
       const rows = [
         [t('player.mode'), this.modeText()],
         [t('player.bitrate'), formatRate(v.bandwidth)],
         [t('player.channels'), v.channels ? String(v.channels).split('/')[0] : ''],
+        [t('player.jocGain'), joc ? `${jocSettings().gain} dB` : ''],
       ].filter(([, value]) => value);
-      const note = t(c.mode === 'ec3' ? 'player.pcmNotice' : c.mode === 'flac' ? 'player.flacNotice' : 'player.mseNotice');
+      const note = joc ? [t('player.jocNotice'), c.mode === 'joc2' && this.jocFallback && t('player.jocHrtfMissing')].filter(Boolean).join(' ')
+        : t(c.mode === 'ec3' ? 'player.pcmNotice' : c.mode === 'flac' ? 'player.flacNotice' : 'player.mseNotice');
       const list = el(doc, 'div', 'quality-panel-list');
       panel.replaceChildren(
         el(doc, 'div', 'quality-panel-head', qualityIcon(c.badge, doc), el(doc, 'span', 'quality-panel-label', c.label || codecName(c.codecs))),
         el(doc, 'dl', 'quality-panel-specs', ...rows.flatMap(([key, value]) => [el(doc, 'dt', '', key), el(doc, 'dd', '', value)])),
         el(doc, 'p', 'quality-panel-note', note),
+        ...(isEc3(c.codecs) && jocStore ? this.jocSwitch(doc) : []),
         el(doc, 'h3', 'quality-panel-heading', t('player.qualities')),
         list);
       const state = this.variantsOf(c);
@@ -1345,6 +1663,62 @@
           if (this.current && this.current.track === item.track) this.renderQualityPanel();
         });
       return state;
+    }
+
+    /** 音质详情里的 JOC 开关（E-AC-3 曲目）：关闭 / Speaker 2.0 / 双耳，与设置中心的「播放方式」是同一项 */
+    jocSwitch(doc) {
+      const current = jocSettings().mode;
+      const group = el(doc, 'div', 'quality-panel-joc');
+      group.setAttribute('role', 'radiogroup');
+      group.setAttribute('aria-label', t('player.jocHeading'));
+      for (const [mode, key] of [['off', 'set.joc.off'], ['speaker', 'set.joc.speaker'], ['binaural', 'set.joc.binaural']]) {
+        const button = el(doc, 'button', 'quality-panel-joc-option', t(key));
+        button.type = 'button';
+        button.setAttribute('role', 'radio');
+        button.setAttribute('aria-checked', String(current === mode));
+        button.addEventListener('click', () => { if (jocSettings().mode !== mode) jocStore.set({ mode }); });
+        group.append(button);
+      }
+      return [el(doc, 'h3', 'quality-panel-heading', t('player.jocHeading')), group];
+    }
+
+    /**
+     * JOC 设置变了（设置中心、音质详情或其他标签页，见 app.mjs）：正在用 JOC 播放时，衰减立即生效，换输出方式或 HRTF
+     * 从当前位置继续；在 JOC 与浏览器自己的解码之间切换要换播放方式，正在播放时从当前位置重新开始，暂停时等下次播放
+     */
+    jocChanged() {
+      const c = this.current;
+      const joc = jocSettings();
+      const previous = this.jocMode;
+      this.jocMode = joc.mode;
+      if (!c) return;
+      if (isEc3(c.codecs)) {
+        const pcm = this.pcm instanceof JocEngine ? this.pcm : null;
+        const mode = joc.mode === 'binaural' ? 'binaural' : 'speaker';
+        const reconfigure = pcm && (mode !== pcm.mode || (mode === 'binaural' && joc.dataset !== pcm.dataset));
+        if (pcm && joc.gain !== pcm.gainDb) pcm.setGain(joc.gain);
+        // 还在选择播放方式（加载中）时，方式或 HRTF 变了就按新设置重新开始
+        if (this.attempting && (joc.mode !== previous || reconfigure)) { this.replay(); return; }
+        if (pcm && joc.mode !== 'off') {
+          if (reconfigure) {
+            this.jocFallback = false;
+            this.pcm.clipped = false;
+            this.pcm.reconfigure({ mode, dataset: joc.dataset }).catch(() => {});
+            c.mode = mode === 'binaural' ? 'jocbin' : 'joc2';
+          }
+        } else if (joc.mode !== previous) {
+          if (this.transport().paused) this.jocStale = true;
+          else { this.replay(); return; }
+        }
+      }
+      this.renderMode();
+    }
+
+    /** 按当前设置重新选择播放方式，从当前位置继续播放当前曲目 */
+    replay() {
+      this.jocStale = false;
+      const { mode, duration, ...item } = this.current;
+      return this.start(item, { force: true });
     }
 
     /** 换成同一首歌的另一种音质 */
@@ -1408,7 +1782,7 @@
       button.title = label;
     }
 
-    transport() { return this.current && this.current.mode === 'ec3' && this.pcm ? this.pcm : this.clock; }
+    transport() { return this.current && isPcmMode(this.current.mode) && this.pcm ? this.pcm : this.clock; }
 
     updatePcm() {
       this.renderToggle();
@@ -2094,8 +2468,12 @@
       this.emit();
     }
 
-    async start(item) {
-      if (this.current && this.current.id === item.id) { this.toggle(); return; }
+    /** options.force：同一首同一音质也重新开始（JOC 设置变化后换播放方式，见 replay） */
+    async start(item, { force = false } = {}) {
+      if (!force && this.current && this.current.id === item.id) { this.toggle(); return; }
+      this.jocMode = jocSettings().mode;
+      this.jocStale = false;
+      this.jocFallback = false;
       const modes = detectModes(item.codecs);
       if (!modes.length) {
         this.showError(() => t('player.errorCodec', { codecs: item.codecs, hint: fallbackHint() }));
@@ -2139,6 +2517,8 @@
             return;
           }
           lastError = err;
+          // 双耳不可用时退回 Speaker 2.0，音质详情里说明原因
+          if (mode === 'jocbin') this.jocFallback = true;
           console.warn(`[am-hook] ${mode} 播放失败，尝试下一种方式`, err);
         }
       }
@@ -2161,8 +2541,18 @@
 
     async tryMode(mode, item, resumeAt, token) {
       this.teardown();
-      if (mode === 'ec3') {
-        this.pcm = new PcmEngine(() => this.updatePcm(), (err) => this.showError(err.message || String(err)), () => this.ended());
+      if (isPcmMode(mode)) {
+        const onError = (err) => this.showError(err.message || String(err));
+        if (mode === 'ec3') this.pcm = new PcmEngine(() => this.updatePcm(), onError, () => this.ended());
+        else {
+          const joc = jocSettings();
+          this.pcm = new JocEngine(() => this.updatePcm(), onError, () => this.ended(), {
+            mode: mode === 'jocbin' ? 'binaural' : 'speaker',
+            gainDb: joc.gain,
+            dataset: joc.dataset,
+            onClip: () => this.showError(() => t('player.jocClip')),
+          });
+        }
         this.pcm.gain.gain.value = this.audio.volume;
         await this.pcm.load(item.m3u8Url);
         if (token !== this.playToken) return;
@@ -2189,6 +2579,8 @@
     toggle() {
       if (!this.current) return;
       const transport = this.transport();
+      // 暂停时改了 JOC 设置：按新的播放方式从当前位置开始
+      if (this.jocStale && transport.paused) { this.replay(); return; }
       if (transport.paused) transport.play().catch((err) => this.showError(err.message)); else transport.pause();
     }
 
@@ -2211,7 +2603,7 @@
 
     renderToggle() {
       const a = this.transport();
-      const waiting = this.loading && a.paused || (!a.paused && this.current.mode !== 'ec3' && a.readyState < 3);
+      const waiting = this.loading && a.paused || (!a.paused && !isPcmMode(this.current.mode) && a.readyState < 3);
       if (!a.paused) this.loading = false;
       const btn = this.$('.player-toggle');
       btn.innerHTML = waiting ? ICON_LOADING : (a.paused ? ICON_PLAY : ICON_PAUSE);
@@ -2228,7 +2620,7 @@
       this.$('.seek-fill').style.width = `${ratio * 100}%`;
       this.$('.seek-thumb').style.left = `${ratio * 100}%`;
       let bufEnd = 0;
-      if (this.current && this.current.mode === 'ec3' && this.pcm) {
+      if (this.current && isPcmMode(this.current.mode) && this.pcm) {
         bufEnd = this.pcm.loadedUntil;
       } else {
         const b = this.audio.buffered;
@@ -2343,7 +2735,7 @@
     }
   }
 
-  const api = { AmPlayer, Marquee, artistNodes, qualityBadge, qualityIcon, segmentAt, formatTime, detectMode, detectModes, mimeFor };
-  if (typeof module !== 'undefined' && module.exports) module.exports = { ...api, MseEngine };
+  const api = { AmPlayer, Marquee, artistNodes, qualityBadge, qualityIcon, segmentAt, formatTime, detectMode, detectModes, mimeFor, useJocSettings };
+  if (typeof module !== 'undefined' && module.exports) module.exports = { ...api, MseEngine, JocEngine, sortVariants };
   else global.AmHook = api;
 })(typeof window !== 'undefined' ? window : globalThis);

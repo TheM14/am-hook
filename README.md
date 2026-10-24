@@ -54,7 +54,7 @@ By default **decryption happens entirely in the browser**. The server only talks
 
 - **Every quality**: lossless ALAC (up to 24-bit / 192 kHz), Dolby Atmos, AAC, HE-AAC, binaural and downmix, plus music videos up to 4K Dolby Vision with Atmos audio.
 - **Decrypted in the browser**: WebAssembly in Web Workers; media never passes through the server.
-- **Plays anywhere**: built-in gapless player with a shared queue, ALAC-to-FLAC and EC-3-to-PCM fallbacks, system media controls.
+- **Plays anywhere**: built-in gapless player with a shared queue, ALAC-to-FLAC and EC-3-to-PCM fallbacks, system media controls, and optional Dolby Atmos object rendering (JOC) to stereo speakers or binaural headphones right in the browser.
 - **Feels like music.apple.com**: search, New, Top Charts, Radio, album / playlist / artist / editorial pages, and synced lyrics rendered by [AMLL](https://github.com/amll-dev/applemusic-like-lyrics).
 - **Downloads done properly**: per-track or whole albums / playlists, iTunes tags, cover art and lyrics, ZIP / folder / file output with name templates.
 - **ALAC check**: without requesting `/key`, finds the ALAC escape frames whose end was overwritten across a whole album, with the packaging date and the real bit depth and bandwidth of the first 15 seconds.
@@ -181,6 +181,7 @@ Like music.apple.com, the player bar stays at the bottom and playback continues 
 - Transport controls match music.apple.com: shuffle, previous (restarts the song after 3 seconds), play / pause, next, and repeat (off → all → one). Shuffle and repeat are remembered; Shuffle on album, playlist and artist pages turns shuffle on and Play plays in order. Seek back / forward with ← / → or system media controls.
 - Playing Next: the list button on the right of the bar opens the upcoming songs. Click to select, double-click to play, drag a row to reorder; the − on the artwork (on hover) removes a song and Clear empties the rest of the queue. From the keyboard: ↑/↓ select, Enter plays, Delete removes, Alt+↑/↓ moves. On touch screens a tap plays, the handle on the right reorders, and shuffle / repeat sit next to the title.
 - Space and arrow keys control playback on every page. Playing a music video pauses the music and vice versa.
+- **Dolby Atmos object rendering (JOC)**, off by default: in Settings → JOC object rendering pick Speaker 2.0 or Binaural, and E-AC-3 (Dolby Atmos) songs are rendered in the browser instead of being played as a 5.1 bed or left to the system. The built-in EC-3 decoder produces the core channels, the JOC and object metadata in the same stream rebuild 15 objects plus LFE, and they are rendered to stereo: Speaker 2.0 pans them with equal power, Binaural uses an HRTF (20 subjects of the University of York SADIE II database, D2 by default) with early reflections and a small room. Everything runs in a Web Worker. While it is on, queues prefer the Dolby Atmos variant over ALAC. Mode, HRTF and output attenuation apply to the playing song at once (the quality panel in the full-screen player has the same mode switch), and the player warns once per song if the output clips at the current volume.
 
 ### Pages
 
@@ -328,7 +329,7 @@ In the browser (`src/ui/decrypt.js`):
 2. The media m3u8 is fetched directly from `aod.itunes.apple.com` (the CDN allows CORS and Range requests) and parsed into the init segment, fragment byte ranges and the key used by each fragment.
 3. Fragments under the prefetch key (`skd://itunes.apple.com/P000000000/s1/e1`, usually only the first one, sometimes more) use the template embedded in the wasm; once the playlist switches to the track key, the rest use the track template from `/key`.
 4. Fragments are fetched with Range requests and decrypted in place by a Worker pool (one `hook.wasm` instance per Worker). The decryption code lives in `crates/am-mp4`.
-5. **Playback**: decrypted fragments feed MSE when the original codec is supported. If ALAC is unavailable but FLAC-in-MP4 is, the on-demand `flac.wasm` losslessly converts ALAC packets to FLAC frames and remuxes them into small fMP4 fragments. EC-3 uses MSE when supported, otherwise the on-demand `ec3.wasm` decoder plays 5.1/7.1 PCM through Web Audio (no Atmos object rendering). Seeking jumps to the matching source fragment.
+5. **Playback**: decrypted fragments feed MSE when the original codec is supported. If ALAC is unavailable but FLAC-in-MP4 is, the on-demand `flac.wasm` losslessly converts ALAC packets to FLAC frames and remuxes them into small fMP4 fragments. EC-3 uses MSE when supported, otherwise the on-demand `ec3.wasm` decoder plays 5.1/7.1 PCM through Web Audio (no Atmos object rendering). With JOC object rendering on, `joc-decode-worker.js` decodes the core with `ec3.wasm` and renders the objects with `joc.wasm` (`crates/joc-core`); each ~15 s fragment is rendered in batches that are scheduled as they arrive, and a seek restarts the renderer 64 syncframes before the target (earlier frames of the fragment are skipped without decoding). Seeking jumps to the matching source fragment.
 6. **Download**: 4 lanes fetch and decrypt concurrently and write each result at its original offset into an OPFS temporary file, which is then converted to a progressive MP4 like the reference downloader's `DefragmentMP4` (`M4A ` ftyp, `moov` before the media data) and handed to the browser to save. Without OPFS it falls back to in-memory Blobs.
 
 `hook.wasm` repairs identifiable ALAC end-tag damage after decryption (for example, song `1691044818`). The init segment's track and sample description identify complete uncompressed mono/stereo packets; a missing or damaged 3-bit `TYPE_END` is restored to `111` so decoders no longer drop the frame. The last 4 bytes of such packets were already overwritten when Apple packaged them ([AppleMusicDecrypt#136](https://github.com/WorldObservationLog/AppleMusicDecrypt/issues/136)): the original last sample is not in the file, and the repair cannot restore it. Sample lengths and Range offsets stay unchanged. Settings can turn the repair off: the overwritten samples are lost either way, and turning it off only keeps saved files byte-for-byte as Apple serves them (FFmpeg and others then drop the frames without an END tag). "Check ALAC" lists the affected frames. Compressed packets, truncated PCM and packets without room for the tag are left untouched; FLAC transcoding keeps its fallback that can append a missing tag byte.
@@ -415,6 +416,7 @@ The binary is written to `target/release/am-hook` (`am-hook.exe` on Windows). Al
 | `mv-cea608.mjs` | `browser/cea608` | `node scripts/build-cea608.cjs <path-to-typescript-package>` |
 | `lyrics/amll-core.mjs`, `lyrics/amll.css` | `@applemusic-like-lyrics/core`, see [browser/amll](browser/amll/README.md) | `node scripts/build-amll.cjs <node_modules>` |
 | `ec3.wasm`, `ec3-runtime.mjs` | `@mediabunny/ac3` 1.59.1 | `node scripts/extract-ec3.mjs`, see [EC3-SOURCE.md](src/ui/EC3-SOURCE.md) |
+| `joc.wasm` | `crates/joc-wasm`, `crates/joc-core` (from [am-hook-joc](https://github.com/TheM14/am-hook-joc)) | `scripts/build-wasm.sh`, like `hook.wasm`; `joc-core` stays at `opt-level` 3 because it renders in real time. `joc-hrtf-*.jochrtf` are compiled SADIE II fields, see [JOC-NOTICE.md](src/ui/JOC-NOTICE.md) |
 
 ### Testing
 
@@ -423,7 +425,7 @@ cargo test --workspace
 cargo clippy --workspace --all-targets -- -D warnings   # CI runs this too; the workspace is warning-free
 ```
 
-Unit tests cover the browser media core (PlayReady and Widevine license decryption, CENC/CBCS including the length-preserving in-place path, caption repair, defragmentation), URL parsing, m3u8 parsing, MP4 box patching (including that the in-place wasm path matches the parallel path), cache deduplication and the MV endpoints. Offline integration tests also check that Apple CDN URLs are not proxied.
+Unit tests cover the browser media core (PlayReady and Widevine license decryption, CENC/CBCS including the length-preserving in-place path, caption repair, defragmentation), URL parsing, m3u8 parsing, MP4 box patching (including that the in-place wasm path matches the parallel path), cache deduplication and the MV endpoints. `crates/joc-core` checks the JOC renderer bit-exactly against am-hook-joc's reference digests on a fixture of real Atmos metadata (Speaker 2.0, binaural, reset, every HRTF field). Offline integration tests also check that Apple CDN URLs are not proxied.
 
 Tests that require the live Apple CDN or wrapper-lite are ignored by default and do not run in GitHub Actions. Run them locally with Apple CDN access and wrapper-lite available (default `http://127.0.0.1:12340`, override with `AM_HOOK_WRAPPER`):
 
@@ -445,6 +447,7 @@ Browser-side tests are plain Node scripts. `<playwright>` is the path to a Playw
 | `node --test tests/serverless.mjs` | The serverless backend and the `dist/` layout; also run in CI |
 | `node --test tests/download_core.mjs` | ZIP / ZIP64, iTunes tags, file name templates |
 | `node --test tests/alac_check.mjs` | ALAC check: escape-frame end verdicts (including the cases from issue #136), moof / init parsing, the prefetch key in multi-DRM playlists, bandwidth verdicts; also run by CI |
+| `node --test tests/joc_wasm.mjs` | `src/ui/joc.wasm` against the same reference digests as `crates/joc-core`, all 20 HRTF fields, an invalid HRTF, and the real-time factor of both modes; also run by CI |
 
 </details>
 
@@ -514,6 +517,7 @@ src/
     flac.wasm / flac-transcode-worker.js / flac-init.bin   ALAC-to-FLAC playback; decoding for the ALAC check
     alac-check.mjs     album page ALAC check (damaged escape-frame ends, packaging, real bit depth and bandwidth); dialog in views/alac-check-dialog.mjs
     ec3.wasm / ec3-runtime.mjs / ec3-decode-worker.js      EC-3 PCM fallback
+    joc.wasm / joc-decode-worker.js / joc-hrtf-*.jochrtf   Dolby Atmos object rendering (JOC): build output of crates/joc-wasm and the SADIE II HRTF fields
     lyrics/            Lyrics view (bundled AMLL, see browser/amll; ttml.mjs parses TTML, panel.mjs wires it to the player, backdrop*.mjs draw the classic background)
     station.mjs        Station endpoints needing a media-user-token: storing and asking for the token, next tracks, play assets, license request formats
     mv-radio.mjs       Station HLS playback and downloads (live radio and episodes, sharing the media Worker with MVs)
@@ -528,6 +532,8 @@ crates/
   am-media/            Browser media core: PlayReady, Widevine, CENC/CBCS, caption repair, MP4 muxing and defragmentation
   am-media-wasm/       Browser C ABI exports of am-media
   temari/              Vendored Temari FairPlay decryption library
+  joc-core/            E-AC-3 JOC object reconstruction, Speaker 2.0 and binaural rendering (from am-hook-joc)
+  joc-wasm/            Browser C ABI exports of joc-core
 browser/
   cea608/              Vendored hls.js CEA-608 parser
   amll/                AMLL lyric player bundle entry and build notes
@@ -550,4 +556,4 @@ Questions, feedback and discussion: the Telegram group [@apple_music_alac](https
 
 am-hook is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (AGPL-3.0-only), because the web UI embeds the AGPL-licensed [AMLL](https://github.com/amll-dev/applemusic-like-lyrics) lyric player. If you run a modified version as a network service, you must offer its users the corresponding source.
 
-Bundled third-party components keep their own licenses: `crates/temari` (MIT), the hls.js CEA-608 parser (Apache-2.0, `browser/cea608/LICENSE`), `@mediabunny/ac3` (MPL-2.0, `src/ui/EC3-LICENSE.txt`) and AMLL with its dependencies (AGPL-3.0-only, `browser/amll`).
+Bundled third-party components keep their own licenses: `crates/temari` (MIT), the hls.js CEA-608 parser (Apache-2.0, `browser/cea608/LICENSE`), `@mediabunny/ac3` (MPL-2.0, `src/ui/EC3-LICENSE.txt`), AMLL with its dependencies (AGPL-3.0-only, `browser/amll`), the JOC renderer from am-hook-joc (AGPL-3.0-only or MIT, `crates/joc-core/LICENSE`) and the SADIE II HRTF fields (Apache-2.0, see `src/ui/JOC-NOTICE.md`).

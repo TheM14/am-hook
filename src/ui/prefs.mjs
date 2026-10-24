@@ -1,4 +1,4 @@
-// 设置中心（/settings，views/settings.mjs）的存储：下载设置，以及之后的播放设置等。
+// 设置中心（/settings，views/settings.mjs）的存储：下载设置（download）与 JOC 对象渲染（joc）等。
 // 保存在 localStorage（不会过期），同一浏览器的其他标签页修改后自动同步。
 //
 //   prefs.get(section)          该分组的当前设置（已合并默认值、校验过的副本）
@@ -99,6 +99,12 @@ export const OPTIONS = {
     mvMax: [2160, 1440, 1080, 720, 480],
     mvAudio: ['atmos', 'ac3', 'aac'],
   },
+  // JOC 对象渲染（E-AC-3 Dolby Atmos，player.js 的 JocEngine）：off 为浏览器自己的解码（MSE / 内置 EC-3 PCM）
+  joc: {
+    mode: ['off', 'speaker', 'binaural'],
+    // 双耳渲染的 HRTF：约克大学 SADIE II 数据库的 20 位受试者（src/ui/joc-hrtf-*.jochrtf）
+    dataset: ['D1', 'D2', 'H3', 'H4', 'H5', 'H6', 'H7', 'H8', 'H9', 'H10', 'H11', 'H12', 'H13', 'H14', 'H15', 'H16', 'H17', 'H18', 'H19', 'H20'],
+  },
 };
 
 export const DEFAULTS = {
@@ -158,6 +164,12 @@ export const DEFAULTS = {
     // wrapper-lite /lyrics 的 language；空为跟随元数据语言
     lyricsLang: '',
   },
+  joc: {
+    mode: 'off',
+    // 输出衰减（dB，-60–0）：15 个对象叠加可能超过满刻度，削波时播放器会提示
+    gain: 0,
+    dataset: 'D2',
+  },
 };
 
 const LANG_TAG = /^[A-Za-z0-9-]{0,35}$/;
@@ -183,6 +195,13 @@ function cleanOrder(raw) {
 function clean(section, raw) {
   const d = DEFAULTS[section];
   const r = raw && typeof raw === 'object' ? raw : {};
+  if (section === 'joc') {
+    return {
+      mode: oneOf(r.mode, OPTIONS.joc.mode, d.mode),
+      gain: int(r.gain, -60, 0, d.gain),
+      dataset: oneOf(r.dataset, OPTIONS.joc.dataset, d.dataset),
+    };
+  }
   if (section !== 'download') return { ...d, ...r };
   const o = OPTIONS.download;
   return {

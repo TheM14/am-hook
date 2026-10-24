@@ -87,6 +87,10 @@
 .set-chain-add { min-width: 0; height: 28px; }
 
 .set-folder { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+/* 带单位的数字（JOC 的输出衰减 dB） */
+.set-unit-box { display: inline-flex; align-items: center; gap: 6px; }
+.set-unit { color: var(--muted); font-size: 13px; }
+.set-desc a { color: var(--accent); }
 .set-folder-name { font-family: var(--mono); font-size: 12px; }
 .set-folder-name.is-empty { color: var(--faint); font-family: inherit; }
 

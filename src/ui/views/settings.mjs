@@ -1,5 +1,6 @@
 // 设置中心（/settings），由 app.mjs 挂载。通用设置（主地区、曲库语言、界面语言、wrapper-lite）沿用导航底部的选择面板；
-// 下载设置（音质、MV、保存方式、文件名、标签、封面、歌词）保存在 prefs.mjs，修改立即生效（进行中的下载沿用开始时的设置）。
+// JOC 对象渲染（Dolby Atmos 的播放方式）与下载设置（音质、MV、保存方式、文件名、标签、封面、歌词）保存在 prefs.mjs，
+// 修改立即生效（正在播放的曲目随之切换，见 player.js 的 jocChanged；进行中的下载沿用开始时的设置）。
 import { prefs, OPTIONS, CODEC_GROUPS, TAG_FIELDS, TAG_NAME, DEFAULTS, DEFAULT_FALLBACK } from '../prefs.mjs';
 import { formatPath, fitFolder, fitFile, templateIssues, TEMPLATE_VAR_GROUPS, TEMPLATE_SCOPES } from '../naming.mjs';
 import { downloads } from '../downloads.mjs';
@@ -233,6 +234,57 @@ export function mount({ root, signal, onLangChange, toast }) {
     return el('section', { className: 'set-group', id }, el('h2', { className: 'set-group-title', textContent: t(titleKey) }), el('div', { className: 'set-card' }, ...rows));
   }
 
+  /* ---------- JOC 对象渲染：prefs 的 joc 分组，正在播放的 E-AC-3 曲目随之切换（app.mjs） ---------- */
+  const playback = root.querySelector('#playback');
+  const jocControls = [];
+  const setJoc = (patch) => prefs.set('joc', patch);
+
+  function renderJoc() {
+    jocControls.length = 0;
+    const mode = el('div', { className: 'set-segmented', role: 'radiogroup' });
+    mode.setAttribute('aria-label', t('set.jocMode'));
+    const modes = OPTIONS.joc.mode.map((value) => {
+      const b = el('button', { type: 'button', className: 'set-segment', textContent: t(`set.joc.${value}`) });
+      b.setAttribute('role', 'radio');
+      b.addEventListener('click', () => setJoc({ mode: value }));
+      mode.append(b);
+      return [value, b];
+    });
+    jocControls.push((v) => { for (const [value, b] of modes) b.setAttribute('aria-checked', String(v.mode === value)); });
+
+    // HRTF：SADIE II 数据库的 20 位受试者，网站上有每位的头型与耳型照片
+    const dataset = el('select', { className: 'set-select' }, ...OPTIONS.joc.dataset.map((name) => el('option', { value: name, textContent: name })));
+    dataset.setAttribute('aria-label', t('set.jocDataset'));
+    dataset.addEventListener('change', () => setJoc({ dataset: dataset.value }));
+    const datasetRow = row(t('set.jocDataset'), t('set.jocDatasetDesc'), dataset);
+    datasetRow.querySelector('.set-desc').append(' ', el('a', {
+      href: 'https://www.york.ac.uk/sadie-project/database.html', target: '_blank', rel: 'noopener noreferrer', textContent: t('set.jocDatasetLink'),
+    }));
+    jocControls.push((v) => { dataset.value = v.dataset; datasetRow.hidden = v.mode !== 'binaural'; });
+
+    const gain = el('input', { type: 'number', className: 'set-input set-number', min: -60, max: 0, step: 1 });
+    gain.setAttribute('aria-label', t('set.jocGain'));
+    gain.addEventListener('change', () => {
+      const n = Math.round(Number(gain.value));
+      if (Number.isFinite(n)) setJoc({ gain: Math.min(0, Math.max(-60, n)) });
+      gain.value = String(prefs.get('joc').gain);
+    });
+    const gainRow = row(t('set.jocGain'), t('set.jocGainDesc'), el('div', { className: 'set-unit-box' }, gain, el('span', { className: 'set-unit', textContent: 'dB' })));
+    jocControls.push((v) => {
+      if (document.activeElement !== gain) gain.value = String(v.gain);
+      gainRow.hidden = v.mode === 'off';
+    });
+
+    playback.replaceChildren(section('joc', 'set.joc',
+      row(t('set.jocMode'), t('set.jocModeDesc'), mode, { wide: true }), datasetRow, gainRow));
+    syncJoc();
+  }
+
+  function syncJoc() {
+    const v = prefs.get('joc');
+    for (const fn of jocControls) fn(v);
+  }
+
   /* ---------- 各分组 ---------- */
   function render() {
     controls.length = 0;
@@ -366,7 +418,7 @@ export function mount({ root, signal, onLangChange, toast }) {
       quality, mv, performance, save, naming, tags, cover, lyrics, footer);
 
     // 目录
-    const groups = [['general', 'set.general'], ['quality', 'set.quality'], ['mv', 'set.mvSection'], ['save', 'set.save'], ['naming', 'set.naming'], ['tags', 'set.tags'], ['cover', 'set.cover'], ['lyrics', 'set.lyrics']];
+    const groups = [['general', 'set.general'], ['joc', 'set.joc'], ['quality', 'set.quality'], ['mv', 'set.mvSection'], ['save', 'set.save'], ['naming', 'set.naming'], ['tags', 'set.tags'], ['cover', 'set.cover'], ['lyrics', 'set.lyrics']];
     root.querySelector('#toc').replaceChildren(...groups.map(([id, key]) => {
       const a = el('a', { href: `#${id}`, className: 'set-toc-link', textContent: t(key) });
       a.addEventListener('click', (e) => { e.preventDefault(); root.querySelector(`#${id}`).scrollIntoView({ behavior: 'smooth', block: 'start' }); });
@@ -380,13 +432,17 @@ export function mount({ root, signal, onLangChange, toast }) {
     for (const fn of controls) fn(v);
   }
 
-  const off = prefs.onChange((section) => { if (section === 'download') sync(); });
+  const off = prefs.onChange((section) => {
+    if (section === 'download') sync();
+    if (section === 'joc') syncJoc();
+  });
   signal.addEventListener('abort', off, { once: true });
   const offDl = downloads.onChange(() => {
     const center = host.querySelector('.set-footer .set-btn:not(.set-btn-danger)');
     if (center) center.hidden = !downloads.jobs.length;
   });
   signal.addEventListener('abort', offDl, { once: true });
-  onLangChange(() => { document.title = `${t('set.title')} · am-hook`; render(); });
+  onLangChange(() => { document.title = `${t('set.title')} · am-hook`; renderJoc(); render(); });
+  renderJoc();
   render();
 }

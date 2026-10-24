@@ -1,6 +1,6 @@
 <div class="page set-page">
   <main>
-    <!-- 设置中心（侧边栏「排行榜」下方的「设置」）：通用设置沿用导航底部的选择面板；下载设置由 settings.mjs 按 prefs.mjs 渲染 -->
+    <!-- 设置中心（侧边栏「排行榜」下方的「设置」）：通用设置沿用导航底部的选择面板；JOC 对象渲染与下载设置由 settings.mjs 按 prefs.mjs 渲染 -->
     <header class="set-head">
       <h1 class="set-title" data-i18n="set.title"></h1>
       <p class="set-intro" data-i18n="set.intro"></p>
@@ -35,6 +35,8 @@
       </div>
     </section>
 
+    <!-- JOC 对象渲染（E-AC-3 Dolby Atmos 的播放方式），settings.mjs 按 prefs.mjs 的 joc 分组渲染 -->
+    <div id="playback"></div>
     <div id="download"></div>
   </main>
 </div>

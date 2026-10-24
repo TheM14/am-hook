@@ -1,0 +1,13 @@
+[package]
+name = "joc-wasm"
+version = "0.1.0"
+edition = "2021"
+license = "AGPL-3.0-only OR MIT"
+description = "Browser (wasm32-unknown-unknown) build of joc-core, used by joc-decode-worker.js"
+
+# 构建：scripts/build-wasm.sh -> src/ui/joc.wasm
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+joc-core = { path = "../joc-core" }
