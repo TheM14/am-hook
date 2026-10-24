@@ -111,8 +111,9 @@ const amllTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
           await page.locator('.player-track').click();
           await page.locator('#lyrics-overlay:not([hidden])').waitFor();
           assert(await page.locator('#lyrics-overlay').evaluate(el => el.classList.contains('lyrics-hidden')), 'no lyrics: the view opens without lyrics');
-          assert(await page.locator('.lyric-panel').isHidden());
+          await page.locator('.lyric-panel').waitFor({ state: 'hidden' });
           assert(await page.locator('#lyrics-overlay .player-lyrics').isHidden(), 'no lyrics: no lyrics toggle');
+          assert(await page.locator('#lyrics-overlay.cover-mode').count(), 'no lyrics: cover mode');
           assert(await page.locator('.lyrics-fav').isVisible() && await page.locator('.lyrics-more').isVisible(), 'favorite and More buttons');
           assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `overflow at ${width}`);
           assert.deepEqual(lyricRequests, ['/lyrics/123456789'], 'the 404 is not refetched');
@@ -134,25 +135,31 @@ const amllTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
         const activeLines = () => page.evaluate(sel => [...document.querySelectorAll(sel)]
           .filter(el => [el, ...el.querySelectorAll('*')].some(n => [...n.classList].some(c => c.endsWith('_active'))))
           .map(el => el.querySelector('[class*="_lyricMainLine"]').textContent.trim()), lineSel);
-        assert.equal(await page.locator('.lyrics-title .marquee-line__text').first().textContent(), 'Lyric song');
-        assert(await page.locator('.lyrics-title .marquee-line.inactive').count(), 'a short title does not scroll');
+        // 横向布局（宽大于高）与竖向布局（高大于宽，显示歌词时标题在小封面旁）
+        const vertical = width < 844;
+        assert.equal(await page.locator(vertical ? '#lyrics-overlay.layout-v' : '#lyrics-overlay.layout-h').count(), 1, 'layout follows the aspect ratio');
+        const headSel = vertical ? '.lyrics-head--compact' : '.lyrics-head--main';
+        const titleSel = `${headSel} .lyrics-title`;
+        assert(await page.locator(`${headSel} .lyrics-fav`).count(), 'favorite and More follow the visible title row');
+        assert.equal(await page.locator(`${titleSel} .marquee-line__text`).first().textContent(), 'Lyric song');
+        assert(await page.locator(`${titleSel} .marquee-line.inactive`).count(), 'a short title does not scroll');
         // 歌名过长时保持一行并滚动（同播放条的滚动字幕），不换行
-        const titleHeight = (await page.locator('.lyrics-title').boundingBox()).height;
-        await page.evaluate(() => {
-          const text = document.querySelector('.lyrics-title .marquee-line__text');
+        const titleHeight = (await page.locator(titleSel).boundingBox()).height;
+        await page.evaluate(([sel, head]) => {
+          const text = document.querySelector(`${sel} .marquee-line__text`);
           text.textContent = 'A very long song title that cannot possibly fit on a single line of the full-screen player';
           // 标题行宽度变化时重新判断是否放得下（ResizeObserver）
-          const head = document.querySelector('.lyrics-head');
-          head.style.maxWidth = `${head.getBoundingClientRect().width - 1}px`;
-        });
-        await page.locator('.lyrics-title .marquee-line.active').waitFor({ timeout: 2000 });
-        assert(Math.abs((await page.locator('.lyrics-title').boundingBox()).height - titleHeight) < 1, 'a long title stays on one line');
+          const row = document.querySelector(head);
+          row.style.maxWidth = `${row.getBoundingClientRect().width - 1}px`;
+        }, [titleSel, headSel]);
+        await page.locator(`${titleSel} .marquee-line.active`).waitFor({ timeout: 2000 });
+        assert(Math.abs((await page.locator(titleSel).boundingBox()).height - titleHeight) < 1, 'a long title stays on one line');
         await page.screenshot({ path: `target/ui-lyrics-long-title-${width}.png` });
-        await page.evaluate(() => {
-          document.querySelector('.lyrics-title .marquee-line__text').textContent = 'Lyric song';
-          document.querySelector('.lyrics-head').style.maxWidth = '';
-        });
-        await page.locator('.lyrics-title .marquee-line.inactive').waitFor({ timeout: 2000 });
+        await page.evaluate(([sel, head]) => {
+          document.querySelector(`${sel} .marquee-line__text`).textContent = 'Lyric song';
+          document.querySelector(head).style.maxWidth = '';
+        }, [titleSel, headSel]);
+        await page.locator(`${titleSel} .marquee-line.inactive`).waitFor({ timeout: 2000 });
         // 翻译菜单（同 music.apple.com）：点按钮弹出，歌曲没有的一项置灰，Esc 只关闭菜单
         const openMenu = async () => {
           await page.locator('.lyrics-translation-button').click();
@@ -175,7 +182,7 @@ const amllTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
         await openMenu();
         await page.locator('[data-option="translation"]').click();
         assert(await page.locator('.lyrics-menu').isHidden(), 'choosing an option closes the menu');
-        assert.equal(await page.locator('.lyrics-translation-button .invertible-mask--inverted').count(), 1, 'the icon inverts while translations are shown');
+        assert.equal(await page.locator('.lyrics-translation-button .amll-toggle-icon--on').count(), 1, 'the icon inverts while translations are shown');
         await openMenu();
         assert.equal(await page.locator('[data-option="translation"]').getAttribute('title'), await page.evaluate(() => AmI18n.t('lyrics.hideTranslation')));
         await page.keyboard.press('Escape');
@@ -313,12 +320,17 @@ const amllTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
         assert.equal(await lyricToggle.getAttribute('aria-label'), 'Hide lyrics');
         await lyricToggle.click();
         assert(await page.locator('#lyrics-overlay.lyrics-hidden').count(), 'lyrics hidden');
-        assert(await page.locator('.lyric-panel').isHidden() && await page.locator('.lyrics-translation-menu').isHidden());
+        await page.locator('.lyric-panel').waitFor({ state: 'hidden' });
+        assert(await page.locator('.lyrics-translation-menu').isHidden());
+        assert(await page.locator('#lyrics-overlay.cover-mode').count(), 'cover mode');
         assert.equal(await lyricToggle.getAttribute('aria-label'), 'Show lyrics');
         assert.equal(await page.evaluate(() => localStorage.getItem('am-hook:lyrics-hidden')), '1');
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `overflow at ${width} without lyrics`);
-        // 这里的歌曲没有封面（.lyrics-art 隐藏），检查标题行与控件
-        const head = await page.locator('.lyrics-head').boundingBox();
+        // 这里的歌曲没有封面（.lyrics-art 隐藏），检查标题行与控件；等标题行移入、左栏移到中间
+        await page.waitForTimeout(900);
+        const head = await page.locator('.lyrics-head--main').boundingBox();
+        const cover = await page.locator('.lyrics-cover').boundingBox();
+        assert(Math.abs(cover.x + cover.width / 2 - width / 2) < 2, `the cover is centered: ${JSON.stringify(cover)}`);
         const hiddenBar = await page.locator('#player').boundingBox();
         assert(hiddenBar.y + hiddenBar.height <= 844 && head.y >= 0 && head.y + head.height <= hiddenBar.y, 'title and controls fit on screen');
         await page.screenshot({ path: `target/ui-lyrics-hidden-${width}.png` });
@@ -327,30 +339,37 @@ const amllTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
         await page.locator(lineSel).filter({ hasText: 'Third line' }).waitFor({ state: 'visible', timeout: 2000 });
         assert.equal(await page.evaluate(() => localStorage.getItem('am-hook:lyrics-hidden')), null);
 
-        // 待播清单开关只在手机的界面里：清单占据歌词的位置，随机 / 重复在清单标题旁；Esc 或歌词开关回到歌词
+        // 待播清单开关在界面底部：清单占据歌词的位置；竖向布局的随机 / 重复在清单标题旁，横向布局的在播放控件里；Esc 或歌词开关回到歌词
         const queueToggle = page.locator('#lyrics-overlay .player-queue');
-        if (width === 390) {
-          assert(await page.locator('#lyrics-overlay .player-shuffle').isHidden(), 'no shuffle among the phone controls');
-          await queueToggle.click();
-          await page.locator('#queue-panel.in-lyrics').waitFor();
-          assert(await page.locator('#lyrics-overlay.queue-open').count(), 'queue replaces the lyrics');
-          assert(await page.locator('#queue-panel .player-shuffle').isVisible() && await page.locator('#queue-panel .player-repeat').isVisible(), 'shuffle and repeat are in the queue');
-          const queue = await page.locator('#queue-panel').boundingBox();
-          const controls = await page.locator('#player').boundingBox();
-          const title = await page.locator('.lyrics-side').boundingBox();
-          assert(queue.y >= title.y + title.height - 1 && queue.y + queue.height <= controls.y + 1, 'queue sits between the title row and the controls');
-          await page.screenshot({ path: 'target/ui-lyrics-queue-390.png' });
-          await page.keyboard.press('Escape');
-          assert(await page.locator('#queue-panel').isHidden() && await page.locator('#lyrics-overlay').isVisible(), 'Escape closes only the queue');
-          await queueToggle.click();
-          await lyricToggle.click();
-          assert(await page.locator('#queue-panel').isHidden() && await page.locator('#lyrics-overlay.queue-open, #lyrics-overlay.lyrics-hidden').count() === 0, 'the lyrics toggle returns to the lyrics');
+        assert.equal(await page.locator('#lyrics-overlay .player-shuffle').isVisible(), !vertical, 'shuffle among the controls only in the horizontal layout');
+        await queueToggle.click();
+        await page.locator('#queue-panel.in-lyrics').waitFor();
+        assert(await page.locator('#lyrics-overlay.queue-open').count(), 'queue replaces the lyrics');
+        await page.locator('.lyric-panel').waitFor({ state: 'hidden' });
+        assert.equal(await page.locator('#queue-panel .player-shuffle').isVisible(), vertical, 'shuffle and repeat in the queue only in the vertical layout');
+        await page.waitForTimeout(900); // 清单滑入、标题行移入的动画
+        const queue = await page.locator('#queue-panel').boundingBox();
+        const controls = await page.locator('#player').boundingBox();
+        if (vertical) {
+          const title = await page.locator('.lyrics-head--compact').boundingBox();
+          assert(queue.y >= title.y + title.height - 1 && queue.y + queue.height <= controls.y + 1, `queue sits between the title row and the controls: ${JSON.stringify({ queue, title, controls })}`);
         } else {
-          assert(await queueToggle.isHidden(), 'no queue toggle in the desktop view');
+          assert(!overlaps(queue, controls) && queue.x >= width * 0.4, 'queue takes the lyrics column');
         }
+        await page.screenshot({ path: `target/ui-lyrics-queue-${width}.png` });
+        await page.keyboard.press('Escape');
+        assert(await page.locator('#queue-panel').isHidden() && await page.locator('#lyrics-overlay').isVisible(), 'Escape closes only the queue');
+        await queueToggle.click();
+        await page.locator('#queue-panel.in-lyrics').waitFor();
+        await queueToggle.click();
+        assert(await page.locator('#queue-panel').isHidden(), 'the queue toggle closes the queue');
+        await queueToggle.click();
+        await lyricToggle.click();
+        assert(await page.locator('#queue-panel').isHidden() && await page.locator('#lyrics-overlay.queue-open, #lyrics-overlay.lyrics-hidden').count() === 0, 'the lyrics toggle returns to the lyrics');
 
         await page.keyboard.press('Escape');
-        assert(await page.locator('#lyrics-overlay').isHidden());
+        await page.locator('#lyrics-overlay').waitFor({ state: 'hidden' });
+        assert(await page.locator('#player .player-lyrics').count() && await page.locator('#player .player-queue').count(), 'the toggles return to the player bar');
         assert(await page.locator('.player-lyrics').evaluate(el => el === document.activeElement), 'focus returns to the lyrics button');
         await page.locator('.player-track').click();
         await page.locator('#lyrics-overlay:not([hidden])').waitFor();

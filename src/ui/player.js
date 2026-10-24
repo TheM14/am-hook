@@ -1394,7 +1394,9 @@
       doc.addEventListener('pointerdown', (e) => {
         if (!this.$('.player-notice').hidden && !e.target.closest('.player-mode, .player-notice')) this.closeNotice();
         if (!this.$('.player-volume').contains(e.target)) this.$('.player-volume').classList.remove('expanded');
-        if (this.queuePanel.hidden || this.queuePanel.contains(e.target) || this.root.contains(e.target)) return;
+        // data-queue-keep：全屏播放界面底部的开关（待播清单开关移到了那里，见 lyrics/panel.mjs），点击时不先收起清单
+        if (this.queuePanel.hidden || this.queuePanel.contains(e.target) || this.root.contains(e.target)
+          || e.target.closest?.('[data-queue-keep]')) return;
         this.closeQueue();
       });
       doc.addEventListener('keydown', (e) => {
@@ -1598,7 +1600,7 @@
       if (this.queuePanel.hidden) return;
       this.queuePanel.hidden = true;
       this.queuePanel.classList.remove('in-lyrics');
-      this.queuePanel.style.top = '';
+      Object.assign(this.queuePanel.style, { top: '', left: '', width: '' });
       this.root.ownerDocument.querySelector('.lyrics-overlay.queue-open')?.classList.remove('queue-open');
       this.queueButton.setAttribute('aria-expanded', 'false');
       this.queueSelected = null;
@@ -1607,8 +1609,8 @@
 
     /**
      * 面板右边缘与播放条对齐，底部在播放条上方；播放条隐藏时收起。
-     * 播放条并入歌词界面时：手机上（界面里有待播清单开关）同 music.apple.com，清单占据标题行以下、控件以上的区域
-     * （.queue-open / .in-lyrics 的样式见 app.css）；桌面的歌词界面没有这个开关，收起。
+     * 播放条并入全屏播放界面时（待播清单开关也移到界面里，见 lyrics/panel.mjs），清单占据歌词的位置
+     * （界面里的 .lyrics-queue-slot；.queue-open / .in-lyrics 的样式见 app.css）；开关不可见时收起。
      */
     placeQueue() {
       if (this.queuePanel.hidden) return;
@@ -1617,13 +1619,19 @@
       const win = this.root.ownerDocument.defaultView;
       this.queuePanel.classList.toggle('in-lyrics', !!host);
       if (host) {
+        // 先加 queue-open：界面据此切换布局（如竖向布局改为小封面），再按切换后的位置摆放
         host.classList.add('queue-open');
-        this.queuePanel.style.right = '0px';
-        this.queuePanel.style.top = `${host.querySelector('.lyrics-side').getBoundingClientRect().bottom}px`;
-        this.queuePanel.style.bottom = `${win.innerHeight - this.root.getBoundingClientRect().top}px`;
+        const slot = host.querySelector('.lyrics-queue-slot').getBoundingClientRect();
+        const width = this.root.ownerDocument.documentElement.clientWidth;
+        Object.assign(this.queuePanel.style, {
+          top: `${slot.top}px`, bottom: `${win.innerHeight - slot.bottom}px`,
+          left: `${slot.left}px`, right: `${width - slot.right}px`, width: 'auto',
+        });
         return;
       }
       this.queuePanel.style.top = '';
+      this.queuePanel.style.left = '';
+      this.queuePanel.style.width = '';
       const bar = this.root.getBoundingClientRect();
       this.queuePanel.style.right = `${Math.max(12, win.innerWidth - bar.right)}px`;
       this.queuePanel.style.bottom = `${win.innerHeight - bar.top + 10}px`;
@@ -2086,6 +2094,8 @@
       if (!a.paused) this.loading = false;
       const btn = this.$('.player-toggle');
       btn.innerHTML = waiting ? ICON_LOADING : (a.paused ? ICON_PLAY : ICON_PAUSE);
+      // 全屏播放界面按它换成 AMLL 的图标（见 app.css）
+      btn.dataset.state = waiting ? 'loading' : (a.paused ? 'play' : 'pause');
       btn.setAttribute('aria-label', t(a.paused ? 'player.play' : 'player.pause'));
     }
 
@@ -2108,7 +2118,8 @@
       }
       this.$('.seek-buffer').style.width = `${d ? Math.min(1, bufEnd / d) * 100 : 0}%`;
       this.$('.time-cur').textContent = formatTime(t);
-      this.$('.time-total').textContent = formatTime(d);
+      // showRemaining：右侧显示剩余时间（全屏播放界面里点总时长切换，见 lyrics/panel.mjs）
+      this.$('.time-total').textContent = this.showRemaining && d ? `-${formatTime(d - Math.min(t, d))}` : formatTime(d);
       const seek = this.$('.seek');
       seek.setAttribute('aria-valuemax', String(Math.round(d)));
       seek.setAttribute('aria-valuenow', String(Math.round(t)));

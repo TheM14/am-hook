@@ -190,33 +190,52 @@
 
   <div class="toast" id="toast" role="status" hidden></div>
 
+  <!--
+    全屏播放界面，布局照 AMLL 的 react-full（PrebuiltLyricPlayer / AutoLyricLayout）：宽大于高时为横向布局（左封面与控件、右歌词），
+    否则为竖向布局（显示歌词时顶部为小封面与歌名，隐藏时为大封面）。lyrics-vl / lyrics-vc 是竖向布局的两套网格，
+    横向布局时为 display: contents；lyrics-phony-* 只用于测量竖向布局里封面的目标位置（见 lyrics/panel.mjs）。
+  -->
   <section class="lyrics-overlay" id="lyrics-overlay" role="dialog" data-i18n-attr="aria-label=lyrics.title" hidden>
     <canvas class="lyrics-backdrop" aria-hidden="true" hidden></canvas>
     <div class="lyrics-grain" aria-hidden="true"></div>
+    <div class="lyrics-shade" aria-hidden="true"></div>
     <div class="lyrics-stage">
-      <div class="lyrics-side">
-        <img class="lyrics-art" alt="" hidden>
-        <div class="lyrics-head">
-          <div class="lyrics-meta">
-            <h2 class="lyrics-title"></h2>
-            <p class="lyrics-artist"></p>
-          </div>
-          <!-- 喜爱与「更多」（同 music.apple.com 全屏播放界面标题旁的按钮），由 app.mjs 填入 -->
+      <!-- 收起按钮（AMLL 的 ControlThumb）：平时是一条短横，鼠标移上去变成跟随指针的 ✕；手机上也可以向下拖动收起 -->
+      <div class="lyrics-thumb">
+        <button class="lyrics-close" type="button" data-i18n-attr="aria-label=lyrics.close,title=lyrics.close"><span></span><span></span></button>
+      </div>
+      <div class="lyrics-vl">
+        <div class="lyrics-phony-small" aria-hidden="true"></div>
+        <div class="lyrics-head lyrics-head--compact">
+          <div class="lyrics-meta"><h2 class="lyrics-title"></h2><p class="lyrics-artist"></p></div>
+        </div>
+        <div class="lyric-panel"></div>
+        <!-- 待播清单打开时占据这块区域（player.js 的 placeQueue） -->
+        <div class="lyrics-queue-slot" aria-hidden="true"></div>
+      </div>
+      <div class="lyrics-vc">
+        <div class="lyrics-phony-big" aria-hidden="true"></div>
+        <div class="lyrics-head lyrics-head--main">
+          <div class="lyrics-meta"><h2 class="lyrics-title"></h2><p class="lyrics-artist"></p></div>
+          <!-- 喜爱与「更多」由 app.mjs 填入；竖向布局显示歌词时移到上面的小标题行 -->
           <div class="lyrics-actions"></div>
         </div>
       </div>
-      <div class="lyric-panel"></div>
+      <div class="lyrics-cover"><img class="lyrics-art" alt="" hidden></div>
+      <div class="lyrics-dock">
+        <!-- 播放条并入这里（进度条、时间与音质、播放控件、音量） -->
+        <div class="lyrics-controls"></div>
+        <!-- 底部开关：歌词开关与待播清单开关从播放条移过来；空位是 react-full 里 AirPlay 按钮的位置 -->
+        <div class="lyrics-toggles">
+          <span class="lyrics-toggles-gap"></span>
+        </div>
+      </div>
+      <!-- 歌词选项（同 music.apple.com 全屏歌词的翻译按钮）：横向布局在歌词区右上角，竖向布局在歌词区左下角、控件上方 -->
       <div class="lyrics-translation-menu" hidden>
         <button class="lyrics-translation-button" type="button" aria-haspopup="menu" aria-expanded="false" data-i18n-attr="aria-label=lyrics.translationMenu,title=lyrics.translationMenu"></button>
       </div>
-      <div class="lyrics-controls"></div>
+      <button class="lyrics-follow" type="button" data-i18n="lyrics.follow" hidden></button>
     </div>
-    <button class="lyrics-follow" type="button" data-i18n="lyrics.follow" hidden></button>
-    <button class="lyrics-close" type="button" data-i18n-attr="aria-label=lyrics.close,title=lyrics.close">
-      <!-- 桌面为 ✕，手机上为顶部居中的下拉把手（见 app.css） -->
-      <svg class="lyrics-close-handle" viewBox="0 0 90.64 30.831" aria-hidden="true"><path d="m4.486 14.456 32.352 13.938c3.156 1.387 5.552 2.437 8.48 2.437 2.932 0 5.357-1.05 8.484-2.437l32.353-13.938c2.612-1.192 4.485-3.514 4.485-6.42C90.64 3.184 87.085 0 83 0c-2.279 0-5.172 1.325-7.569 2.42L42.845 16.358h4.95L15.21 2.42C12.812 1.325 9.948 0 7.636 0 3.55 0 0 3.184 0 8.036c0 2.906 1.873 5.228 4.486 6.42"/></svg>
-      <svg class="lyrics-close-x" viewBox="0 0 18 18" aria-hidden="true"><path d="M1.2 18C.6 18 0 17.5 0 16.8c0-.4.1-.6.4-.8l7-7-7-7c-.3-.2-.4-.5-.4-.8C0 .5.6 0 1.2 0c.3 0 .6.1.8.3l7 7 7-7c.2-.2.5-.3.8-.3.6 0 1.2.5 1.2 1.2 0 .3-.1.6-.4.8l-7 7 7 7c.2.2.4.5.4.8 0 .7-.6 1.2-1.2 1.2-.3 0-.6-.1-.8-.3l-7-7-7 7c-.2.1-.5.3-.8.3"/></svg>
-    </button>
     <button class="lyrics-menu-scrim" type="button" tabindex="-1" aria-hidden="true" hidden></button>
     <ul class="lyrics-menu" role="menu" data-i18n-attr="aria-label=lyrics.translationMenu" hidden></ul>
   </section>
