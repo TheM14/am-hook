@@ -1,5 +1,12 @@
 # CHANGELOG
 
+## v0.6.1 (2026-10-24)
+
+### New
+- ✨ Dolby Atmos object rendering (JOC, from [am-hook-joc](https://github.com/TheM14/am-hook-joc)), off by default: pick Speaker 2.0 or Binaural under Settings → JOC object rendering, and E-AC-3 (Dolby Atmos) songs are rendered in the browser, rebuilding 15 objects plus LFE from the stream's JOC and object metadata and rendering them to stereo; Binaural uses the 20 HRTFs of the University of York SADIE II database (D2 by default) with early reflections and a room. Mode, HRTF and output attenuation apply to the playing song at once, also switchable in the full-screen player's quality panel; the player warns once per song if the output clips at the current volume
+- ✨ Spatial scene (quality panel → "Spatial scene", binaural): a 3D view of a virtual head among the 15 objects, which move with their live positions and glow with their level. Drag to turn your head and every object's HRTF and room reflections follow the new orientation, audible about 0.15 s later; walk around the room (objects get louder as you approach), first-person view, click an orb to solo / mute it, focus on the objects you face, exaggerate the elevation, tour, or turn with the gyroscope on a phone
+- ⚡ With AudioWorklet available (HTTPS or localhost), JOC renders frame by frame along the playback position, only ~0.1 s ahead, so interactive changes take effect at once; otherwise it still renders fragments ahead
+
 ## v0.6.0 (2026-10-24)
 
 ### New
