@@ -621,8 +621,8 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
   function sleep() {
     clearTimeout(idleTimer);
     if (!canSleep()) return;
-    // 菜单或待播清单打开时保持显示
-    if (!menu.hidden || root.classList.contains('queue-open')) { wake(); return; }
+    // 菜单、音质详情或待播清单打开时保持显示
+    if (!menu.hidden || $('.quality-panel')?.hidden === false || root.classList.contains('queue-open')) { wake(); return; }
     root.classList.add('controls-idle');
   }
 
@@ -1146,7 +1146,7 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
   toggle.addEventListener('click', onToggle);
   // 点击播放条展开界面，按上次的选择显示或隐藏歌词；歌词随后取回
   bar.addEventListener('click', (event) => {
-    if (open || !adamId || event.target.closest('button, input, a, [role="slider"], .player-volume, .player-msg, .player-notice')) return;
+    if (open || !adamId || event.target.closest('button, input, a, [role="slider"], .player-volume, .player-msg')) return;
     show();
     fetchLyrics();
   });

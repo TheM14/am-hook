@@ -223,7 +223,7 @@
       </div>
       <div class="lyrics-cover"><img class="lyrics-art" alt="" hidden></div>
       <div class="lyrics-dock">
-        <!-- 播放条并入这里（进度条、时间与音质、播放控件、音量） -->
+        <!-- 播放条并入这里（进度条、时间与音质标志、播放控件、音量） -->
         <div class="lyrics-controls"></div>
         <!-- 底部开关：歌词开关与待播清单开关从播放条移过来；空位是 react-full 里 AirPlay 按钮的位置 -->
         <div class="lyrics-toggles">
@@ -238,6 +238,8 @@
     </div>
     <button class="lyrics-menu-scrim" type="button" tabindex="-1" aria-hidden="true" hidden></button>
     <ul class="lyrics-menu" role="menu" data-i18n-attr="aria-label=lyrics.translationMenu" hidden></ul>
+    <!-- 音质详情（player.js 的 renderQualityPanel）：当前音质的规格与播放方式，以及这首歌的其他音质，点击切换 -->
+    <div class="quality-panel" id="quality-panel" role="dialog" data-i18n-attr="aria-label=player.qualityInfo" hidden></div>
   </section>
 
   <!-- 下载中心（download-center.mjs）：与播放条一样常驻，位于播放条上方；点击展开各下载任务的列表 -->
@@ -295,7 +297,8 @@
           <span class="player-title"></span>
           <span class="player-sub"></span>
         </div>
-        <button class="player-mode" type="button" aria-controls="player-notice" aria-expanded="false" hidden></button>
+        <!-- 音质标志：只在全屏播放界面里显示（进度条下方居中），点击弹出音质详情（#quality-panel） -->
+        <button class="player-mode" type="button" aria-controls="quality-panel" aria-haspopup="dialog" aria-expanded="false" hidden></button>
       </div>
       <div class="player-progress">
         <span class="time time-cur">0:00</span>
@@ -319,7 +322,6 @@
         </button>
       </div>
     </div>
-    <p class="player-notice" id="player-notice" role="status" hidden></p>
     <p class="player-msg" hidden></p>
   </div>
 

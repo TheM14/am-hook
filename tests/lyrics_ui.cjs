@@ -88,15 +88,13 @@ const amllTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
           window.fakeTransport = { currentTime: 0, paused: false, play() { this.paused = false; return Promise.resolve(); }, pause() { this.paused = true; } };
           // 歌词界面跟随正在播放的歌曲（current.track）
           const { player } = window.AmApp;
-          player.current = { id: 'fake', track: '123456789', country: 'us', mode: 'mse', title: 'Lyric song' };
+          player.current = { id: 'fake', track: '123456789', country: 'us', mode: 'mse', title: 'Lyric song', codecs: 'mp4a.40.2', badge: 'lossy', label: 'AAC · 256 kbps' };
           player.transport = () => window.fakeTransport;
           player.emit();
           const bar = document.getElementById('player');
           bar.hidden = false;
           document.body.classList.add('has-player');
-          const notice = bar.querySelector('.player-notice');
-          notice.textContent = 'Playback notice';
-          notice.hidden = false;
+          player.renderMode();
         });
         await page.locator('.player-lyrics:not([hidden])').waitFor();
         await page.waitForTimeout(300);
@@ -292,7 +290,21 @@ const amllTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
         if (width >= 484) assert(!overlaps(panel, bar), 'lyrics and the player controls must not overlap');
         assert(bar.y + bar.height <= 844, 'player controls stay on screen');
         assert(await page.locator('#lyrics-overlay .lyrics-controls #player').count(), 'the player moves into the lyrics view');
-        assert(await page.locator('.player-notice').isHidden(), 'playback notices are hidden in the lyrics view');
+        // 音质标志在进度条下方，点击弹出音质详情，列出这首歌的音质（fixture 只有 AAC 256）；Esc 只收起详情
+        await page.mouse.move(width / 2, 300);
+        const qualityBadge = page.locator('#lyrics-overlay .player-mode');
+        assert(await qualityBadge.locator('.q-icon--lossy').isVisible(), 'the quality badge shows the AAC icon');
+        await qualityBadge.click();
+        await page.locator('.quality-option').first().waitFor();
+        const qualityPanel = await page.locator('.quality-panel').boundingBox();
+        assert(qualityPanel.x >= 0 && qualityPanel.x + qualityPanel.width <= width && qualityPanel.y >= 0 && qualityPanel.y + qualityPanel.height <= 844, 'the quality panel fits the viewport');
+        assert.equal(await page.locator('.quality-option').count(), 1, 'lists the qualities of the song');
+        assert.match(await page.locator('.quality-panel-specs').textContent(), /MSE · AAC-LC/, 'shows the playback method');
+        await page.waitForTimeout(300);
+        await page.screenshot({ path: `target/ui-lyrics-quality-${width}.png` });
+        await page.keyboard.press('Escape');
+        assert(await page.locator('.quality-panel').isHidden(), 'Escape closes the quality panel');
+        assert(await page.locator('#lyrics-overlay').isVisible(), 'Escape keeps the lyrics view open while closing the quality panel');
         await page.screenshot({ path: `target/ui-lyrics-${width}.png` });
 
         // 标题旁的喜爱与「更多」（同 music.apple.com 全屏播放界面）：喜爱正在播放的歌曲并加入资料库

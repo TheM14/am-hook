@@ -86,8 +86,12 @@
     return t('player.hintDownload');
   }
 
-  function modeLabel(mode) {
-    return mode === 'ec3' ? t('player.pcmMode') : mode.toUpperCase();
+  /** 建一个元素：className 可为空，children 中的空值跳过 */
+  function el(doc, tag, className, ...children) {
+    const node = doc.createElement(tag);
+    if (className) node.className = className;
+    node.append(...children.filter((child) => child != null && child !== false && child !== ''));
+    return node;
   }
 
   /* ---------- 播放队列的曲目：逐首解析 master，选浏览器能播放的最高音质 ---------- */
@@ -102,9 +106,37 @@
       const spec = [v.bit_depth && `${v.bit_depth}-bit`, v.sample_rate && `${(v.sample_rate / 1000).toFixed(1).replace(/\.0$/, '')} kHz`].filter(Boolean).join(' / ');
       return `ALAC${spec ? ' · ' + spec : ''}`;
     }
-    if (g.includes('atmos')) return 'Dolby Atmos';
+    if (g.includes('atmos')) {
+      // GROUP-ID 形如 atmos-2768：首位是版本号，后三位才是码率（768 kbps）
+      const raw = Number((g.match(/atmos-(\d+)/) || [])[1]) || 0;
+      const kbps = raw >= 1000 ? raw % 1000 : raw;
+      return `Dolby Atmos${kbps ? ' · ' + kbps + ' kbps' : ''}`;
+    }
     const kbps = Number((g.match(/stereo-(\d+)/) || [])[1]) || 0;
     return `${g.includes('he-') ? 'HE-AAC' : 'AAC'}${kbps ? ' · ' + kbps + ' kbps' : ''}`;
+  }
+
+  /** 变体名称后的附加标签（双耳渲染、全景声的立体声缩混） */
+  function variantTags(v) {
+    const g = v.group_id.toLowerCase();
+    return [g.includes('binaural') && t('q.binaural'), g.includes('downmix') && t('q.downmix')].filter(Boolean);
+  }
+
+  /** CODECS 的通用名称：alac → ALAC，ec-3 → E-AC-3，mp4a.40.2 → AAC-LC 等 */
+  function codecName(codecs) {
+    const c = String(codecs || '').toLowerCase();
+    if (c === 'alac') return 'ALAC';
+    if (c === 'ec-3' || c === 'ec3') return 'E-AC-3';
+    if (c === 'ac-3') return 'AC-3';
+    if (c === 'mp4a.40.2') return 'AAC-LC';
+    if (c === 'mp4a.40.5') return 'HE-AAC';
+    if (c === 'mp4a.40.29') return 'HE-AAC v2';
+    return codecs || '';
+  }
+
+  function formatRate(bps) {
+    if (!bps) return '';
+    return bps >= 1e6 ? `${(bps / 1e6).toFixed(2)} Mbps` : `${Math.round(bps / 1000)} kbps`;
   }
 
   /**
@@ -257,21 +289,33 @@
     }
   }
 
+  /** 音质从高到低：ALAC、Atmos、AAC、HE-AAC，同类按码率 */
+  function sortVariants(variants) {
+    return variants.slice().sort((a, b) => rankVariant(a) - rankVariant(b) || (b.bandwidth || 0) - (a.bandwidth || 0));
+  }
+
+  /** 某个变体对应的播放条目字段（换音质时与原条目的歌曲信息合并） */
+  function variantItem(track, v) {
+    return {
+      id: `${track}:${v.group_id}`,
+      codecs: v.codecs,
+      m3u8Url: v.m3u8Url || v.url,
+      label: variantLabel(v),
+      badge: qualityBadge(v),
+      variant: v,
+    };
+  }
+
   async function resolveEntry(entry) {
     const { variants } = await global.AmWrapper.songMaster(entry.track);
-    const best = variants
-      .map((v) => ({ ...v, mode: detectMode(v.codecs) }))
-      .filter((v) => v.mode)
-      .sort((a, b) => rankVariant(a) - rankVariant(b) || (b.bandwidth || 0) - (a.bandwidth || 0))[0];
+    const best = sortVariants(variants).find((v) => detectMode(v.codecs));
     if (!best) throw Object.assign(new Error(t('album.noPlayable', { name: entry.name })), { noPlayable: true });
     return {
-      id: `${entry.track}:${best.group_id}`,
+      ...variantItem(entry.track, best),
+      // 这首歌的全部音质，全屏播放界面的音质详情里可切换
+      variants,
       track: entry.track,
       country: entry.country,
-      codecs: best.codecs,
-      m3u8Url: best.url,
-      label: variantLabel(best),
-      badge: qualityBadge(best),
       title: entry.name,
       artist: entry.artist,
       artists: entry.artists,
@@ -1105,7 +1149,7 @@
   const ICON_PAUSE = '<svg viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></svg>';
   const ICON_LOADING = '<svg class="spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"><path d="M12 3a9 9 0 1 0 9 9"/></svg>';
   const ICON_QUEUE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 6h11M4 11h11M4 16h7"/><path d="M16 14.5v5.5"/><circle cx="14" cy="20" r="2"/><path d="M16 14.5 20 13"/></svg>';
-  const ICON_INFO = '<svg viewBox="0 0 16 16" fill="currentColor" fill-rule="evenodd" aria-hidden="true"><path d="M8 1.5a6.5 6.5 0 1 1 0 13 6.5 6.5 0 0 1 0-13ZM8 4a1 1 0 1 0 0 2 1 1 0 0 0 0-2Zm-1.25 3.2v1h.65v2.6h-.65v1h2.5v-1H8.6V7.2Z"/></svg>';
+  const ICON_CHECK = '<svg class="quality-option-check" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5"/></svg>';
   const ICON_GRIP = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M5 8h14M5 12h14M5 16h14"/></svg>';
   const ICON_REMOVE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round"><path d="M7 12h10"/></svg>';
   const ICON_SHUFFLE = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 7h3c2.2 0 3.4 1 4.5 2.8l3 4.4C14.6 16 15.8 17 18 17h2.5"/><path d="M3 17h3c1.6 0 2.7-.6 3.6-1.6M14.4 8.6C15.3 7.6 16.4 7 18 7h2.5"/><path d="m18 4 3 3-3 3M18 14l3 3-3 3"/></svg>';
@@ -1131,12 +1175,16 @@
       this.nextSerial = 0;
       this.pcm = null;
       this.$ = (sel) => root.querySelector(sel);
-      // 歌名、「艺人 — 专辑」两行滚动字幕；音质标签在歌名右侧，不参与滚动
+      // 歌名、「艺人 — 专辑」两行滚动字幕
       const title = this.$('.player-title');
       const titleHost = Object.assign(root.ownerDocument.createElement('span'), { className: 'marquee marquee--primary' });
-      this.quality = Object.assign(root.ownerDocument.createElement('span'), { className: 'player-quality', hidden: true });
-      title.replaceChildren(titleHost, this.quality);
+      title.replaceChildren(titleHost);
       this.titleMarquee = new Marquee(titleHost);
+      // 音质详情（全屏播放界面里点音质标志弹出，见 renderQualityPanel）；app.html 把它放在全屏播放界面里
+      this.qualityPanel = root.ownerDocument.getElementById('quality-panel')
+        || root.appendChild(Object.assign(root.ownerDocument.createElement('div'), { className: 'quality-panel', hidden: true }));
+      /** 各歌曲的全部音质（track → Promise<variants>），条目里没带 variants 时（如歌曲页播放）打开详情才取 */
+      this.variantCache = new Map();
       this.$('.player-sub').classList.add('marquee', 'marquee--secondary');
       this.subMarquee = new Marquee(this.$('.player-sub'));
       this.listeners = new Set();
@@ -1187,12 +1235,6 @@
       const doc = this.root.ownerDocument;
       const link = (href, text) => (href ? Object.assign(doc.createElement('a'), { href, textContent: text }) : text);
       this.titleMarquee.set([link(c.href, c.title || t('player.unknownTitle'))]);
-      // 音质标志（Lossless / Hi-Res Lossless / Dolby Atmos / Spatial Audio / AAC），具体规格放在悬停提示里
-      const icon = qualityIcon(c.badge, doc);
-      if (icon) icon.removeAttribute('title');
-      this.quality.replaceChildren(...(icon ? [icon] : []));
-      this.quality.title = c.label || '';
-      this.quality.hidden = !icon;
       const artists = c.artist ? artistNodes(c.artist, c.artists, doc) : [];
       const album = c.album ? [link(c.albumHref, c.album)] : [];
       this.subMarquee.set([...artists, ...(artists.length && album.length ? [' — '] : []), ...album]);
@@ -1208,64 +1250,142 @@
     }
 
     /**
-     * 播放方式标志（LCD 右侧的小胶囊）。FLAC 转码、EC-3 解码为 PCM 时标志带 ⓘ，点击弹出说明（.player-notice）；
-     * 同一种说明只在第一次遇到时自动弹出（记在本地），之后不再打扰
+     * 音质标志：全屏播放界面里进度条下方居中的小框（AMLL 的 AudioQualityTag），显示 Hi-Res Lossless / Lossless /
+     * Dolby Atmos / Spatial Audio / AAC 图标，没有音质标签时显示播放方式；浮在页面底部的播放条不显示它（app.css）。
+     * 点击弹出音质详情（renderQualityPanel）
      */
     renderMode() {
       if (!this.current) return;
-      const ec3 = this.current.mode === 'ec3';
-      const channels = this.pcm && this.pcm.channels;
+      const c = this.current;
       const badge = this.$('.player-mode');
-      const label = ec3 && channels ? t('player.pcmChannels', { n: channels - 1 }) : modeLabel(this.current.mode);
-      const noticeKey = ec3 ? 'player.pcmNotice'
-        : this.current.mode === 'flac' ? 'player.flacNotice' : null;
-      badge.textContent = label;
-      if (noticeKey) badge.insertAdjacentHTML('beforeend', ICON_INFO);
+      const icon = qualityIcon(c.badge, this.root.ownerDocument);
+      if (icon) icon.removeAttribute('title');
+      const label = icon ? icon.getAttribute('aria-label') : this.modeText();
+      badge.replaceChildren(icon || label);
       badge.hidden = false;
-      badge.disabled = !noticeKey;
-      badge.title = t(noticeKey ? 'player.modeInfo' : 'player.mode');
-      badge.setAttribute('aria-label', `${t('player.mode')}: ${label}`);
-      this.$('.player-notice').textContent = noticeKey ? t(noticeKey) : '';
-      if (!noticeKey) { this.closeNotice(); return; }
-      this.placeNotice();
-      if (this.root.closest('.lyrics-controls')) return;
-      let seen = [];
-      try { seen = JSON.parse(localStorage.getItem('am-hook:seen-notices')) || []; } catch {}
-      if (seen.includes(noticeKey)) return;
-      try { localStorage.setItem('am-hook:seen-notices', JSON.stringify([...seen, noticeKey])); } catch {}
-      this.openNotice(true);
+      badge.title = t('player.qualityInfo');
+      badge.setAttribute('aria-label', `${t('player.qualityInfo')}: ${[label, c.label].filter(Boolean).join(' · ')}`);
+      this.renderQualityPanel();
     }
 
-    /** auto：自动弹出的说明 8 秒后收起（鼠标停在上面时等移开） */
-    openNotice(auto = false) {
-      const notice = this.$('.player-notice');
-      clearTimeout(this.noticeTimer);
-      notice.hidden = false;
+    /** 播放方式：MSE · ALAC（浏览器直接解码）、ALAC → FLAC（转码）、E-AC-3 → 5.1 PCM（解码为多声道 PCM） */
+    modeText() {
+      const c = this.current;
+      if (c.mode === 'flac') return 'ALAC → FLAC';
+      if (c.mode === 'ec3') {
+        const channels = this.pcm && this.pcm.channels;
+        return `E-AC-3 → ${channels ? t('player.pcmChannels', { n: channels - 1 }) : t('player.pcmMode')}`;
+      }
+      return `MSE · ${codecName(c.codecs)}`;
+    }
+
+    /**
+     * 音质详情：当前音质（图标、名称与位深 / 采样率）、播放方式及说明、码率与声道；下面是这首歌的全部音质，
+     * 点击切换（从当前位置继续，待播清单不变），当前浏览器不能播放的置灰
+     */
+    renderQualityPanel() {
+      const panel = this.qualityPanel;
+      const c = this.current;
+      if (panel.hidden || !c) return;
+      const doc = this.root.ownerDocument;
+      const v = c.variant || {};
+      const rows = [
+        [t('player.mode'), this.modeText()],
+        [t('player.bitrate'), formatRate(v.bandwidth)],
+        [t('player.channels'), v.channels ? String(v.channels).split('/')[0] : ''],
+      ].filter(([, value]) => value);
+      const note = t(c.mode === 'ec3' ? 'player.pcmNotice' : c.mode === 'flac' ? 'player.flacNotice' : 'player.mseNotice');
+      const list = el(doc, 'div', 'quality-panel-list');
+      panel.replaceChildren(
+        el(doc, 'div', 'quality-panel-head', qualityIcon(c.badge, doc), el(doc, 'span', 'quality-panel-label', c.label || codecName(c.codecs))),
+        el(doc, 'dl', 'quality-panel-specs', ...rows.flatMap(([key, value]) => [el(doc, 'dt', '', key), el(doc, 'dd', '', value)])),
+        el(doc, 'p', 'quality-panel-note', note),
+        el(doc, 'h3', 'quality-panel-heading', t('player.qualities')),
+        list);
+      const state = this.variantsOf(c);
+      if (state.loading) list.append(el(doc, 'p', 'quality-panel-status', t('player.qualitiesLoading')));
+      else if (state.error) list.append(el(doc, 'p', 'quality-panel-status', t('player.qualitiesFailed', { msg: state.error })));
+      for (const variant of sortVariants(state.variants || [])) {
+        const id = `${c.track}:${variant.group_id}`;
+        const playable = detectModes(variant.codecs).length > 0;
+        const spec = [codecName(variant.codecs), formatRate(variant.bandwidth), ...variantTags(variant), !playable && t('row.downloadOnly')];
+        const button = el(doc, 'button', 'quality-option',
+          qualityIcon(qualityBadge(variant), doc),
+          el(doc, 'span', 'quality-option-text',
+            el(doc, 'span', 'quality-option-name', variantLabel(variant)),
+            el(doc, 'span', 'quality-option-spec', spec.filter(Boolean).join(' · '))));
+        button.type = 'button';
+        button.disabled = !playable;
+        if (!playable) button.title = t('row.unsupported');
+        if (id === c.id) {
+          button.setAttribute('aria-current', 'true');
+          button.insertAdjacentHTML('beforeend', ICON_CHECK);
+        }
+        button.addEventListener('click', () => this.switchVariant(variant));
+        list.append(button);
+      }
+      this.placeQualityPanel();
+    }
+
+    /**
+     * 歌曲的全部音质：{ variants } / { loading } / { error }。条目带着 variants（队列播放）时直接用，
+     * 否则（如歌曲页播放）向 wrapper-lite 取一次 master，按歌曲缓存，取回后重绘详情
+     */
+    variantsOf(item) {
+      if (item.variants) return { variants: item.variants };
+      const cached = this.variantCache.get(item.track);
+      if (cached) return cached;
+      const state = { loading: true };
+      this.variantCache.set(item.track, state);
+      if (this.variantCache.size > 20) this.variantCache.delete(this.variantCache.keys().next().value);
+      global.AmWrapper.songMaster(item.track)
+        .then(({ variants }) => { state.variants = variants; }, (err) => { state.error = err.message || String(err); })
+        .finally(() => {
+          state.loading = false;
+          if (this.current && this.current.track === item.track) this.renderQualityPanel();
+        });
+      return state;
+    }
+
+    /** 换成同一首歌的另一种音质 */
+    switchVariant(variant) {
+      const c = this.current;
+      if (!c || c.id === `${c.track}:${variant.group_id}`) return;
+      const { mode, duration, ...item } = c;
+      this.play({ ...item, ...variantItem(c.track, variant) });
+    }
+
+    openQualityPanel() {
+      if (!this.current) return;
+      const state = this.variantCache.get(this.current.track);
+      if (state && state.error) this.variantCache.delete(this.current.track); // 上次没取到：重新取
+      this.qualityPanel.hidden = false;
       this.$('.player-mode').setAttribute('aria-expanded', 'true');
-      this.placeNotice();
-      if (!auto) return;
-      const later = (ms) => {
-        this.noticeTimer = setTimeout(() => (notice.matches(':hover') ? later(1500) : this.closeNotice()), ms);
-      };
-      later(8000);
+      this.renderQualityPanel();
     }
 
-    closeNotice() {
-      clearTimeout(this.noticeTimer);
-      this.$('.player-notice').hidden = true;
-      this.$('.player-mode').setAttribute('aria-expanded', 'false');
+    closeQualityPanel(focusBadge) {
+      if (this.qualityPanel.hidden) return;
+      this.qualityPanel.hidden = true;
+      const badge = this.$('.player-mode');
+      badge.setAttribute('aria-expanded', 'false');
+      if (focusBadge) badge.focus({ preventScroll: true });
     }
 
-    /** 说明气泡水平居中对准标志，不超出视口（左右各留 16px） */
-    placeNotice() {
-      const notice = this.$('.player-notice');
+    /** 详情浮在音质标志上方（放不下时在下方），水平居中对准标志，不超出视口（四周各留 16px）；标志不可见时收起 */
+    placeQualityPanel() {
+      const panel = this.qualityPanel;
+      if (panel.hidden) return;
       const badge = this.$('.player-mode').getBoundingClientRect();
-      if (notice.hidden || !badge.width) return;
-      const bar = this.root.getBoundingClientRect();
-      const width = notice.offsetWidth;
-      const max = this.root.ownerDocument.documentElement.clientWidth - 16 - width;
-      const x = Math.max(16, Math.min(badge.left + badge.width / 2 - width / 2, max));
-      notice.style.left = `${x - bar.left}px`;
+      if (!badge.width) { this.closeQualityPanel(); return; }
+      const { clientWidth, clientHeight } = this.root.ownerDocument.documentElement;
+      const width = panel.offsetWidth;
+      const height = panel.offsetHeight;
+      const x = Math.max(16, Math.min(badge.left + badge.width / 2 - width / 2, clientWidth - 16 - width));
+      const above = badge.top - 10 - height;
+      const y = above >= 16 ? above : Math.min(badge.bottom + 10, clientHeight - 16 - height);
+      panel.style.left = `${x}px`;
+      panel.style.top = `${Math.max(16, y)}px`;
     }
 
     /** 音量 0–1，记在本地；喇叭图标的声波按音量显示 0–3 条 */
@@ -1312,7 +1432,7 @@
       this.$('.player-shuffle').addEventListener('click', () => this.setShuffle(!this.shuffle));
       this.$('.player-repeat').addEventListener('click', () => this.cycleRepeat());
       this.$('.volume').addEventListener('input', (e) => this.setVolume(Number(e.target.value)));
-      this.$('.player-mode').addEventListener('click', () => (this.$('.player-notice').hidden ? this.openNotice() : this.closeNotice()));
+      this.$('.player-mode').addEventListener('click', () => (this.qualityPanel.hidden ? this.openQualityPanel() : this.closeQualityPanel()));
 
       // 音量：鼠标移入、键盘聚焦时展开滑块；点喇叭静音 / 恢复，触屏上第一下只展开
       const volume = this.$('.player-volume');
@@ -1390,9 +1510,9 @@
 
     /** 空格播放 / 暂停，左右方向键快退 / 快进 */
     bindKeys(doc) {
-      // 待播清单面板：按 Esc 或点击面板与播放条以外的地方时收起；播放方式说明、音量滑块同样点别处收起
+      // 待播清单面板：按 Esc 或点击面板与播放条以外的地方时收起；音质详情、音量滑块同样点别处收起
       doc.addEventListener('pointerdown', (e) => {
-        if (!this.$('.player-notice').hidden && !e.target.closest('.player-mode, .player-notice')) this.closeNotice();
+        if (!this.qualityPanel.hidden && !e.target.closest('.player-mode, .quality-panel')) this.closeQualityPanel();
         if (!this.$('.player-volume').contains(e.target)) this.$('.player-volume').classList.remove('expanded');
         // data-queue-keep：全屏播放界面底部的开关（待播清单开关移到了那里，见 lyrics/panel.mjs），点击时不先收起清单
         if (this.queuePanel.hidden || this.queuePanel.contains(e.target) || this.root.contains(e.target)
@@ -1400,7 +1520,7 @@
         this.closeQueue();
       });
       doc.addEventListener('keydown', (e) => {
-        if (e.key === 'Escape' && !this.$('.player-notice').hidden) { e.preventDefault(); this.closeNotice(); this.$('.player-mode').focus(); return; }
+        if (e.key === 'Escape' && !this.qualityPanel.hidden) { e.preventDefault(); this.closeQualityPanel(true); return; }
         // preventDefault：歌词界面里打开清单时，Esc 只收起清单（见 lyrics/panel.mjs）
         if (e.key === 'Escape' && !this.queuePanel.hidden) { e.preventDefault(); this.closeQueue(true); return; }
         if (!this.current || e.defaultPrevented || e.target.closest('input, textarea, button, a, [role="slider"]')) return;
@@ -1795,7 +1915,7 @@
       body.style.setProperty('--player-height', `${bar.bottom - top}px`);
       body.classList.toggle('has-player', !this.root.hidden);
       this.placeQueue();
-      this.placeNotice();
+      this.placeQualityPanel();
     }
 
     /** 页面视图使用的接口：用法与 AmPlayer 相同，视图卸载（signal 中止）时注册的回调随之移除 */
@@ -1827,9 +1947,10 @@
     }
 
     /**
-     * item: { id, codecs, m3u8Url, label, badge, title, artist, artists, album, href, albumHref, artwork }
+     * item: { id, codecs, m3u8Url, label, badge, variant, variants, title, artist, artists, album, href, albumHref, artwork }
      * artists: [{ name, href }]，各位艺人的名字与本站艺人页路径；href / albumHref 为本站歌曲页、专辑页路径；
-     * badge 为音质标签（见 qualityBadge）；以上均可省略
+     * badge 为音质标签（见 qualityBadge）；variant 为所播音质的 master 变体（码率、声道等），variants 为这首歌的全部音质
+     * （音质详情里切换用，省略时打开详情再取）；以上均可省略
      * m3u8Url 为 CDN 原始地址（浏览器解密）
      */
     async play(item) {
@@ -2218,7 +2339,6 @@
         }
       }
       el.hidden = !msg;
-      if (msg) this.closeNotice();
       this.layout();
     }
   }

@@ -211,6 +211,9 @@ export function mount({ root, url, signal, player, navigate, onLangChange, toast
       m3u8Url: v.m3u8Url,
       label: v.info.name,
       badge: qualityBadge(v),
+      // 全屏播放界面的音质详情显示所播音质的规格，并可换成这首歌的其他音质
+      variant: v,
+      variants,
       title: a.name,
       artist: a.artistName,
       // 各位艺人的名字与本站艺人页路径，播放条与歌词界面用来把艺人行中的名字做成链接

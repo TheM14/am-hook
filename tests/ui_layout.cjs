@@ -109,22 +109,15 @@ async function checkNav(page, width) {
         await checkNav(page, width);
         await toggleLang(page);
         await fits('language switch');
-        // Exercise the real fixed player layout: the codec notice pops up from the mode badge, errors float above the bar
+        // Exercise the real fixed player layout: the quality badge only shows in the lyrics view, errors float above the bar
         await page.evaluate(() => {
           const { player } = window.AmApp;
-          player.current = { id: 'x', track: '1', mode: 'ec3', title: 'Long song title '.repeat(10) };
+          player.current = { id: 'x', track: '1', mode: 'ec3', badge: 'atmos', title: 'Long song title '.repeat(10) };
           player.show();
           player.renderTrackText();
           player.renderMode();
         });
-        await page.locator('.player-notice:not([hidden])').waitFor();
-        assert.equal(await page.locator('.player-notice').textContent(), await page.evaluate(() => AmI18n.t('player.pcmNotice')), 'the notice opens by itself the first time');
-        const notice = await page.locator('.player-notice').boundingBox();
-        assert(notice.x >= 0 && notice.x + notice.width <= width, 'the notice fits the viewport');
-        await page.mouse.click(5, 5);
-        assert(await page.locator('.player-notice').isHidden(), 'clicking elsewhere closes the notice');
-        await page.locator('.player-mode').click();
-        assert(await page.locator('.player-notice').isVisible(), 'the mode badge reopens the notice');
+        assert(await page.locator('#player .player-mode').isHidden(), 'the floating bar has no quality badge');
         await page.evaluate(() => window.AmApp.player.showError(AmI18n.t('player.pcmNotice')));
         await page.waitForTimeout(100);
         await fits('player');
