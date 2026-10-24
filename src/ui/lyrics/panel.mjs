@@ -278,8 +278,9 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
   }
   // 点底部开关时不先收起待播清单（见 player.js 的 bindKeys）：歌词开关在清单打开时是「回到歌词」
   toggles.dataset.queueKeep = '';
+  // 写在 <html> 上：浮在页面底部的播放条与待播清单也用这套图标
   for (const [name, svg] of Object.entries(MASK_ICONS)) {
-    root.style.setProperty(`--amll-icon-${name}`, `url("data:image/svg+xml,${encodeURIComponent(svg)}")`);
+    document.documentElement.style.setProperty(`--amll-icon-${name}`, `url("data:image/svg+xml,${encodeURIComponent(svg)}")`);
   }
   if (globalThis.CSS?.supports?.('transition-timing-function', 'linear(0, 1)')) {
     for (const [name, [stiffness, damping]] of Object.entries(SPRINGS)) {
@@ -448,6 +449,10 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
   const volumeInput = bar.querySelector('.volume');
   volumeBox?.insertAdjacentHTML('afterbegin', SPEAKER_LOW);
   volumeBox?.insertAdjacentHTML('beforeend', SPEAKER_HIGH);
+  // 浮在页面底部的播放条上，静音按钮也用这个喇叭（裁掉四周空白），声波按音量逐条显示，静音时为叉号
+  bar.querySelector('.volume-toggle')?.insertAdjacentHTML('beforeend', SPEAKER_HIGH
+    .replace('class="amll-speaker amll-speaker--high" viewBox="0 0 43 40"', 'class="amll-volume-icon" viewBox="14 7.5 26 25"')
+    .replace('</svg>', '<path class="volume-mute" d="m28.5 15.5 8 8m0-8-8 8" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>'));
 
   /** 重新开始元素上的 CSS 动画：去掉 className、强制排版后再加上 */
   function replay(element, className) {
@@ -456,11 +461,11 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
     element.classList.add(className);
   }
 
-  // 播放控件按下时整体弹一下（MediaButton 的 pressed-animation）；上一首 / 下一首重新插入图标，播放箭头动画
-  controls.addEventListener('click', (event) => {
+  // 播放控件按下时整体弹一下（MediaButton 的 pressed-animation，只在界面里）；上一首 / 下一首重新插入图标，播放箭头动画
+  bar.addEventListener('click', (event) => {
     const button = event.target.closest('.player-toggle, .player-skip, .player-switch');
-    if (!open || !button || button.disabled) return;
-    replay(button, 'amll-pressed');
+    if (!button || button.disabled) return;
+    if (open) replay(button, 'amll-pressed');
     const icon = button.querySelector('.amll-skip-icon');
     icon?.replaceWith(icon.cloneNode(true));
   });

@@ -783,14 +783,29 @@ body.has-player { padding-bottom: calc(var(--player-height, 56px) + 32px + env(s
 .player-toggle { width: 36px; height: 36px; }
 .player-toggle svg { width: 26px; height: 26px; }
 .player-skip { width: 32px; height: 32px; }
-.player-skip svg { width: 22px; height: 22px; }
 .player-switch { width: 28px; height: 28px; color: var(--muted); }
-.player-switch svg { width: 17px; height: 17px; }
-.player-switch:hover { color: var(--text); }
-.player-switch[aria-pressed="true"] { color: var(--accent); }
-.player-switch[aria-pressed="true"]:hover { color: var(--accent-hover); }
+.player-switch:hover, .player-switch[aria-pressed="true"] { color: var(--text); }
 :is(.player-toggle, .player-skip):active:not(:disabled) { transform: scale(.88); }
 .player-skip:disabled { opacity: .35; cursor: default; }
+/*
+ * 图标与全屏播放界面相同，取自 react-full（panel.mjs）：播放 / 暂停、随机、重复为遮罩（--amll-icon-*），随机 / 重复开启时为实心圆角方块；
+ * 上一首 / 下一首为插入的 .amll-skip-icon（按下时播放箭头动画）。按钮里原有的 SVG 只在加载中（转圈）时显示
+ */
+:is(.player-skip > svg:not(.amll-skip-icon), .player-switch > svg, .player-toggle:not([data-state="loading"]) > svg) { display: none; }
+.player .amll-skip-icon { display: block; width: 32px; height: 32px; overflow: visible; }
+:is(.player-toggle, .player-switch)::before {
+  content: ''; display: block; width: var(--icon-size, 50%); aspect-ratio: 1; background: currentColor;
+  -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat;
+}
+.player-toggle { --icon: var(--amll-icon-play); --icon-size: 22px; }
+.player-toggle[data-state="pause"] { --icon: var(--amll-icon-pause); }
+.player-toggle:is([data-state="loading"], :not([data-state]))::before { display: none; }
+.player-switch { --icon-size: 24px; }
+.player-shuffle { --icon: var(--amll-icon-shuffle); }
+.player-shuffle[aria-pressed="true"] { --icon: var(--amll-icon-shuffleOn); }
+.player-repeat { --icon: var(--amll-icon-repeat); }
+.player-repeat[data-mode="all"] { --icon: var(--amll-icon-repeatOn); }
+.player-repeat[data-mode="one"] { --icon: var(--amll-icon-repeatOne); }
 
 /*
  * LCD（player-lcd）：上面一行 34px（封面 / 两行标题 / 播放方式标志），下面一条 2px 的进度条（progress--compact）；
@@ -890,9 +905,10 @@ body > .player .player-mode { display: none; }
   width: 32px; height: 32px; flex: 0 0 auto; display: grid; place-items: center; padding: 0;
   border: 0; border-radius: 8px; background: none; color: var(--text); transition: background-color .15s ease, color .15s ease;
 }
-.player-lyrics svg, .player-queue svg { width: 20px; height: 20px; }
+/* 图标为全屏播放界面底部开关的图形（panel.mjs 的 toggleIcon），打开时为实心圆角方块、图形镂空 */
+:is(.player-lyrics, .player-queue) > svg:not(.amll-toggle-icon) { display: none; }
+.player-right .amll-toggle-icon { display: block; width: 26px; height: 26px; }
 .player-lyrics:hover, .player-queue:hover { background: color-mix(in srgb, var(--text) 8%, transparent); }
-.player-lyrics[aria-pressed="true"], .player-queue[aria-expanded="true"] { color: var(--accent); }
 
 /*
  * 音量，照官网的 chrome-volume：28px 的喇叭按钮（声波按音量逐条显示），鼠标移入或聚焦时向左展开 152px 的胶囊滑块，
@@ -904,9 +920,12 @@ body > .player .player-mode { display: none; }
   border: 0; border-radius: 50%; background: none; color: var(--text); -webkit-tap-highlight-color: transparent;
 }
 .volume-toggle svg { width: 22px; height: 22px; }
-.volume-toggle :is(.volume-wave, .volume-mute) { transition: opacity .1s linear; }
-.volume-mute, .player-volume[data-level="0"] .volume-wave,
-.player-volume[data-level="1"] :is(.volume-wave-2, .volume-wave-3), .player-volume[data-level="2"] .volume-wave-3 { opacity: 0; }
+/* 喇叭为全屏播放界面音量条右端的图形（panel.mjs 插入的 .amll-volume-icon） */
+.volume-toggle > svg:not(.amll-volume-icon) { display: none; }
+.volume-toggle .amll-volume-icon { width: 24px; height: 24px; }
+.volume-toggle :is(.speaker-bounce-2, .speaker-bounce-3, .speaker-bounce-4, .volume-mute) { transition: opacity .1s linear; }
+.volume-mute, .player-volume[data-level="0"] .volume-toggle :is(.speaker-bounce-2, .speaker-bounce-3, .speaker-bounce-4),
+.player-volume[data-level="1"] .volume-toggle :is(.speaker-bounce-3, .speaker-bounce-4), .player-volume[data-level="2"] .volume-toggle .speaker-bounce-4 { opacity: 0; }
 .player-volume[data-level="0"] .volume-mute { opacity: 1; }
 html[dir="rtl"] .volume-toggle svg { transform: scaleX(-1); }
 .volume-pop {
@@ -1693,22 +1712,11 @@ html[dir="rtl"] .lyrics-controls .player .seek-fill { transform-origin: right; }
 .lyrics-controls .player :is(.player-toggle, .player-skip, .player-switch):active:not(:disabled) { background: #fff2; transform: none; }
 .lyrics-controls .player :is(.player-toggle, .player-skip, .player-switch):focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .lyrics-controls .player .player-skip:disabled { opacity: .35; }
-.lyrics-controls .player :is(.player-skip > svg:not(.amll-skip-icon), .player-switch > svg, .player-toggle:not([data-state="loading"]) > svg) { display: none; }
+/* 图标与浮在页面底部的播放条相同（见上方播放控件），这里只按按钮大小缩放 */
 .lyrics-controls .player .player-toggle > svg { width: 40%; height: 40%; }
-.lyrics-controls .player .amll-skip-icon { display: block; width: 100%; height: 100%; overflow: visible; }
-.lyrics-controls .player :is(.player-toggle, .player-switch)::before {
-  content: ''; display: block; width: var(--icon-size, 50%); aspect-ratio: 1; background: currentColor;
-  -webkit-mask: var(--icon) center / contain no-repeat; mask: var(--icon) center / contain no-repeat;
-}
-.lyrics-controls .player .player-toggle { --icon: var(--amll-icon-play); --icon-size: 46%; }
-.lyrics-controls .player .player-toggle[data-state="pause"] { --icon: var(--amll-icon-pause); }
-.lyrics-controls .player .player-toggle[data-state="loading"]::before { display: none; }
+.lyrics-controls .player .amll-skip-icon { width: 100%; height: 100%; }
+.lyrics-controls .player .player-toggle { --icon-size: 46%; }
 .lyrics-controls .player .player-switch { --icon-size: 62%; }
-.lyrics-controls .player .player-shuffle { --icon: var(--amll-icon-shuffle); }
-.lyrics-controls .player .player-shuffle[aria-pressed="true"] { --icon: var(--amll-icon-shuffleOn); }
-.lyrics-controls .player .player-repeat { --icon: var(--amll-icon-repeat); }
-.lyrics-controls .player .player-repeat[data-mode="all"] { --icon: var(--amll-icon-repeatOn); }
-.lyrics-controls .player .player-repeat[data-mode="one"] { --icon: var(--amll-icon-repeatOne); }
 .layout-v .lyrics-controls .player .player-center { justify-content: space-evenly; padding-block: 1vh; }
 .layout-v .lyrics-controls .player .player-switch { display: none; }
 .layout-v .lyrics-controls .player :is(.player-toggle, .player-skip) { width: clamp(52px, 10vh, 96px); }
@@ -1789,7 +1797,6 @@ html[dir="rtl"] .lyrics-controls .player .volume::-moz-range-track { background:
 :is(.lyrics-toggles .player-lyrics, .lyrics-toggles .player-queue, .lyrics-translation-button):is(:hover, [aria-expanded="true"]) { opacity: .7; background: none; }
 :is(.lyrics-toggles .player-lyrics, .lyrics-toggles .player-queue, .lyrics-translation-button):active { scale: .9; }
 :is(.lyrics-toggles .player-lyrics, .lyrics-toggles .player-queue, .lyrics-translation-button):focus-visible { opacity: 1; outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 8px; }
-.lyrics-toggles :is(.player-lyrics, .player-queue) > svg:not(.amll-toggle-icon) { display: none; }
 :is(.lyrics-toggles, .lyrics-translation-button) .amll-toggle-icon { display: block; width: 100%; height: 100%; }
 @media (prefers-contrast: more) { :is(.lyrics-toggles .player-lyrics, .lyrics-toggles .player-queue, .lyrics-translation-button) { opacity: 1; } }
 
