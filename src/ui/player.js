@@ -518,20 +518,24 @@
 
   /**
    * EC-3 与 JOC 都是 48 kHz：AudioContext 也用 48 kHz，设备采样率不同时由浏览器在输出端整体重采样
-   * （AudioBuffer 与上下文采样率不同时，各 AudioBufferSourceNode 只做线性插值）。不支持该选项的浏览器用默认值
+   * （AudioBuffer 与上下文采样率不同时，各 AudioBufferSourceNode 只做线性插值）。不支持该选项的浏览器用默认值。
+   * latencyHint 见各引擎的 latencyHint
    */
-  function pcmContext() {
+  function pcmContext(latencyHint) {
     const Context = global.AudioContext || global.webkitAudioContext;
-    try { return new Context({ sampleRate: 48000, latencyHint: 'playback' }); } catch { return new Context(); }
+    try { return new Context({ sampleRate: 48000, latencyHint }); } catch { return new Context(); }
   }
 
   /** Bounded, on-demand multichannel PCM playback for EC-3. */
   class PcmEngine {
+    /** 提前排好约 20 秒的音频，输出端用大缓冲（Android 上 outputLatency 约 0.3 秒）省电、不易断音 */
+    get latencyHint() { return 'playback'; }
+
     constructor(onUpdate, onError, onEnded) {
       this.onUpdate = onUpdate;
       this.onError = onError;
       this.onEnded = onEnded;
-      this.context = pcmContext();
+      this.context = pcmContext(this.latencyHint);
       this.gain = this.context.createGain();
       this.gain.connect(this.context.destination);
       /** 各 AudioBufferSourceNode 接到这里（JocEngine 在 gain 前面加一级淡入淡出） */
@@ -959,6 +963,12 @@
       this.sceneBase = 0;
       this.sceneWanted = false;
     }
+
+    /**
+     * 交互控制要过输出端的缓冲才听得到：Android Chrome 上 'playback' 的 outputLatency 约 0.35 秒，
+     * 且每次成块拉走音频，Worker 跟不上而断粮、提前量一路加大；'interactive' 约 0.04 秒，不断粮
+     */
+    get latencyHint() { return 'interactive'; }
 
     /** 是否走低延迟（AudioWorklet）；load 之后才确定 */
     get live() { return Boolean(this.node); }
