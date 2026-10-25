@@ -36,6 +36,8 @@ const HRTF_URLS = {
   H18: '/assets/joc-hrtf-H18.jochrtf',
   H19: '/assets/joc-hrtf-H19.jochrtf',
   H20: '/assets/joc-hrtf-H20.jochrtf',
+  xiaomi_balanced: '/assets/xiaomi_hrtf5c_balanced.jochrtf',
+  xiaomi_operator: '/assets/xiaomi_hrtf5c_operator.jochrtf',
 };
 /** JOC 的滤波器组、OAMD 时间轴与 HRTF 都按 48 kHz 设计（Apple Music 的 Atmos 均为 48 kHz） */
 const RATE = 48000;

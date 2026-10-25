@@ -102,8 +102,9 @@ export const OPTIONS = {
   // JOC 对象渲染（E-AC-3 Dolby Atmos，player.js 的 JocEngine）：off 为浏览器自己的解码（MSE / 内置 EC-3 PCM）
   joc: {
     mode: ['off', 'speaker', 'binaural'],
-    // 双耳渲染的 HRTF：约克大学 SADIE II 数据库的 20 位受试者（src/ui/joc-hrtf-*.jochrtf）
-    dataset: ['D1', 'D2', 'H3', 'H4', 'H5', 'H6', 'H7', 'H8', 'H9', 'H10', 'H11', 'H12', 'H13', 'H14', 'H15', 'H16', 'H17', 'H18', 'H19', 'H20'],
+    // 双耳渲染的 HRTF：约克大学 SADIE II 数据库的 20 位受试者（src/ui/joc-hrtf-*.jochrtf），
+    // 以及由 hrtf5c.bin 编译的两种拟合（src/ui/xiaomi_hrtf5c_*.jochrtf）
+    dataset: ['D1', 'D2', 'H3', 'H4', 'H5', 'H6', 'H7', 'H8', 'H9', 'H10', 'H11', 'H12', 'H13', 'H14', 'H15', 'H16', 'H17', 'H18', 'H19', 'H20', 'xiaomi_balanced', 'xiaomi_operator'],
   },
 };
 
