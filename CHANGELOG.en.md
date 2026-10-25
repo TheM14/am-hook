@@ -1,5 +1,10 @@
 # CHANGELOG
 
+## v0.6.2 (2026-10-25)
+
+### Fixes
+- 🐛 On Android Chrome, spatial scene controls took about 1 s to be heard: the low-latency JOC playback's AudioContext now uses `latencyHint: 'interactive'`, cutting output latency from ~0.35 s to ~0.04 s and no longer starving (and growing the lead) as the output pulls audio in large blocks, so turning your head is heard after ~0.17 s; other playback methods keep `'playback'`
+
 ## v0.6.1 (2026-10-24)
 
 ### New
