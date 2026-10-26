@@ -1,0 +1,15 @@
+{
+  "name": "am-hook-gui",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Desktop client for am-hook with local mpv playback",
+  "scripts": {
+    "tauri": "tauri",
+    "dev": "tauri dev",
+    "build": "tauri build",
+    "build:exe": "tauri build --no-bundle"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2.12.4"
+  }
+}

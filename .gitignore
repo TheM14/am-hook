@@ -1,0 +1,16 @@
+# build outputs
+/src-tauri/target/
+/dist/
+/dist/data/
+/node_modules/
+
+# runtime data written next to the executable when no data directory is available
+/src-tauri/config.json
+/src-tauri/gui.log
+/src-tauri/bridge.json
+/src-tauri/webview2/
+
+# editor / OS noise
+.DS_Store
+Thumbs.db
+*.swp

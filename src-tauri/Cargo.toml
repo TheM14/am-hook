@@ -1,0 +1,39 @@
+[package]
+name = "am-hook-gui"
+version = "0.1.0"
+description = "Desktop client for am-hook with local mpv playback"
+edition = "2021"
+license = "AGPL-3.0-only"
+
+[lib]
+name = "am_hook_gui"
+path = "src/lib.rs"
+
+[[bin]]
+name = "am-hook-gui"
+path = "src/main.rs"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+tauri-plugin-window-state = "2"
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
+axum = "0.7"
+futures = "0.3"
+reqwest = { version = "0.12", default-features = false, features = ["native-tls", "json", "gzip", "brotli"] }
+url = "2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tokio-stream = { version = "0.1", features = ["sync"] }
+
+[profile.release]
+opt-level = 3
+lto = true
+codegen-units = 1
+strip = true

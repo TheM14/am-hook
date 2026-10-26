@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>am-hook GUI</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body data-page="connect">
+    <div class="shell connect-shell">
+      <header class="brand">
+        <div class="logo" aria-hidden="true">
+          <svg viewBox="0 0 16 21" width="17" height="22"><g transform="rotate(180 7.7 10)"><path fill="currentColor" d="M10.824 3.189c-.698.834-1.805 1.496-2.913 1.398-.145-1.128.41-2.33 1.036-3.065C9.644.662 10.848.05 11.835 0c.121 1.178-.336 2.33-1.01 3.19zm.999 1.619c.624.049 2.425.244 3.578 1.98-.096.074-2.137 1.272-2.113 3.79.024 3.01 2.593 4.012 2.617 4.037-.024.074-.407 1.419-1.344 2.812-.817 1.224-1.657 2.422-3.002 2.447-1.297.024-1.73-.783-3.218-.783-1.489 0-1.97.758-3.194.807-1.297.048-2.28-1.297-3.097-2.52C.368 14.908-.904 10.408.825 7.375c.84-1.516 2.377-2.47 4.034-2.495 1.273-.023 2.45.857 3.218.857.769 0 2.137-1.027 3.746-.93z"/></g></svg>
+        </div>
+        <div>
+          <div class="brand-title">am-hook GUI</div>
+          <div class="brand-sub">桌面客户端 · 本机 mpv 输出</div>
+        </div>
+        <span class="spacer"></span>
+        <span class="pill" id="version-pill">v0.1.0</span>
+      </header>
+
+      <main class="card">
+        <h1>连接到 am-hook</h1>
+        <p class="lead">输入运行 am-hook 的服务器地址。连接成功后会记住这个地址，以后启动客户端自动连接。</p>
+
+        <form id="connect-form" autocomplete="off">
+          <label class="field">
+            <span>服务器地址</span>
+            <input id="server-url" type="text" placeholder="https://你的 am-hook 地址" spellcheck="false" autocomplete="off" />
+          </label>
+          <div class="hint">支持本机、局域网与远程实例；可以省略协议头，也可以直接粘贴站点里的页面地址。</div>
+          <div class="actions" style="margin-top: 16px">
+            <button type="submit" class="primary" id="connect-button">连接</button>
+            <button type="button" class="ghost" id="settings-button">设置</button>
+          </div>
+        </form>
+
+        <div class="status" id="status" hidden>
+          <span class="icon" id="status-icon"></span>
+          <div class="body">
+            <span class="title" id="status-title"></span>
+            <span class="detail" id="status-detail"></span>
+            <div class="inline-actions" id="status-actions" hidden>
+              <button type="button" class="ghost" id="continue-button" hidden>仍然继续</button>
+              <button type="button" class="ghost" id="retry-button">重试</button>
+              <button type="button" class="ghost" id="edit-button">修改地址</button>
+            </div>
+          </div>
+        </div>
+
+        <section class="recent" id="recent" hidden>
+          <h2>最近连接</h2>
+          <div class="chips" id="recent-chips"></div>
+        </section>
+      </main>
+
+      <footer class="foot">
+        <span id="footer-info">正在读取状态…</span>
+        <span class="spacer"></span>
+        <button class="link" id="quit-button" type="button">退出</button>
+      </footer>
+    </div>
+    <script src="connect.js"></script>
+  </body>
+</html>

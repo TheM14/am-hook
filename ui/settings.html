@@ -1,0 +1,163 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>am-hook GUI 设置</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body data-page="settings">
+    <div class="settings-shell">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="logo" aria-hidden="true">
+            <svg viewBox="0 0 16 21" width="15" height="20"><g transform="rotate(180 7.7 10)"><path fill="currentColor" d="M10.824 3.189c-.698.834-1.805 1.496-2.913 1.398-.145-1.128.41-2.33 1.036-3.065C9.644.662 10.848.05 11.835 0c.121 1.178-.336 2.33-1.01 3.19zm.999 1.619c.624.049 2.425.244 3.578 1.98-.096.074-2.137 1.272-2.113 3.79.024 3.01 2.593 4.012 2.617 4.037-.024.074-.407 1.419-1.344 2.812-.817 1.224-1.657 2.422-3.002 2.447-1.297.024-1.73-.783-3.218-.783-1.489 0-1.97.758-3.194.807-1.297.048-2.28-1.297-3.097-2.52C.368 14.908-.904 10.408.825 7.375c.84-1.516 2.377-2.47 4.034-2.495 1.273-.023 2.45.857 3.218.857.769 0 2.137-1.027 3.746-.93z"/></g></svg>
+          </div>
+          <div>
+            <div class="brand-title" style="font-size: 14px">am-hook GUI</div>
+            <div class="brand-sub">设置</div>
+          </div>
+        </div>
+        <nav class="nav">
+          <button type="button" data-target="server" data-active="true">服务器</button>
+          <button type="button" data-target="output">输出与 mpv</button>
+          <button type="button" data-target="desktop">桌面与后台</button>
+          <button type="button" data-target="diagnostics">诊断</button>
+        </nav>
+        <span class="spacer"></span>
+        <div class="hint" id="sidebar-version">v0.1.0</div>
+      </aside>
+
+      <main class="content">
+        <section class="section" data-section="server" data-active="true">
+          <h2>服务器</h2>
+          <p class="desc">客户端加载 am-hook 自己的网页界面；连接成功后会记住地址并自动重连。</p>
+          <div class="group">
+            <div class="row">
+              <div class="label"><span>当前服务器</span><span class="note">检查通过后才会加载页面</span></div>
+              <div class="control"><span class="pill" id="server-pill">未连接</span><span class="spacer"></span></div>
+            </div>
+            <div class="row">
+              <div class="label"><span>地址</span><span class="note" id="server-title"></span></div>
+              <div class="control"><input type="text" id="server-url" spellcheck="false" placeholder="http://127.0.0.1:8888" /></div>
+            </div>
+            <div class="row">
+              <div class="label"><span>操作</span></div>
+              <div class="control inline-actions">
+                <button type="button" class="primary" id="server-connect">连接 / 切换</button>
+                <button type="button" class="ghost" id="server-reconnect">重新连接</button>
+                <button type="button" class="ghost" id="server-disconnect">断开</button>
+              </div>
+            </div>
+            <div class="row">
+              <div class="label"><span>最近使用</span></div>
+              <div class="control wrap"><div class="chips" id="server-history"></div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" data-section="output">
+          <h2>输出与 mpv</h2>
+          <p class="desc">开启后页面只负责取流与解密，解密后的音频分段原样写入本机 mpv，解码和输出都由 mpv 完成。</p>
+          <div class="group">
+            <div class="row">
+              <div class="label"><span>MPV 输出</span><span class="note">关闭时使用浏览器自己的解码与输出</span></div>
+              <div class="control"><div class="switch" id="mpv-enabled" data-on="false" role="switch"></div></div>
+            </div>
+            <div class="row">
+              <div class="label"><span>mpv 可执行文件</span><span class="note">留空则自动查找：程序目录、PATH、常见安装位置</span></div>
+              <div class="control">
+                <input type="text" id="mpv-path" spellcheck="false" placeholder="留空自动查找 mpv.exe" />
+                <button type="button" class="ghost" id="mpv-browse">浏览…</button>
+                <button type="button" class="ghost" id="mpv-probe">检测</button>
+              </div>
+            </div>
+            <div class="row">
+              <div class="label"><span>mpv 配置目录</span><span class="note">以 --config-dir= 传给 mpv（可填目录，也可填其中的 mpv.conf）；配置文件里的选项与这里的选择会一起生效</span></div>
+              <div class="control">
+                <input type="text" id="mpv-config" spellcheck="false" placeholder="放 mpv.conf 的目录" />
+                <button type="button" class="ghost" id="mpv-config-browse">浏览…</button>
+                <button type="button" class="ghost" id="mpv-config-clear">清空</button>
+              </div>
+            </div>
+            <div class="row">
+              <div class="label"><span>检测结果</span></div>
+              <div class="control"><span class="pill" id="mpv-status">未检测</span><span class="spacer"></span></div>
+            </div>
+            <div class="row">
+              <div class="label"><span>优先 Dolby Atmos</span><span class="note">MPV 输出时队列优先选择全景声版本（如果有多个音质）；解码仍由 mpv 完成</span></div>
+              <div class="control"><div class="switch" id="mpv-prefer-atmos" data-on="true" role="switch"></div></div>
+            </div>
+            <div class="row">
+              <div class="label"><span>音频设备</span><span class="note">mpv 通过 WASAPI 枚举到的设备</span></div>
+              <div class="control">
+                <select id="mpv-device"></select>
+                <button type="button" class="ghost" id="mpv-devices-refresh">刷新</button>
+              </div>
+            </div>
+            <div class="row">
+              <div class="label"><span>WASAPI 独占</span><span class="note">独占时 mpv 直接占用设备，系统混音不参与</span></div>
+              <div class="control"><div class="switch" id="mpv-exclusive" data-on="true" role="switch"></div></div>
+            </div>
+            <div class="row">
+              <div class="label"><span>缓存秒数</span><span class="note">mpv 的 --cache-secs，管道输入时决定预读时长</span></div>
+              <div class="control"><input type="number" id="mpv-cache" min="1" max="600" step="1" style="max-width: 120px" /></div>
+            </div>
+            <div class="row">
+              <div class="label"><span>额外参数</span><span class="note">附加参数：按空白拆开传给 mpv，允许引号，会与上面的选项拼接（不替换）。--script / --include 等会被拒绝</span></div>
+              <div class="control wrap"><textarea id="mpv-args" spellcheck="false" placeholder="--audio-exclusive=yes --cache-secs=20"></textarea></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" data-section="desktop">
+          <h2>桌面与后台</h2>
+          <p class="desc">音频由独立进程 mpv 输出，窗口最小化或收进托盘都不会中断播放。</p>
+          <div class="group">
+            <div class="row">
+              <div class="label"><span>关闭窗口时收进托盘</span><span class="note">关闭后继续播放，从托盘恢复</span></div>
+              <div class="control"><div class="switch" id="behavior-close" data-on="true" role="switch"></div></div>
+            </div>
+            <div class="row">
+              <div class="label"><span>最小化时收进托盘</span><span class="note">最小化直接隐藏任务栏按钮</span></div>
+              <div class="control"><div class="switch" id="behavior-minimize" data-on="false" role="switch"></div></div>
+            </div>
+            <div class="row">
+              <div class="label"><span>启动时隐藏窗口</span><span class="note">只留托盘图标，连接失败时仍会弹出连接窗口</span></div>
+              <div class="control"><div class="switch" id="behavior-start-hidden" data-on="false" role="switch"></div></div>
+            </div>
+            <div class="row">
+              <div class="label"><span>后台播放优化</span><span class="note">关闭 WebView 的定时器降频与遮挡挂起（改动在下次连接后生效）</span></div>
+              <div class="control"><div class="switch" id="behavior-background" data-on="true" role="switch"></div></div>
+            </div>
+            <div class="row">
+              <div class="label"><span>把局域网 http 当作安全上下文</span><span class="note">让 http://192.168.x.x 也能用离线下载等需要安全上下文的功能（下次连接生效）</span></div>
+              <div class="control"><div class="switch" id="behavior-insecure" data-on="true" role="switch"></div></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="section" data-section="diagnostics">
+          <h2>诊断</h2>
+          <p class="desc">这里的信息可以整段复制，便于排查问题。</p>
+          <div class="group">
+            <dl class="info-list" id="diagnostics-info"></dl>
+          </div>
+          <div class="group">
+            <div class="row">
+              <div class="label"><span>运行日志</span><span class="note">最近 300 行，同时写入数据目录下的 gui.log</span></div>
+              <div class="control inline-actions">
+                <button type="button" class="ghost" id="logs-refresh">刷新</button>
+                <button type="button" class="ghost" id="logs-copy">复制</button>
+                <button type="button" class="ghost" id="open-data-dir">打开数据目录</button>
+              </div>
+            </div>
+            <pre class="log" id="logs">加载中…</pre>
+          </div>
+        </section>
+      </main>
+    </div>
+    <div class="toast" id="toast"></div>
+    <script src="settings.js"></script>
+  </body>
+</html>
