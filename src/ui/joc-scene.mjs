@@ -5,7 +5,8 @@
  *   - 拖动转头（左右 / 俯仰），渲染器按新的朝向重算每个对象的 HRTF 与房间反射，约 0.1 秒后听到；
  *   - 漫步：在房间里走动（拖动或 W A S D），对象留在原处，走近变响，反射随站位变化；
  *   - 点光球（或下方的对象条）独奏 / 静音；聚焦让面朝的对象更响；高度放大仰角；巡游让头部缓缓转一圈；
- *   - 第一人称视角从头部看出去；手机上可以用陀螺仪转头。
+ *   - 第一人称视角从头部看出去；手机上可以用陀螺仪转头；
+ *   - 鼠标视角（桌面）：像 FPS 一样锁定鼠标，移动就转头；应援棒：第一人称里双手举着随电平发光的应援棒，点击往前挥。
  * 控制项存在播放器（player.spatial）里，由 JocLiveEngine 交给 Worker；场景数据（位置与电平）按播放时间从引擎取（sceneAt）。
  *
  * 坐标：ADM 方向（+X 右、+Y 前、+Z 上），单位米；对象位于 ADM 位置 × 2.19 m（渲染器 mid 档的距离），听者站在原点 + 站位。
@@ -26,6 +27,14 @@ const PITCH_LIMIT = 1.3;
 const WALK_LIMIT = 6;
 /** 巡游：每秒转过的弧度 */
 const TOUR_SPEED = 0.4;
+/** 鼠标视角：每像素转过的弧度（再乘第一人称的视野缩放） */
+const LOOK_SPEED = 0.0024;
+/** 应援棒挥一下的时长（秒）；左手比右手晚一点（按挥动进度算） */
+const SWING_TIME = 0.36;
+const SWING_DELAY = 0.12;
+/** 应援棒的默认色相（与 --accent 相同的红） */
+const STICK_HUE = 352;
+const SPARKS = 160;
 const TAU = Math.PI * 2;
 /** 画布不认 CSS 变量：与 app.css 的 --font 相同的字体 */
 const FONT = '-apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", "Segoe UI", Arial, "PingFang SC", "Microsoft YaHei", sans-serif';
@@ -78,6 +87,18 @@ function headPoint(axes, origin, local) {
   return out;
 }
 
+/** 两端粗细不同的胶囊形路径（a → b，半径 ra / rb），画透视里的光管、握柄与袖子 */
+function capsule(ctx, a, b, ra, rb) {
+  const angle = Math.atan2(b.y - a.y, b.x - a.x) + Math.PI / 2;
+  ctx.beginPath();
+  ctx.moveTo(a.x + Math.cos(angle) * ra, a.y + Math.sin(angle) * ra);
+  ctx.lineTo(b.x + Math.cos(angle) * rb, b.y + Math.sin(angle) * rb);
+  ctx.arc(b.x, b.y, rb, angle, angle + Math.PI, true);
+  ctx.lineTo(a.x - Math.cos(angle) * ra, a.y - Math.sin(angle) * ra);
+  ctx.arc(a.x, a.y, ra, angle + Math.PI, angle, true);
+  ctx.closePath();
+}
+
 class SpatialScene {
   constructor(player) {
     this.player = player;
@@ -89,6 +110,20 @@ class SpatialScene {
     this.tour = false;
     this.walk = false;
     this.gyro = null;
+    /** 鼠标视角（开关）与当前是否锁定了鼠标 */
+    this.look = false;
+    this.locked = false;
+    this.lockedAt = 0;
+    this.unlockedAt = 0;
+    this.stickOn = false;
+    /** 双手的应援棒：挥动进度（-1 为静止）、按住连挥、跟随转头的摆动、走路的起伏、火花；每只手的残影与上一帧的棒尖 */
+    this.hand = {
+      swing: -1, held: false, hue: STICK_HUE, swayX: 0, swayY: 0, lastYaw: null, lastPitch: 0,
+      bob: 0, walk: 0, lift: 0, sparks: [], sides: [{ ghosts: [], lastTip: null }, { ghosts: [], lastTip: null }],
+    };
+    /** 第一人称时准星对准的对象（-1 为没有） */
+    this.aim = -1;
+    this.frameDt = 0;
     this.pointers = new Map();
     this.gesture = null;
     this.hover = -1;
@@ -105,8 +140,23 @@ class SpatialScene {
     this.root.addEventListener('keydown', (e) => this.keyDown(e));
     this.root.addEventListener('keyup', (e) => this.keys.delete(e.code));
     this.root.addEventListener('focusout', () => { if (!this.root.contains(document.activeElement)) this.keys.clear(); });
+    this.onLockChange = () => {
+      const locked = document.pointerLockElement === this.canvas;
+      if (locked === this.locked) return;
+      this.locked = locked;
+      if (locked) {
+        this.lockedAt = performance.now();
+      } else {
+        this.unlockedAt = performance.now();
+        this.hand.held = false;
+        this.hover = -1;
+      }
+      this.root.classList.toggle('is-locked', locked);
+    };
+    document.addEventListener('pointerlockchange', this.onLockChange);
     this.resize = new ResizeObserver(() => this.fit());
     this.resize.observe(this.canvas);
+    this.resize.observe(this.bottom);
     this.previousFocus = document.activeElement;
     document.body.append(this.root);
     this.root.focus();
@@ -172,6 +222,20 @@ class SpatialScene {
     this.tourButton = this.toggleButton(t('scene.tour'), t('scene.tourTip'), () => { this.tour = !this.tour; this.renderToggles(); });
     this.walkButton = this.toggleButton(t('scene.walk'), t('scene.walkTip'), () => { this.walk = !this.walk; this.renderToggles(); });
     const toggles = [this.tourButton, this.walkButton];
+    // 鼠标视角与应援棒只给有鼠标的桌面（手机上不显示）
+    const mouse = window.matchMedia('(hover: hover) and (pointer: fine)').matches;
+    if (mouse && 'requestPointerLock' in this.canvas) {
+      this.lookButton = this.toggleButton(t('scene.look'), t('scene.lookTip'), () => this.toggleLook());
+      toggles.push(this.lookButton);
+    }
+    if (mouse) {
+      this.stickButton = this.toggleButton(t('scene.stick'), t('scene.stickTip'), () => {
+        this.stickOn = !this.stickOn;
+        if (this.stickOn) this.view = 'first';
+        this.renderToggles();
+      });
+      toggles.push(this.stickButton);
+    }
     if ('DeviceOrientationEvent' in window && window.matchMedia('(pointer: coarse)').matches) {
       this.gyroButton = this.toggleButton(t('scene.gyro'), t('scene.gyroTip'), () => this.toggleGyro());
       toggles.push(this.gyroButton);
@@ -190,7 +254,8 @@ class SpatialScene {
       views, ...toggles, this.focusSlider.root, this.heightSlider.root, reset, restore, this.readout);
     const touch = window.matchMedia('(pointer: coarse)').matches;
     const hint = el('p', 'joc-scene-hint', t(touch ? 'scene.hintTouch' : 'scene.hint'), ' ', el('span', 'joc-scene-notice', t('scene.notice')));
-    root.append(this.canvas, top, this.message, el('footer', 'joc-scene-bottom', this.mixer, controls, hint));
+    this.bottom = el('footer', 'joc-scene-bottom', this.mixer, controls, hint);
+    root.append(this.canvas, top, this.message, this.bottom);
     this.renderToggles();
     this.renderMixer();
     this.renderReadout();
@@ -214,13 +279,42 @@ class SpatialScene {
 
   setView(view) {
     this.view = view;
+    // 鼠标视角只在第一人称里有意义
+    if (view !== 'first') { this.look = false; this.unlock(); }
     this.renderToggles();
+  }
+
+  toggleLook() {
+    this.look = !this.look;
+    if (this.look) {
+      this.view = 'first';
+      this.lock();
+    } else {
+      this.unlock();
+    }
+    this.renderToggles();
+  }
+
+  /** 锁定鼠标（要在点击里调用）；浏览器拒绝时（例如刚按过 Esc）留在「点击画面开始」的状态 */
+  lock() {
+    this.tour = false;
+    try {
+      const request = this.canvas.requestPointerLock();
+      if (request && request.catch) request.catch(() => {});
+    } catch { /* 不支持或被拒绝 */ }
+  }
+
+  unlock() {
+    if (document.pointerLockElement === this.canvas) document.exitPointerLock();
   }
 
   renderToggles() {
     for (const [view, node] of Object.entries(this.viewButtons)) node.setAttribute('aria-checked', String(view === this.view));
     this.tourButton.setAttribute('aria-pressed', String(this.tour));
     this.walkButton.setAttribute('aria-pressed', String(this.walk));
+    if (this.lookButton) this.lookButton.setAttribute('aria-pressed', String(this.look));
+    if (this.stickButton) this.stickButton.setAttribute('aria-pressed', String(this.stickOn));
+    this.root.classList.toggle('is-look', this.look);
     if (this.gyroButton) this.gyroButton.setAttribute('aria-pressed', String(Boolean(this.gyro)));
   }
 
@@ -336,6 +430,9 @@ class SpatialScene {
     const canvas = this.canvas;
     canvas.addEventListener('contextmenu', (e) => e.preventDefault());
     canvas.addEventListener('pointerdown', (e) => {
+      if (this.locked) { this.lockedClick(e); return; }
+      // 鼠标视角开着但还没锁定（刚按过 Esc）：点画面重新锁定
+      if (this.look && e.pointerType === 'mouse' && e.button === 0) { e.preventDefault(); this.lock(); return; }
       canvas.setPointerCapture(e.pointerId);
       this.pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
       const camera = e.button === 2 || e.shiftKey || this.pointers.size > 1;
@@ -344,6 +441,15 @@ class SpatialScene {
       this.renderToggles();
     });
     canvas.addEventListener('pointermove', (e) => {
+      if (this.locked) {
+        // 锁定时光标不动，只有相对位移：向右移头向右转，向上移抬头
+        const speed = LOOK_SPEED * this.camera.fov;
+        this.pose({
+          yaw: (this.state.yaw || 0) - e.movementX * speed,
+          pitch: clamp((this.state.pitch || 0) - e.movementY * speed, -PITCH_LIMIT, PITCH_LIMIT),
+        });
+        return;
+      }
       const point = this.pointers.get(e.pointerId);
       if (!point) { this.hover = this.pick(e.clientX, e.clientY); return; }
       const dx = e.clientX - point.x;
@@ -373,21 +479,50 @@ class SpatialScene {
       }
     });
     const end = (e) => {
+      this.hand.held = false;
       const g = this.gesture;
       this.pointers.delete(e.pointerId);
       if (this.pointers.size === 0) this.gesture = null;
       if (!g || g.moved || e.type === 'pointercancel' || g.camera) return;
       const index = this.pick(e.clientX, e.clientY);
       if (index >= 0) this.toggle(g.alt || e.altKey ? 'mute' : 'solo', index + 1);
+      else if (this.stickOn && this.view === 'first') this.wave();
     };
     canvas.addEventListener('pointerup', end);
     canvas.addEventListener('pointercancel', end);
     canvas.addEventListener('pointerleave', () => { if (!this.pointers.size) this.hover = -1; });
-    canvas.addEventListener('dblclick', (e) => { if (this.pick(e.clientX, e.clientY) < 0) this.resetPose(); });
+    canvas.addEventListener('dblclick', (e) => {
+      // 连挥应援棒、鼠标视角里的连点都不算双击回正
+      if (this.locked || this.look || (this.stickOn && this.view === 'first')) return;
+      if (this.pick(e.clientX, e.clientY) < 0) this.resetPose();
+    });
     canvas.addEventListener('wheel', (e) => {
       e.preventDefault();
       this.zoom(Math.exp(e.deltaY * 0.0012));
     }, { passive: false });
+  }
+
+  /**
+   * 锁定鼠标时的点击，对准的是准星：有应援棒时左键挥动（按住连挥）、右键独奏（Alt+右键静音）；
+   * 没有应援棒时左键独奏、右键静音
+   */
+  lockedClick(e) {
+    e.preventDefault();
+    if (e.button === 0 && this.stickOn) {
+      this.hand.held = true;
+      this.wave();
+      return;
+    }
+    if (e.button !== 0 && e.button !== 2) return;
+    if (this.aim < 0) return;
+    const mute = this.stickOn ? e.altKey : e.button === 2 || e.altKey;
+    this.toggle(mute ? 'mute' : 'solo', this.aim + 1);
+  }
+
+  /** 双手往前挥一下应援棒；准星对准的对象泛起一圈光 */
+  wave() {
+    this.hand.swing = 0;
+    if (this.aim >= 0) this.objects[this.aim].cheer = 1;
   }
 
   spread() {
@@ -428,7 +563,14 @@ class SpatialScene {
   }
 
   keyDown(e) {
-    if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); this.close(); return; }
+    if (e.key === 'Escape') {
+      e.preventDefault();
+      e.stopPropagation();
+      // 锁定鼠标时 Esc 只释放鼠标（浏览器自己退出锁定，有的浏览器之后才送来这个按键），不关闭声场
+      if (this.locked || performance.now() - this.unlockedAt < 300) { this.unlock(); return; }
+      this.close();
+      return;
+    }
     // 滑块自己用方向键
     if (e.target instanceof HTMLInputElement || e.ctrlKey || e.metaKey || e.altKey) return;
     const turn = 0.12;
@@ -450,6 +592,8 @@ class SpatialScene {
   close() {
     cancelAnimationFrame(this.frame);
     if (this.gyro) window.removeEventListener('deviceorientation', this.gyro.listener);
+    this.unlock();
+    document.removeEventListener('pointerlockchange', this.onLockChange);
     this.resize.disconnect();
     this.unsubscribe();
     if (this.engine) this.engine.watchScene(false);
@@ -466,12 +610,14 @@ class SpatialScene {
     this.canvas.width = Math.max(1, Math.round(width * ratio));
     this.canvas.height = Math.max(1, Math.round(height * ratio));
     this.ratio = ratio;
+    this.bottomHeight = this.bottom.offsetHeight;
   }
 
   tick(time) {
     this.frame = requestAnimationFrame((next) => this.tick(next));
     const dt = Math.min(0.1, (time - this.last) / 1000);
     this.last = time;
+    this.frameDt = dt;
     this.follow();
     this.animate(dt);
     this.ingest(dt);
@@ -522,11 +668,51 @@ class SpatialScene {
       if (this.keys.has('KeyA')) side -= speed;
       this.step(axes.face[0] * forward + axes.right[0] * side, axes.face[1] * forward + axes.right[1] * side);
     }
+    this.animateHand(dt);
     if (this.dirty) {
       this.dirty = false;
       const { yaw, pitch, roll, x, y, z } = this.state;
       this.player.setSpatial({ yaw, pitch, roll, x, y, z });
     }
+  }
+
+  /** 应援棒：转头时手稍微落后、走路时上下起伏、挥动的进度（按住时接着反向再挥）、颜色跟准星对准的对象 */
+  animateHand(dt) {
+    const hand = this.hand;
+    const yaw = this.state.yaw || 0;
+    const pitch = this.state.pitch || 0;
+    if (hand.lastYaw != null) {
+      // 左转时画面往右移，手跟不上也往右；抬头时手往下
+      hand.swayX = clamp(hand.swayX + (yaw - hand.lastYaw) * 180, -60, 60);
+      hand.swayY = clamp(hand.swayY + (pitch - hand.lastPitch) * 180, -45, 45);
+    }
+    hand.lastYaw = yaw;
+    hand.lastPitch = pitch;
+    const settle = Math.exp(-dt * 7);
+    hand.swayX *= settle;
+    hand.swayY *= settle;
+    hand.walk += ((this.keys.size ? 1 : 0) - hand.walk) * (1 - Math.exp(-dt * 8));
+    hand.bob += dt * 10 * hand.walk;
+    if (hand.swing >= 0) {
+      hand.swing += dt / SWING_TIME;
+      if (hand.swing >= 1 + SWING_DELAY) {
+        if (hand.held) this.wave(); else hand.swing = -1;
+      }
+    }
+    let target = this.aim >= 0 ? hue(this.aim + 1) : STICK_HUE;
+    const solo = this.state.solo || [];
+    if (this.aim < 0 && solo.length === 1 && solo[0] > 0) target = hue(solo[0]);
+    // 沿色环的近路过渡
+    const delta = ((target - hand.hue + 540) % 360) - 180;
+    hand.hue = (hand.hue + delta * (1 - Math.exp(-dt * 6)) + 360) % 360;
+    for (const spark of hand.sparks) {
+      spark.x += spark.vx * dt;
+      spark.y += spark.vy * dt;
+      spark.vy += 240 * dt;
+      spark.vx *= Math.exp(-dt * 2);
+      spark.life -= dt;
+    }
+    hand.sparks = hand.sparks.filter((spark) => spark.life > 0);
   }
 
   /** 取当前播放位置的场景，平滑对象位置与电平 */
@@ -547,6 +733,7 @@ class SpatialScene {
       if (!object.target) continue;
       for (let k = 0; k < 3; k++) object.pos[k] += (object.target[k] - object.pos[k]) * follow;
       object.level = this.smoothLevel(object.level, object.rms || 0, dt);
+      if (object.cheer) object.cheer = Math.max(0, object.cheer - dt * 1.8);
       object.trail.push(object.pos.slice());
       if (object.trail.length > TRAIL) object.trail.shift();
     }
@@ -611,8 +798,11 @@ class SpatialScene {
   pick(clientX, clientY) {
     if (!this.cam) return -1;
     const rect = this.canvas.getBoundingClientRect();
-    const x = clientX - rect.left;
-    const y = clientY - rect.top;
+    return this.pickAt(clientX - rect.left, clientY - rect.top);
+  }
+
+  /** 画布坐标下最靠前的光球 */
+  pickAt(x, y) {
     let best = -1;
     let bestDepth = Infinity;
     for (let i = 0; i < OBJECTS; i++) {
@@ -633,6 +823,8 @@ class SpatialScene {
     ctx.setTransform(this.ratio, 0, 0, this.ratio, 0, 0);
     ctx.clearRect(0, 0, this.width, this.height);
     this.setupCamera();
+    this.aim = this.view === 'first' ? this.pickAt(this.cam.cx, this.cam.cy) : -1;
+    if (this.locked) this.hover = this.aim;
     this.drawFloor();
     this.drawShadows();
     const items = [];
@@ -650,7 +842,11 @@ class SpatialScene {
     }
     items.sort((a, b) => b.depth - a.depth);
     for (const item of items) item.draw();
-    if (this.view === 'first') this.drawCompass();
+    if (this.view === 'first') {
+      this.drawCompass();
+      if (this.stickOn) this.drawHand();
+      if (this.look) this.drawLookHint();
+    }
     this.renderMeters();
   }
 
@@ -775,6 +971,14 @@ class SpatialScene {
       ctx.arc(p.x, p.y, radius, 0, TAU);
       ctx.fill();
     }
+    if (object.cheer > 0) {
+      // 被应援棒挥到：向外扩散的光圈
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, radius + 6 + (1 - object.cheer) * 40, 0, TAU);
+      ctx.strokeStyle = `hsla(${color}, 100%, 78%, ${object.cheer * 0.9})`;
+      ctx.lineWidth = 1 + object.cheer * 3;
+      ctx.stroke();
+    }
     if (soloed || this.hover === index) {
       ctx.beginPath();
       ctx.arc(p.x, p.y, radius + 4, 0, TAU);
@@ -893,16 +1097,211 @@ class SpatialScene {
       if (label) ctx.fillText(t(label), x, top);
       else ctx.fillRect(x - 0.5, top - (deg % 45 ? 3 : 6), 1, deg % 45 ? 6 : 12);
     }
+    // 准星对准光球时染上它的颜色、张开一点
     const { cx, cy } = this.cam;
-    ctx.strokeStyle = 'rgba(255,255,255,.5)';
+    const aimed = this.aim >= 0;
+    const ring = aimed ? 13 : 10;
+    ctx.strokeStyle = aimed ? `hsla(${hue(this.aim + 1)}, 100%, 78%, .95)` : 'rgba(255,255,255,.5)';
     ctx.lineWidth = 1.5;
     ctx.beginPath();
-    ctx.arc(cx, cy, 10, 0, TAU);
-    ctx.moveTo(cx - 18, cy);
-    ctx.lineTo(cx - 13, cy);
-    ctx.moveTo(cx + 13, cy);
-    ctx.lineTo(cx + 18, cy);
+    ctx.arc(cx, cy, ring, 0, TAU);
+    ctx.moveTo(cx - ring - 8, cy);
+    ctx.lineTo(cx - ring - 3, cy);
+    ctx.moveTo(cx + ring + 3, cy);
+    ctx.lineTo(cx + ring + 8, cy);
     ctx.stroke();
+    if (this.locked) {
+      ctx.beginPath();
+      ctx.arc(cx, cy, 1.5, 0, TAU);
+      ctx.fillStyle = ctx.strokeStyle;
+      ctx.fill();
+    }
+  }
+
+  /** 鼠标视角：没锁定时提示点击画面，刚锁定时在底部提示几秒操作方式 */
+  drawLookHint() {
+    const ctx = this.ctx;
+    let text;
+    let y;
+    let alpha;
+    if (this.locked) {
+      alpha = clamp(5 - (performance.now() - this.lockedAt) / 1000, 0, 1);
+      if (!alpha) return;
+      text = t(this.stickOn ? 'scene.lockHintStick' : 'scene.lockHint');
+      y = this.height - 32;
+    } else {
+      text = t('scene.lockPrompt');
+      y = this.cam.cy + 56;
+      alpha = 1;
+    }
+    ctx.font = `600 12px ${FONT}`;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    const width = Math.min(ctx.measureText(text).width + 28, this.width - 24);
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.roundRect(this.width / 2 - width / 2, y - 15, width, 30, 15);
+    ctx.fillStyle = 'rgba(0,0,0,.55)';
+    ctx.fill();
+    ctx.fillStyle = 'rgba(255,255,255,.88)';
+    ctx.fillText(text, this.width / 2, y, width - 20);
+    ctx.globalAlpha = 1;
+  }
+
+  /**
+   * 第一人称下方双手举着的应援棒：小圆球一样的手（不画手指），一只手一支。
+   * 按相机空间（右、上、前）的位置透视画出来，往前挥时棒尖朝远处倒、看上去变短；左手比右手晚一点。
+   * 光管随低频电平呼吸发光；挥动时留下残影、甩出火花。
+   */
+  drawHand() {
+    const ctx = this.ctx;
+    const hand = this.hand;
+    const dt = this.frameDt;
+    // 底部控制项显示时把手抬到它们上面，锁定鼠标时（控制项隐藏）落回屏幕底部
+    const lift = this.locked ? 0 : Math.max(0, (this.bottomHeight || 0) - 30);
+    hand.lift += (lift - hand.lift) * (1 - Math.exp(-dt * 8));
+    // 只在控制项上方的可见区域里布置双手（手机上控制项很高）
+    const visible = Math.max(this.height * 0.4, this.height - hand.lift);
+    const focal = Math.min(this.width, visible) * 0.9;
+    const cx = this.width / 2 + hand.swayX;
+    const cy = visible * 0.5 + hand.swayY;
+    const project = ([x, y, z]) => ({ x: cx + (x * focal) / z, y: cy - (y * focal) / z, k: focal / z });
+    // 两手的间距随屏幕宽高比收拢，竖屏时不至于出画
+    const spread = clamp((this.width / focal) * 0.2, 0.14, 0.3);
+    const beat = this.gainOf(0) > 0 ? this.lfe : 0;
+    const swinging = hand.swing >= 0;
+    const h = Math.round(hand.hue);
+    const length = 0.3;
+
+    if (hand.sparks.length) {
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      for (const spark of hand.sparks) {
+        ctx.beginPath();
+        ctx.arc(spark.x, spark.y, spark.size, 0, TAU);
+        ctx.fillStyle = `hsla(${h}, 100%, 75%, ${Math.min(1, spark.life * 2)})`;
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    for (const side of [-1, 1]) {
+      const state = hand.sides[side < 0 ? 0 : 1];
+      // 快出慢回：前 30% 往前挥出去，其余时间收回来
+      const p = swinging ? clamp(hand.swing - (side < 0 ? SWING_DELAY : 0), 0, 1) : 0;
+      const arc = p < 0.3 ? Math.sin((p / 0.3) * (Math.PI / 2)) : Math.cos(((p - 0.3) / 0.7) * (Math.PI / 2)) ** 2;
+      const bob = Math.sin(hand.bob + (side < 0 ? Math.PI : 0)) * 0.012 * hand.walk;
+      // 挥动是小臂绕手肘往前转、手腕不动：拳头沿以手肘为圆心的弧往前下方走，棒子跟小臂转同样的角度
+      const turn = arc * 0.7;
+      const rotate = ([x, y, z]) => [x, y * Math.cos(turn) - z * Math.sin(turn), y * Math.sin(turn) + z * Math.cos(turn)];
+      const elbow = [side * (spread + 0.05), -0.48 + bob + beat * 0.006, 0.53];
+      const forearm = rotate([-side * 0.05, 0.24, 0.07]);
+      const base = elbow.map((value, k) => value + forearm[k]);
+      // 棒子向内斜一点，往前转时稍微摆正（否则看上去像往里倒）
+      const lean = -0.26 * side * (1 - arc * 0.5);
+      const dir = rotate([Math.sin(lean), Math.cos(lean) * Math.cos(0.12), Math.cos(lean) * Math.sin(0.12)]);
+      const fist = project(base);
+      // 棒子本身不做透视汇聚（否则朝前的棒子都指向画面中心，像往里倒），只按深度变细
+      const at = (t) => ({ x: fist.x + dir[0] * t * fist.k, y: fist.y - dir[1] * t * fist.k, k: focal / (base[2] + dir[2] * t) });
+      const from = at(0.01);
+      const tip = at(length);
+      const grip = at(-0.05);
+      const glow = 0.55 + beat * 0.45 + arc * 0.3;
+      const ball = 0.042 * fist.k;
+
+      // 小臂（袖子）：从拳头朝手肘方向伸出画面，渐隐；挥动时跟着转
+      const joint = project(elbow);
+      const end = { x: fist.x + (joint.x - fist.x) * 1.6, y: fist.y + (joint.y - fist.y) * 1.6 };
+      const sleeve = ctx.createLinearGradient(fist.x, fist.y, end.x, end.y);
+      sleeve.addColorStop(0, '#34303f');
+      sleeve.addColorStop(0.6, 'rgba(26,24,33,.85)');
+      sleeve.addColorStop(1, 'rgba(22,20,28,0)');
+      capsule(ctx, fist, end, ball * 0.8, ball * 1.5);
+      ctx.fillStyle = sleeve;
+      ctx.fill();
+
+      // 残影：挥动时最近几帧的光管
+      state.ghosts.push([from, tip]);
+      if (state.ghosts.length > 6) state.ghosts.shift();
+      if (swinging) {
+        ctx.save();
+        ctx.globalCompositeOperation = 'lighter';
+        state.ghosts.forEach(([a, b], k) => {
+          capsule(ctx, a, b, 0.011 * a.k, 0.011 * b.k);
+          ctx.fillStyle = `hsla(${h}, 100%, 65%, ${0.04 + k * 0.022})`;
+          ctx.fill();
+        });
+        ctx.restore();
+      }
+      // 火花：从棒子上半段顺着棒尖的速度甩出去
+      if (state.lastTip && dt > 0 && swinging && hand.sparks.length < SPARKS) {
+        const vx = (tip.x - state.lastTip.x) / dt;
+        const vy = (tip.y - state.lastTip.y) / dt;
+        if (Math.hypot(vx, vy) > 300) {
+          for (let k = 0; k < 2; k++) {
+            const u = 0.55 + Math.random() * 0.45;
+            hand.sparks.push({
+              x: from.x + (tip.x - from.x) * u,
+              y: from.y + (tip.y - from.y) * u,
+              vx: vx * 0.35 * u + (Math.random() - 0.5) * 80,
+              vy: vy * 0.35 * u - Math.random() * 80,
+              life: 0.4 + Math.random() * 0.4,
+              size: (1.2 + Math.random() * 1.8) * (fist.k / 1000),
+            });
+          }
+        }
+      }
+      state.lastTip = tip;
+
+      // 光照到周围的一大团柔光
+      const mid = { x: (from.x + tip.x) / 2, y: (from.y + tip.y) / 2 };
+      const reach = 0.16 * fist.k;
+      ctx.save();
+      ctx.globalCompositeOperation = 'lighter';
+      const halo = ctx.createRadialGradient(mid.x, mid.y, 0, mid.x, mid.y, reach);
+      halo.addColorStop(0, `hsla(${h}, 100%, 60%, ${0.1 + glow * 0.14})`);
+      halo.addColorStop(1, `hsla(${h}, 100%, 60%, 0)`);
+      ctx.fillStyle = halo;
+      ctx.fillRect(mid.x - reach, mid.y - reach, reach * 2, reach * 2);
+      ctx.restore();
+      // 握柄（露在拳头下面一点）
+      capsule(ctx, grip, fist, 0.01 * grip.k, 0.01 * fist.k);
+      ctx.fillStyle = '#25252e';
+      ctx.fill();
+      // 光管：边缘是颜色，中间近白，随电平呼吸
+      const nx = -(tip.y - from.y);
+      const ny = tip.x - from.x;
+      const norm = Math.hypot(nx, ny) || 1;
+      const r = 0.011 * from.k;
+      const tube = ctx.createLinearGradient(mid.x - (nx / norm) * r, mid.y - (ny / norm) * r, mid.x + (nx / norm) * r, mid.y + (ny / norm) * r);
+      tube.addColorStop(0, `hsla(${h}, 95%, ${42 + glow * 14}%, 1)`);
+      tube.addColorStop(0.5, `hsla(${h}, 100%, ${78 + glow * 16}%, 1)`);
+      tube.addColorStop(1, `hsla(${h}, 95%, ${42 + glow * 14}%, 1)`);
+      ctx.save();
+      ctx.shadowColor = `hsla(${h}, 100%, 60%, .9)`;
+      ctx.shadowBlur = (0.02 + glow * 0.028) * fist.k;
+      capsule(ctx, from, tip, r, 0.011 * tip.k);
+      ctx.fillStyle = tube;
+      ctx.fill();
+      ctx.restore();
+      ctx.beginPath();
+      ctx.arc(tip.x, tip.y, 0.006 * tip.k, 0, TAU);
+      ctx.fillStyle = `hsla(${h}, 100%, 96%, ${0.5 + glow * 0.4})`;
+      ctx.fill();
+      // 圆球拳头：盖住握柄与光管的根部，上沿被光管照亮
+      const skin = ctx.createRadialGradient(fist.x - ball * 0.35, fist.y - ball * 0.4, ball * 0.1, fist.x, fist.y, ball);
+      skin.addColorStop(0, '#f6e3d8');
+      skin.addColorStop(1, '#b98f7d');
+      ctx.beginPath();
+      ctx.arc(fist.x, fist.y, ball, 0, TAU);
+      ctx.fillStyle = skin;
+      ctx.fill();
+      ctx.beginPath();
+      ctx.arc(fist.x, fist.y, ball - 1, Math.PI * 1.1, Math.PI * 1.9);
+      ctx.strokeStyle = `hsla(${h}, 100%, 75%, ${0.25 + glow * 0.3})`;
+      ctx.lineWidth = 2;
+      ctx.stroke();
+    }
   }
 
   renderMeters() {

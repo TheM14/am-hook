@@ -1856,6 +1856,11 @@ html[dir="rtl"] .lyrics-controls .player .volume::-moz-range-track { background:
 .joc-scene-canvas:active { cursor: grabbing; }
 .joc-scene-top, .joc-scene-bottom, .joc-scene-message { position: relative; pointer-events: none; }
 .joc-scene-top > *, .joc-scene-bottom > * { pointer-events: auto; }
+/* 鼠标视角：锁定鼠标时标题栏与控制项淡出，只留画面 */
+.joc-scene-top, .joc-scene-bottom { transition: opacity .3s; }
+.joc-scene.is-locked .joc-scene-top, .joc-scene.is-locked .joc-scene-bottom { opacity: 0; }
+.joc-scene.is-locked .joc-scene-top > *, .joc-scene.is-locked .joc-scene-bottom > * { pointer-events: none; }
+.joc-scene.is-look .joc-scene-canvas, .joc-scene.is-look .joc-scene-canvas:active { cursor: crosshair; }
 .joc-scene-top { display: flex; align-items: center; gap: 12px; padding: max(14px, env(safe-area-inset-top)) 16px 0; }
 .joc-scene-title { margin: 0; color: #fff; font-size: 17px; font-weight: 700; }
 .joc-scene-status { flex: 1; min-width: 0; overflow: hidden; color: rgba(255, 255, 255, .5); font-size: 12px; font-variant-numeric: tabular-nums; text-overflow: ellipsis; white-space: nowrap; }
