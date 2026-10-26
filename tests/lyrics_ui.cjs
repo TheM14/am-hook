@@ -172,6 +172,13 @@ const amllTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
         await page.evaluate(() => { fakeTransport.currentTime = 5.5; });
         await page.waitForTimeout(300);
         assert.deepEqual(await activeLines(), ['Second line']);
+        // 声场界面盖住歌词界面时逐帧循环停下，关闭后从当前位置接上
+        await page.evaluate(() => { AmApp.player.setSceneOpen(true); fakeTransport.currentTime = 9.5; });
+        await page.waitForTimeout(300);
+        assert.deepEqual(await activeLines(), ['Second line'], 'lyrics stop updating under the sound field');
+        await page.evaluate(() => AmApp.player.setSceneOpen(false));
+        await page.waitForTimeout(300);
+        assert.deepEqual(await activeLines(), ['Third line'], 'lyrics resume once the sound field closes');
         await page.locator(lineSel).filter({ hasText: 'Third line' }).click();
         assert.equal(await page.evaluate(() => fakeTransport.currentTime), 9, 'clicking a line seeks the player');
         await page.waitForTimeout(300);

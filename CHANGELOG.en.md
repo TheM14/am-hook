@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v0.6.3 (2026-10-26)
+
+### New
+- ✨ Mouse look in the spatial scene's first-person view (desktop): with the pointer locked, moving the mouse turns your head, FPS style; the top bar and controls fade out while locked, and Esc only releases the mouse
+- ✨ Glow sticks in the spatial scene's first-person view (desktop): two fists hold sticks that pulse with the LFE level and take the colour of the object under the crosshair; click to wave them forward from the elbow (hold to keep waving), with trails, sparks and a ring on the object you hit; right-click solos the object under the crosshair
+
+### Changed
+- ⚡ While the spatial scene covers the full-screen player, the lyrics and backdrop behind it (AMLL or classic) pause and pick up from the current position when it closes, cutting renderer CPU by about 30–40%
+- ⚡ Lighter spatial scene drawing: at most 60 frames a second (no longer following high-refresh displays), the floor grid cached in an offscreen canvas, trails stroked in batches and level meters that no longer trigger layout; on a 160 Hz display renderer CPU drops by about two thirds and the GPU process by about 60%. Trails, afterimages and sparks are as long on high-refresh displays as at 60 Hz
+
 ## v0.6.2 (2026-10-25)
 
 ### Fixes
