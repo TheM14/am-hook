@@ -1723,6 +1723,9 @@
        */
       this.spatial = { yaw: 0, pitch: 0, roll: 0, x: 0, y: 0, z: 0, focus: 0, height: 1, gains: new Array(16).fill(1), solo: [], mute: [] };
       this.spatialListeners = new Set();
+      /** 声场界面是否打开（铺满视口，盖住歌词界面；歌词界面据此停掉自己的动画，见 lyrics/panel.mjs） */
+      this.sceneOpen = false;
+      this.sceneListeners = new Set();
       this.$ = (sel) => root.querySelector(sel);
       // 歌名、「艺人 — 专辑」两行滚动字幕
       const title = this.$('.player-title');
@@ -1944,6 +1947,13 @@
 
     onSpatial(fn) { this.spatialListeners.add(fn); return () => this.spatialListeners.delete(fn); }
     emitSpatial() { for (const fn of this.spatialListeners) fn(this.spatial); }
+    onSceneOpen(fn) { this.sceneListeners.add(fn); return () => this.sceneListeners.delete(fn); }
+    /** joc-scene.mjs 打开 / 关闭声场界面时调用 */
+    setSceneOpen(on) {
+      if (this.sceneOpen === on) return;
+      this.sceneOpen = on;
+      for (const fn of this.sceneListeners) fn(on);
+    }
 
     /** 打开声场界面（按需加载 joc-scene.mjs）；不是双耳渲染时先切到双耳 */
     async openSpatial() {

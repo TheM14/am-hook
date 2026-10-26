@@ -405,6 +405,8 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
   let generation = 0;
   let unavailable = false;
   let open = false;
+  // 声场界面盖住歌词界面时停掉背景与逐帧循环（被盖住时浏览器照样绘制），关闭后恢复
+  let covered = !!player.sceneOpen;
   let frame = 0;
   let lastFrame = 0;
   let playing = null;
@@ -711,7 +713,7 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
     const target = backdrop;
     if (!target) return;
     const source = getMeta().artwork || '';
-    if (source === artworkSource) { target.resume(); return; }
+    if (source === artworkSource) { if (!covered) target.resume(); return; }
     artworkSource = source;
     if (artworkController) artworkController.abort();
     artworkController = null;
@@ -730,7 +732,7 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
         if (!shown || controller.signal.aborted) return;
         canvas.hidden = false;
         root.classList.add('has-backdrop');
-        if (open) target.resume(); else target.pause();
+        if (open && !covered) target.resume(); else target.pause();
       })
       .catch((error) => { if (!controller.signal.aborted) console.warn('[am-hook] 歌词背景加载失败', error); });
   }
@@ -826,7 +828,7 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
     placeCover(true);
     playing = null;
     lastFrame = 0;
-    frame = requestAnimationFrame(tick);
+    if (!covered) frame = requestAnimationFrame(tick);
     // 焦点移到收起按钮，但不显示焦点框（否则它一打开就变成 ✕）；之后按 Tab 时照常显示
     closeButton.focus({ preventScroll: true, focusVisible: false });
     onShow?.();
@@ -1304,6 +1306,21 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
     if (!menu.hidden) renderMenu();
     if (open) renderHeader();
     syncToggle();
+  });
+  player.onSceneOpen((on) => {
+    covered = on;
+    if (!open) return;
+    if (on) {
+      cancelAnimationFrame(frame);
+      frame = 0;
+      backdrop?.pause();
+      return;
+    }
+    // 被盖住期间可能换了曲目或暂停了播放：重新同步播放状态，背景按当前封面恢复
+    playing = null;
+    lastFrame = 0;
+    if (!frame) frame = requestAnimationFrame(tick);
+    loadArtwork();
   });
   applyPrefs();
   syncLayout();

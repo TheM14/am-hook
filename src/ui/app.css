@@ -1882,7 +1882,7 @@ html[dir="rtl"] .lyrics-controls .player .volume::-moz-range-track { background:
 }
 .joc-scene-chip.is-silent { opacity: .45; }
 .joc-scene-meter { grid-column: 1 / -1; display: flex; align-items: flex-end; overflow: hidden; border-radius: 4px; background: rgba(255, 255, 255, .06); }
-.joc-scene-meter-fill { width: 100%; height: 0; background: hsl(var(--chip-hue), 85%, 62%); }
+.joc-scene-meter-fill { width: 100%; height: 100%; background: hsl(var(--chip-hue), 85%, 62%); transform: scaleY(0); transform-origin: bottom; }
 .joc-scene-chip-name { grid-column: 1 / -1; overflow: hidden; color: hsl(var(--chip-hue), 80%, 78%); font-size: 11px; font-weight: 700; text-align: center; white-space: nowrap; }
 .joc-scene-chip button {
   height: 18px; padding: 0; border: 0; border-radius: 4px; background: rgba(255, 255, 255, .08); color: rgba(255, 255, 255, .6);

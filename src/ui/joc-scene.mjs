@@ -18,6 +18,10 @@ const { t } = AmI18n;
 const MIX_RADIUS = 2.19327927;
 const OBJECTS = 15;
 const TRAIL = 40;
+/** 轨迹按透明度分成几段，每段描一次边（逐段描边在每帧 15 条轨迹时很费） */
+const TRAIL_BANDS = 8;
+/** 最多每秒画 60 帧：高刷屏上 rAF 可达 120–165 Hz，对象场景每秒只更新约 30 次 */
+const FRAME_INTERVAL = 1000 / 60;
 const HEAD_RADIUS = 0.32;
 /** 地面在耳朵下方的高度（米）：网格、方位字与对象的投影画在这里 */
 const FLOOR = -1.3;
@@ -45,6 +49,7 @@ let current = null;
 export function open(player) {
   if (current) { current.root.focus(); return current; }
   current = new SpatialScene(player);
+  player.setSceneOpen(true);
   return current;
 }
 
@@ -66,6 +71,11 @@ function button(className, text, title) {
 function hue(index) { return index === 0 ? 40 : ((index - 1) * 24 + 200) % 360; }
 
 function clamp(value, low, high) { return Math.min(high, Math.max(low, value)); }
+
+/** 地面高度上以原点为圆心的圆（世界坐标的折线） */
+function floorCircle(radius) {
+  return Array.from({ length: 73 }, (_, k) => [Math.cos((k / 72) * TAU) * radius, Math.sin((k / 72) * TAU) * radius, FLOOR]);
+}
 
 /** 头部朝向（左转 yaw、抬头 pitch）的面向与右手方向 */
 function headAxes(yaw, pitch) {
@@ -134,6 +144,7 @@ class SpatialScene {
     this.lastScene = null;
     this.dirty = false;
     this.last = performance.now();
+    this.nextDraw = 0;
     this.build();
     this.unsubscribe = player.onSpatial((state) => { this.state = state; this.renderMixer(); this.renderReadout(); });
     // 键盘只在声场里处理（焦点在对话框内），处理过的键不再传给播放器的快捷键；空格等照常播放 / 暂停
@@ -600,6 +611,7 @@ class SpatialScene {
     this.root.remove();
     if (this.previousFocus && this.previousFocus.focus) this.previousFocus.focus();
     current = null;
+    this.player.setSceneOpen(false);
   }
 
   fit() {
@@ -615,6 +627,9 @@ class SpatialScene {
 
   tick(time) {
     this.frame = requestAnimationFrame((next) => this.tick(next));
+    // 留 2 ms 余量，60 Hz 屏上 rAF 的抖动不至于隔帧才画；停顿过后从现在重新计
+    if (time + 2 < this.nextDraw) return;
+    this.nextDraw = Math.max(this.nextDraw, time - FRAME_INTERVAL) + FRAME_INTERVAL;
     const dt = Math.min(0.1, (time - this.last) / 1000);
     this.last = time;
     this.frameDt = dt;
@@ -850,25 +865,54 @@ class SpatialScene {
     this.renderMeters();
   }
 
-  /** 耳朵高度的地面：同心圆、方位线、ADM 房间的轮廓与「前 / 后 / 左 / 右」 */
+  /** 世界坐标的折线（在相机后面的点断开） */
+  strokeWorld(ctx, points, style, width = 1, dash = null) {
+    ctx.beginPath();
+    let pen = false;
+    for (const point of points) {
+      const p = this.project(point);
+      if (!p) { pen = false; continue; }
+      if (pen) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
+      pen = true;
+    }
+    ctx.strokeStyle = style;
+    ctx.lineWidth = width;
+    ctx.setLineDash(dash || []);
+    ctx.stroke();
+  }
+
+  /**
+   * 耳朵高度的地面与脚下的 LFE 光环。地面只随相机、画布大小与语言变化，画在离屏画布上缓存，每帧贴一次：
+   * 铺满画面的大圆每次描边都要算整片覆盖，高分屏上很费 GPU（俯瞰时相机不动就不必重画）
+   */
   drawFloor() {
-    const ctx = this.ctx;
-    const line = (points, style, width = 1, dash = null) => {
-      ctx.beginPath();
-      let pen = false;
-      for (const point of points) {
-        const p = this.project(point);
-        if (!p) { pen = false; continue; }
-        if (pen) ctx.lineTo(p.x, p.y); else ctx.moveTo(p.x, p.y);
-        pen = true;
+    const { eye, face, focal, cx, cy } = this.cam;
+    const key = [...eye, ...face, focal, cx, cy, this.canvas.width, this.canvas.height, t('scene.front')].join();
+    if (key !== this.floorKey) {
+      this.floorKey = key;
+      if (!this.floor) this.floor = document.createElement('canvas');
+      const floor = this.floor;
+      if (floor.width !== this.canvas.width || floor.height !== this.canvas.height) {
+        floor.width = this.canvas.width;
+        floor.height = this.canvas.height;
       }
-      ctx.strokeStyle = style;
-      ctx.lineWidth = width;
-      ctx.setLineDash(dash || []);
-      ctx.stroke();
-    };
-    const circle = (radius, z = FLOOR) => Array.from({ length: 73 }, (_, k) => [Math.cos((k / 72) * TAU) * radius, Math.sin((k / 72) * TAU) * radius, z]);
-    for (const radius of [1, 2, 3, 4, 5]) line(circle(radius), radius === 2 ? 'rgba(255,255,255,.14)' : 'rgba(255,255,255,.06)');
+      const ctx = floor.getContext('2d');
+      ctx.setTransform(this.ratio, 0, 0, this.ratio, 0, 0);
+      ctx.clearRect(0, 0, this.width, this.height);
+      this.paintFloor(ctx);
+    }
+    this.ctx.drawImage(this.floor, 0, 0, this.width, this.height);
+    // LFE：脚下随低频电平起伏的光环
+    if (this.lfe > 0.02 && this.gainOf(0) > 0) {
+      const ring = floorCircle(0.55 + this.lfe * 0.9).map(([x, y]) => [x + (this.state.x || 0), y + (this.state.y || 0), FLOOR]);
+      this.strokeWorld(this.ctx, ring, `hsla(${hue(0)}, 90%, 70%, ${0.15 + this.lfe * 0.5})`, 1 + this.lfe * 3);
+    }
+  }
+
+  /** 地面：同心圆、方位线、ADM 房间的轮廓与「前 / 后 / 左 / 右」 */
+  paintFloor(ctx) {
+    const line = (...args) => this.strokeWorld(ctx, ...args);
+    for (const radius of [1, 2, 3, 4, 5]) line(floorCircle(radius), radius === 2 ? 'rgba(255,255,255,.14)' : 'rgba(255,255,255,.06)');
     for (let k = 0; k < 12; k++) {
       const angle = (k / 12) * TAU;
       line([[Math.cos(angle) * 0.6, Math.sin(angle) * 0.6, FLOOR], [Math.cos(angle) * 5, Math.sin(angle) * 5, FLOOR]], 'rgba(255,255,255,.05)');
@@ -888,11 +932,6 @@ class SpatialScene {
       if (!p) continue;
       ctx.fillStyle = key === 'scene.front' ? 'rgba(250,45,72,.9)' : 'rgba(255,255,255,.45)';
       ctx.fillText(t(key), p.x, p.y);
-    }
-    // LFE：脚下随低频电平起伏的光环
-    if (this.lfe > 0.02 && this.gainOf(0) > 0) {
-      const ring = circle(0.55 + this.lfe * 0.9).map(([x, y]) => [x + (this.state.x || 0), y + (this.state.y || 0), FLOOR]);
-      line(ring, `hsla(${hue(0)}, 90%, 70%, ${0.15 + this.lfe * 0.5})`, 1 + this.lfe * 3);
     }
   }
 
@@ -929,19 +968,25 @@ class SpatialScene {
     const active = object.level > 0.05;
     // 轨迹
     if (object.trail.length > 2 && !silent) {
-      let previous = null;
-      object.trail.forEach((point, k) => {
-        const q = this.project(this.objectWorld(point));
-        if (q && previous) {
-          ctx.beginPath();
+      const count = object.trail.length;
+      const points = object.trail.map((point) => this.project(this.objectWorld(point)));
+      ctx.lineWidth = 2;
+      // 第 k 段（points[k - 1] → points[k]）越新越不透明；同一段落里的线段取中间那段的透明度
+      for (let band = 0; band < TRAIL_BANDS; band++) {
+        const from = Math.max(1, Math.ceil((band * count) / TRAIL_BANDS));
+        const to = Math.ceil(((band + 1) * count) / TRAIL_BANDS);
+        if (from >= to) continue;
+        ctx.beginPath();
+        for (let k = from; k < to; k++) {
+          const previous = points[k - 1];
+          const q = points[k];
+          if (!previous || !q) continue;
           ctx.moveTo(previous.x, previous.y);
           ctx.lineTo(q.x, q.y);
-          ctx.strokeStyle = `hsla(${color}, 85%, 65%, ${(k / object.trail.length) * 0.35})`;
-          ctx.lineWidth = 2;
-          ctx.stroke();
         }
-        previous = q;
-      });
+        ctx.strokeStyle = `hsla(${color}, 85%, 65%, ${((from + to - 1) / 2 / count) * 0.35})`;
+        ctx.stroke();
+      }
     }
     const radius = clamp(this.orbRadius(object) * p.scale, 2.5, MAX_ORB);
     if (silent) {
@@ -1308,8 +1353,9 @@ class SpatialScene {
     for (let index = 0; index <= OBJECTS; index++) {
       const level = index === 0 ? this.lfe : this.objects[index - 1].level;
       const meter = this.mixerItems[index].meter;
-      const value = `${Math.round(level * 100)}%`;
-      if (meter.style.height !== value) meter.style.height = value;
+      // 用 transform 缩放而不改高度，电平表每帧变化也不触发排版
+      const value = `scaleY(${Math.round(level * 100) / 100})`;
+      if (meter.style.transform !== value) meter.style.transform = value;
     }
   }
 }
