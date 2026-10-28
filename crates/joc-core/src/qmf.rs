@@ -525,3 +525,142 @@ impl Renderer {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ObjectDescriptor, Renderer};
+    use crate::{FRAME_SAMPLES, OUTPUT_CHANNELS};
+
+    /// The renderer keeps megabyte-sized fixed arrays; give the test a large stack.
+    fn on_big_stack(f: impl FnOnce() + Send + 'static) {
+        std::thread::Builder::new()
+            .stack_size(64 * 1024 * 1024)
+            .spawn(f)
+            .expect("spawn")
+            .join()
+            .expect("clipgain test");
+    }
+
+    /// One frame of a synthetic 5-channel bed driving a single object through a
+    /// single parameter band, so the analysis scalar is the only variable.
+    struct Inputs {
+        bed: Vec<f32>,
+        lfe: Vec<f32>,
+        descriptor: ObjectDescriptor,
+    }
+
+    fn inputs() -> Inputs {
+        let mut bed = vec![0.0f32; 5 * FRAME_SAMPLES];
+        let mut lfe = vec![0.0f32; FRAME_SAMPLES];
+        for sample in 0..FRAME_SAMPLES {
+            let t = sample as f64 / 48000.0;
+            bed[sample] = (0.05 * (2.0 * std::f64::consts::PI * 440.0 * t).sin()) as f32;
+            lfe[sample] = (0.02 * (2.0 * std::f64::consts::PI * 55.0 * t).sin()) as f32;
+        }
+        let mut descriptor = ObjectDescriptor::new();
+        descriptor.n_bands = 1;
+        descriptor.n_dpoints = 1;
+        descriptor.dq[0] = 1.0;
+        Inputs {
+            bed,
+            lfe,
+            descriptor,
+        }
+    }
+
+    fn render(renderer: &mut Renderer, inputs: &Inputs, clipgain: f64) -> Vec<f32> {
+        let mut out = vec![0.0f32; OUTPUT_CHANNELS * FRAME_SAMPLES];
+        renderer
+            .process(
+                &inputs.bed,
+                Some(&inputs.lfe),
+                5,
+                false,
+                1,
+                &inputs.descriptor,
+                clipgain,
+                0.0625,
+                1.0,
+                &mut out,
+            )
+            .expect("process");
+        out
+    }
+
+    #[test]
+    fn first_frame_uses_its_own_clipgain() {
+        on_big_stack(|| {
+            let inputs = inputs();
+            let unity = render(&mut Renderer::new(), &inputs, 1.0);
+            let doubled = render(&mut Renderer::new(), &inputs, 2.0);
+            let mut peak = 0.0f32;
+            for sample in 0..FRAME_SAMPLES {
+                let value = unity[FRAME_SAMPLES + sample]; // object 0 is channel 1
+                peak = peak.max(value.abs());
+                // A fresh renderer takes the current gain with no transition.
+                assert_eq!(doubled[FRAME_SAMPLES + sample], 2.0 * value);
+            }
+            assert!(peak > 1.0e-3, "the object path carries no signal");
+            // LFE bypasses the scalar.
+            assert_eq!(&unity[..FRAME_SAMPLES], &doubled[..FRAME_SAMPLES]);
+        });
+    }
+
+    #[test]
+    fn a_clipgain_change_lands_in_the_frame_that_carries_it() {
+        on_big_stack(|| {
+            let inputs = inputs();
+            let mut changed_renderer = Renderer::new();
+            let _ = render(&mut changed_renderer, &inputs, 1.0);
+            let changed = render(&mut changed_renderer, &inputs, 2.0);
+            let mut held_renderer = Renderer::new();
+            let _ = render(&mut held_renderer, &inputs, 1.0);
+            let held = render(&mut held_renderer, &inputs, 1.0);
+
+            // A gain applied one frame late would leave these frames identical.
+            let mut difference = 0.0f64;
+            let mut energy = 0.0f64;
+            for object in 1..OUTPUT_CHANNELS {
+                for sample in 0..FRAME_SAMPLES {
+                    let index = object * FRAME_SAMPLES + sample;
+                    difference += f64::from(changed[index] - held[index]).abs();
+                    energy += f64::from(held[index]).abs();
+                }
+            }
+            assert!(
+                difference > 0.05 * energy,
+                "the gain did not reach the frame: {difference} vs {energy}"
+            );
+
+            // The analysis delay lines and the QMF windows hold the new gain back,
+            // so the head of the frame still carries the old value...
+            assert_eq!(
+                &changed[FRAME_SAMPLES..FRAME_SAMPLES + 256],
+                &held[FRAME_SAMPLES..FRAME_SAMPLES + 256]
+            );
+            // ...and by the end of the frame it is scaled by the new gain.
+            for sample in 1504..FRAME_SAMPLES {
+                let index = FRAME_SAMPLES + sample;
+                let error = f64::from(changed[index]) - 2.0 * f64::from(held[index]);
+                assert!(
+                    error.abs() < 1.0e-4,
+                    "sample {sample} is not scaled: {error}"
+                );
+            }
+        });
+    }
+
+    #[test]
+    fn reset_clears_the_previous_clipgain() {
+        on_big_stack(|| {
+            let inputs = inputs();
+            let mut renderer = Renderer::new();
+            let _ = render(&mut renderer, &inputs, 3.0);
+            let _ = render(&mut renderer, &inputs, 3.0);
+            renderer.reset();
+            let after_reset = render(&mut renderer, &inputs, 1.0);
+            let fresh = render(&mut Renderer::new(), &inputs, 1.0);
+            assert_eq!(after_reset, fresh, "gain state survived the reset");
+        });
+    }
+}

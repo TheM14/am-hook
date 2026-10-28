@@ -1,14 +1,25 @@
 //! OAMD object-position timeline for the binaural path.
 //!
 //! The reference converts each OAMD update into an ADM position triple, then
-//! builds per-object ramps whose start is shifted by the object delay.  The
-//! timeline only answers monotonic queries, which is what the renderer does.
+//! builds per-object ramps whose start is the update instant snapped to the
+//! renderer's processing-block grid, with the interpolation spanning the full
+//! ramp duration.  The timeline only answers monotonic queries, which is what
+//! the renderer does.
 
 use crate::oamd::OamdUpdate;
 use crate::{fail, ErrorKind, Result};
 
-pub const OAMD_UPDATE_QUANTUM_SAMPLES: i64 = 64;
+/// The grid the reference schedules metadata updates on: the same 32-sample
+/// block the speaker renderer controls its gains with.
+pub const METADATA_BLOCK_SAMPLES: i64 = 32;
 pub const TIMELINE_OBJECTS: usize = 15;
+
+/// Nearest block boundary, ties towards the earlier block.
+#[inline]
+fn align_metadata_sample(sample: i64) -> i64 {
+    let block = METADATA_BLOCK_SAMPLES;
+    block * (sample + block / 2 - 1).div_euclid(block)
+}
 
 #[derive(Clone, Copy, Debug, Default)]
 pub struct PositionTransition {
@@ -242,16 +253,8 @@ impl OamdPositionTimeline {
             return Ok(());
         }
 
-        let ramp_duration = i64::from(update.ramp_duration_samples);
-        let effective_ramp = if ramp_duration - OAMD_UPDATE_QUANTUM_SAMPLES > 0 {
-            ramp_duration - OAMD_UPDATE_QUANTUM_SAMPLES
-        } else {
-            0
-        };
-        let mut transition_start = coded_event + object_delay_samples;
-        if effective_ramp != 0 {
-            transition_start += OAMD_UPDATE_QUANTUM_SAMPLES;
-        }
+        let effective_ramp = i64::from(update.ramp_duration_samples).max(0);
+        let transition_start = align_metadata_sample(coded_event + object_delay_samples);
         for index in 0..TIMELINE_OBJECTS {
             let changed =
                 !self.has_previous[index] || self.previous_targets[index] != targets[index];

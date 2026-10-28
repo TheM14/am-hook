@@ -19,7 +19,7 @@ const TONES_HZ: [f64; 6] = [440.0, 554.0, 659.0, 880.0, 110.0, 55.0];
 const AMPLITUDE: f64 = 0.08;
 
 const SPEAKER_SHA256: &str = "907b8cca070b5f4e4eb07d63d0a60803eb50e12b13a0012ee62403bef830c13a";
-const BINAURAL_SHA256: &str = "e07706caf58d6f25dc057ecfe6d4ce24b7bd94e27e9f4de409d12fc7fe869e1f";
+const BINAURAL_SHA256: &str = "27ff9104fb2691567b6a8fec86def7d2f451e1800ff30ee0369200d7f09d89f9";
 
 fn frames() -> Vec<&'static [u8]> {
     let mut out = Vec::new();
@@ -122,7 +122,7 @@ fn binaural_matches_the_reference() {
         // The kernel's 961-sample latency is trimmed at the start.
         assert_eq!(out.len(), (24 * FRAME_SAMPLES - joc_core::BINAURAL_LATENCY_SAMPLES) * 2);
         assert_eq!(digest(&out), BINAURAL_SHA256);
-        assert!((peak(&out) - 0.167_189_4).abs() < 1e-6);
+        assert!((peak(&out) - 0.167_236_5).abs() < 1e-6);
         assert_eq!(digest(&render(Mode::Binaural, Some(D2), true, false)), BINAURAL_SHA256);
     });
 }
@@ -265,3 +265,4 @@ fn every_shipped_field_renders() {
         }
     });
 }
+

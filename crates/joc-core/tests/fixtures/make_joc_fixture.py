@@ -7,7 +7,7 @@ themselves, so no recorded audio is redistributed. The JOC parsers, object
 reconstruction and rendering therefore run on real metadata.
 
     python tests/fixtures/make_joc_fixture.py \
-        --input /path/to/gold_forever.eac3 --frames 24 --out tests/fixtures
+        --input /path/to/stream.eac3 --frames 24 --out tests/fixtures
 """
 from __future__ import annotations
 

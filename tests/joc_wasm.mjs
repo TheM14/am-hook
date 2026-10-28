@@ -12,7 +12,7 @@ const root = new URL('../', import.meta.url);
 const wasmPath = process.env.JOC_WASM || new URL('src/ui/joc.wasm', root);
 const eac3 = readFileSync(new URL('crates/joc-core/tests/fixtures/joc_fixture.eac3', root));
 const SPEAKER_SHA256 = '907b8cca070b5f4e4eb07d63d0a60803eb50e12b13a0012ee62403bef830c13a';
-const BINAURAL_SHA256 = 'e07706caf58d6f25dc057ecfe6d4ce24b7bd94e27e9f4de409d12fc7fe869e1f';
+const BINAURAL_SHA256 = '27ff9104fb2691567b6a8fec86def7d2f451e1800ff30ee0369200d7f09d89f9';
 const CHANNELS = 6;
 const FRAME = 1536;
 
