@@ -5,7 +5,7 @@
  *            language 取歌曲所在地区的曲库语言（AmI18n.catalogLang：选定的语言，否则为地区默认语言），取不到时不传；首次打开歌词界面时才请求并缓存；没有歌词时隐藏按钮。
  *            歌词来源选 AMLL 歌词库时先由浏览器直接请求 AMLL TTML DB（https://amll.dev/reference/http-api/overview，允许跨域）的
  *            GET /v1/lyrics/get?appleMusicId=<adamId>，未收录或请求失败时仍用上面的 Apple Music 歌词。
- *            ttml.mjs 解析 TTML，toAmllLines() 转成 AMLL 的 LyricLine
+ *            ttml.mjs 解析 TTML，toAmllLines() 转成 AMLL 的 LyricLine（对唱侧由 ttml.mjs 的 duetSides() 照 AMLL 逐行决定）
  *   选项     「歌词选项」按钮弹出的菜单：翻译 / 发音、字号、字重、歌词来源、背景、下载当前显示的 TTML；除翻译 / 发音外都保存在浏览器中
  *   时间     每帧把 player.transport().currentTime 交给 DomLyricPlayer，点击歌词行跳转并继续播放
  *   背景     歌曲页已有的专辑封面，交给 AMLL 的 MeshGradientRenderer 生成流动背景（浏览器不支持 WebGL 时改用经典背景），
@@ -20,7 +20,7 @@
  * 展开后播放条并入界面，播放条上的歌词开关与待播清单开关移到界面底部；歌词开关改为显示 / 隐藏歌词，这个选择保存在浏览器中；
  * 待播清单打开时占据歌词的位置。
  */
-import { parseTTML } from './ttml.mjs';
+import { parseTTML, duetSides } from './ttml.mjs';
 import { DomLyricPlayer, BackgroundRender, MeshGradientRenderer } from './amll-core.mjs';
 import { ArtworkBackdrop } from './backdrop.mjs';
 
@@ -176,19 +176,9 @@ function amllLine(voice, line, { isBG, isDuet, translation, pronunciation }) {
 
 /** parseTTML 的结果转成 AMLL LyricLine[]，和声紧跟在所属主歌词行后面 */
 export function toAmllLines(song, options) {
-  let lastPersonAgentId = null;
-  let lastPersonIsDuet = false;
-  return song.lines.flatMap((line) => {
-    const agentId = line.agent || 'v1';
-    const agent = song.agents?.[agentId];
-    let isDuet = false;
-    // 合唱不改变上一位主唱及其显示侧
-    if (agent?.type !== 'group') {
-      if (lastPersonAgentId === null) isDuet = agent?.type === 'other';
-      else isDuet = lastPersonAgentId === agentId ? lastPersonIsDuet : !lastPersonIsDuet;
-      lastPersonAgentId = agentId;
-      lastPersonIsDuet = isDuet;
-    }
+  const sides = duetSides(song);
+  return song.lines.flatMap((line, i) => {
+    const isDuet = sides[i];
     const main = amllLine(line, line, { ...options, isBG: false, isDuet });
     if (!line.background.tokens.length && !line.background.text) return [main];
     return [main, amllLine(line.background, line, { ...options, isBG: true, isDuet })];

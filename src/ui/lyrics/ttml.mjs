@@ -69,7 +69,7 @@ export function parseTTML(xml, Parser = globalThis.DOMParser) {
   const agents = Object.fromEntries(children(head, 'agent').filter(node => node.namespaceURI === META).flatMap(node => {
     const id = attribute(node, XML, 'id');
     if (!id) return [];
-    const type = attribute(node, META, 'type') || node.getAttribute('type');
+    const type = node.getAttribute('type');
     const name = children(node, 'name').find(name => name.namespaceURI === META)?.textContent.trim();
     return [[id, { id, ...(type ? { type } : {}), ...(name ? { name } : {}) }]];
   }));
@@ -113,4 +113,23 @@ export function parseTTML(xml, Parser = globalThis.DOMParser) {
     translation: { language: translation.language, type: translation.type, automatic: translation.automatic },
     pronunciation: { language: pronunciation.language, automatic: pronunciation.automatic },
   };
+}
+
+/**
+ * Which side each of song.lines shows on (true = duet side), as AMLL's amll-converter (packages/ttml) decides it:
+ * the first singer takes the main side (or the duet side when its type is 'other'), the same singer keeps the side,
+ * a singer change flips it, and group lines (e.g. v1000) are never duet-side and do not disturb the alternation.
+ * Undeclared agents count as people.
+ */
+export function duetSides(song) {
+  let lastAgent = null;
+  let lastSide = false;
+  return song.lines.map(({ agent }) => {
+    const type = song.agents?.[agent]?.type;
+    if (type === 'group') return false;
+    if (lastAgent === null) lastSide = type === 'other';
+    else if (agent !== lastAgent) lastSide = !lastSide;
+    lastAgent = agent;
+    return lastSide;
+  });
 }

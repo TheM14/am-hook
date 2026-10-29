@@ -73,6 +73,6 @@ jobs:
         run: node --test tests/joc_wasm.mjs
 
       - name: Run lyric duet tests
-        # 歌词的对唱侧（src/ui/lyrics/panel.mjs 的 toAmllLines 照 AMLL 逐行决定 isDuet），离线
+        # 歌词的对唱侧（src/ui/lyrics/ttml.mjs 的 duetSides 照 AMLL 逐行决定 isDuet），离线
         if: runner.os == 'Linux'
         run: node --test tests/agent_duet.mjs
