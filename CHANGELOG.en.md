@@ -1,5 +1,11 @@
 # CHANGELOG
 
+## v0.6.4 (2026-10-29)
+
+### Fixes
+- 🐛 Duet lyrics in the full-screen player pick their side line by line as AMLL does: whoever sings first takes the main side (songs where v2 starts used to be mirrored), the same singer keeps the side and a new singer flips it, and chorus lines (v1000) are no longer put on the duet side or break the alternation; the `ttm:agent` declarations in the TTML head are now parsed (#7)
+- 🐛 Moving objects in JOC object rendering now follow the reference: OAMD position updates snap to the 32-sample processing block and interpolate over the full ramp, so moving objects no longer trail the reference by up to ~1.3 ms (binaural peak error down from -44 dB to within the -120 dB the reference test allows) (#6)
+
 ## v0.6.3 (2026-10-26)
 
 ### New
