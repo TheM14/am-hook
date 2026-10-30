@@ -1,8 +1,9 @@
 // Artwork backdrop ported from YouLyPlus (src/modules/lyrics/dynamicBkg.js,
 // https://github.com/ibratabian17/YouLyPlus). Three rotating copies of the
 // artwork orbit on a small WebGL surface, then a separable Gaussian blur,
-// Apple Music's saturation and scrims, and a dither finish the frame. Audio
-// beat sync is left out: it would route the <audio> through an AudioContext.
+// Apple Music's saturation and scrims, and a dither finish the frame. On each
+// beat (setPulse, from pulse.mjs) the layers swell, twist and speed up their
+// orbits as YouLyPlus's audio beat sync does.
 //
 // The scene only touches canvases handed to it, so it runs unchanged inside a
 // worker (OffscreenCanvas) or on the main thread as a fallback.
@@ -48,6 +49,12 @@ const ORBIT_SPEEDS=[-.09,.006,.01];
 const ORBIT_PHASES=[0,.33,.66];
 const ORBIT_X=[0,.75,.75],ORBIT_Y=[0,.75,.75];
 const LAYER_SCALES=[1.4,1.26,1.26];
+// Beat response per layer: extra rotation (rad), orbit speed-up and scale; the
+// swell follows a beat in about 1/12 s and settles over about half a second
+const BEAT_ROTATIONS=[.28,-.18,.02];
+const BEAT_SPEEDS=[.8,.2,.5];
+const BEAT_SCALES=[.2,.34,.39];
+const BEAT_ATTACK=12,BEAT_DECAY=2;
 const QUAD=new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]);
 
 const LAYER_VERTEX=`
@@ -147,6 +154,10 @@ export class BackdropScene {
     this.frame=0;
     this.time=0;
     this.lastFrame=0;
+    this.pulse=0;
+    // Per layer: orbit time (sped up by beats) and the smoothed beat swell
+    this.orbits=[0,0,0];
+    this.beats=[0,0,0];
     this.transition=1;
     this.aspect=1;
     this.boxWidth=this.boxHeight=0;
@@ -301,6 +312,11 @@ export class BackdropScene {
     this.schedule();
   }
 
+  /** Beat strength 0..1 for the coming frames; ignored under reduced motion. */
+  setPulse(pulse) {
+    this.pulse=pulse;
+  }
+
   setReducedMotion(reduced) {
     this.reducedMotion=reduced;
     this.schedule();
@@ -333,7 +349,7 @@ export class BackdropScene {
     if(elapsed<FRAME_INTERVAL-1){this.schedule();return;}
     this.lastFrame=now;
     const delta=Math.min(.1,elapsed/1000);
-    if(!this.reducedMotion) this.time+=delta;
+    if(!this.reducedMotion) this.advance(delta);
     if(this.transition<1){
       this.transition=Math.min(1,this.transition+delta/TRANSITION);
       if(this.transition===1&&this.previous){this.gl.deleteTexture(this.previous);this.previous=null;}
@@ -342,14 +358,25 @@ export class BackdropScene {
     this.schedule();
   };
 
+  advance(delta) {
+    this.time+=delta;
+    const pulse=this.pulse;
+    for(let i=0;i<3;i++){
+      this.orbits[i]+=delta*(1+pulse*BEAT_SPEEDS[i]);
+      const beat=this.beats[i];
+      this.beats[i]+=(pulse-beat)*Math.min(1,(pulse>beat?BEAT_ATTACK:BEAT_DECAY)*delta);
+    }
+  }
+
   drawLayers(texture,alpha) {
     if(!texture||alpha<=.001) return;
     const gl=this.gl,{u_layer,u_alpha}=this.layerProgram,t=this.time;
     gl.bindTexture(gl.TEXTURE_2D,texture);
     gl.uniform1f(u_alpha,alpha);
     for(let i=0;i<3;i++){
-      const orbit=((ORBIT_PHASES[i]+ORBIT_SPEEDS[i]*t)%1)*Math.PI*2;
-      gl.uniform4f(u_layer,INITIAL_ROTATIONS[i]+ROTATION_SPEEDS[i]*t,LAYER_SCALES[i]*this.sizeFactors[i],ORBIT_X[i]*Math.cos(orbit),ORBIT_Y[i]*Math.sin(orbit));
+      const orbit=((ORBIT_PHASES[i]+ORBIT_SPEEDS[i]*this.orbits[i])%1)*Math.PI*2;
+      const beat=this.beats[i],swell=beat*beat*(3-2*beat);
+      gl.uniform4f(u_layer,INITIAL_ROTATIONS[i]+ROTATION_SPEEDS[i]*t+swell*BEAT_ROTATIONS[i],(LAYER_SCALES[i]+swell*BEAT_SCALES[i])*this.sizeFactors[i],ORBIT_X[i]*Math.cos(orbit),ORBIT_Y[i]*Math.sin(orbit));
       gl.drawArrays(gl.TRIANGLES,0,6);
     }
   }

@@ -239,7 +239,7 @@ const duetTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
         const larger = await lyricStyle();
         assert(Math.abs(larger.size / base.size - 1.2) < 0.01, `font size scales: ${base.size} -> ${larger.size}`);
         assert.equal(larger.weight, '700');
-        assert.deepEqual(await prefs(), { scale: 1.2, weight: 700, source: 'apple', backdrop: 'amll' });
+        assert.deepEqual(await prefs(), { scale: 1.2, weight: 700, source: 'apple', backdrop: 'amll', pulse: false });
         await page.locator(lineSel).filter({ hasText: 'Third line' }).waitFor({ state: 'visible', timeout: 2000 });
         await page.screenshot({ path: `target/ui-lyrics-options-${width}.png` });
         await page.locator('[data-action="weightBolder"]').click();
@@ -312,6 +312,17 @@ const duetTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
         await page.locator('[data-action="backdrop"][data-value="amll"]').click();
         assert.equal((await prefs()).backdrop, 'amll');
         assert.equal(await page.locator('.lyrics-backdrop').count(), 1, 'the old canvas is replaced');
+        // 节拍律动：背景组里的复选项，默认关闭，开关保存在浏览器中
+        await openMenu();
+        assert.equal(await page.locator('[data-action="pulse"]').getAttribute('role'), 'menuitemcheckbox');
+        assert.equal(await page.locator('[data-action="pulse"]').getAttribute('aria-checked'), 'false');
+        await page.locator('[data-action="pulse"]').click();
+        assert.equal((await prefs()).pulse, true);
+        await openMenu();
+        assert.equal(await page.locator('[data-action="pulse"]').getAttribute('aria-checked'), 'true');
+        await page.locator('[data-action="pulse"]').click();
+        assert.equal((await prefs()).pulse, false);
+        assert.deepEqual(errors, [], 'no page errors while the backdrop pulses');
 
         assert(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), `overflow at ${width}`);
         const panel = await page.locator('.lyric-panel').boundingBox();

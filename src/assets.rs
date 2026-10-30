@@ -120,6 +120,7 @@ pub static ASSETS: &[Asset] = &[
     asset!("/assets/lyrics/backdrop.mjs", JS, "lyrics/backdrop.mjs"),
     asset!("/assets/lyrics/backdrop-render.mjs", JS, "lyrics/backdrop-render.mjs"),
     asset!("/assets/lyrics/backdrop-worker.mjs", JS, "lyrics/backdrop-worker.mjs"),
+    asset!("/assets/lyrics/pulse.mjs", JS, "lyrics/pulse.mjs"),
     // 页面视图：`<name>.html` 为页面内容，`<name>.mjs` 为页面脚本（导出 mount，见 app.mjs）
     asset!("/assets/views/home.html", HTML, "views/home.html"),
     asset!("/assets/views/home.mjs", JS, "views/home.mjs"),

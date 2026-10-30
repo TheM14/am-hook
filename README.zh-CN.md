@@ -215,7 +215,7 @@ am-hook --listen 0.0.0.0:8888 --wrapper-url http://127.0.0.1:12340
 
 - 正在播放的歌曲有歌词时，播放条上出现「歌词」按钮（在任何页面都能打开，切歌后自动换成新歌的歌词）。
 - 歌词视图由 [AMLL（Apple Music-like Lyrics）](https://github.com/amll-dev/applemusic-like-lyrics) 渲染：逐词 / 逐行高亮与弹簧滚动、和声、对唱、翻译与发音、间奏圆点，点击任意一行即可跳转。Esc 收起。
-- 背景是 AMLL 由专辑封面生成的流动网格渐变，也可以选移植自 [YouLyPlus](https://github.com/ibratabian17/YouLyPlus) 的封面动态背景（三份旋转、环绕的封面经模糊与 Apple Music 式调色生成；浏览器支持时在 worker 中渲染，AMLL 背景不可用时也用它）。
+- 背景是 AMLL 由专辑封面生成的流动网格渐变，也可以选移植自 [YouLyPlus](https://github.com/ibratabian17/YouLyPlus) 的封面动态背景（三份旋转、环绕的封面经模糊与 Apple Music 式调色生成；浏览器支持时在 worker 中渲染，AMLL 背景不可用时也用它）。两种背景都可以随节拍律动（默认关闭，在歌词选项里开启）：从正在播放的声音里取底鼓、贝斯的起音，各种格式都支持——EC-3 与 JOC 在音量调节之前取样，AAC / ALAC 截取 `<audio>` 的声音（Chromium 系浏览器），播放本身的路径不受影响。
 - 点击播放条的封面、标题或空白处展开全屏播放界面（没有歌词的歌曲也能展开，只显示封面与播放控件）。
   - 同 music.apple.com，界面里的标题旁有喜爱（☆）与「更多」按钮（添加到资料库、添加到歌单、前往专辑、复制链接）；右下角的歌词按钮（手机上在播放控件下方）显示 / 隐藏歌词。
   - 按钮的位置同 music.apple.com——关闭在左上角，歌词翻译在右上角，播放按钮没有底色、居中排成一行，歌名与艺人各占一行、过长时滚动。
@@ -520,7 +520,7 @@ src/
     ec3.wasm / ec3-runtime.mjs / ec3-decode-worker.js      EC-3 PCM 回退
     joc.wasm / joc-decode-worker.js / joc-hrtf-*.jochrtf   杜比全景声对象渲染（JOC）：crates/joc-wasm 的编译产物与 SADIE II HRTF 场
     joc-output-worklet.js / joc-scene.mjs                  JOC 低延迟播放的 AudioWorklet 输出端，空间声场界面（虚拟头部与对象）
-    lyrics/            歌词界面（打包好的 AMLL，见 browser/amll；ttml.mjs 解析 TTML，panel.mjs 接入播放器，backdrop*.mjs 绘制封面动态背景）
+    lyrics/            歌词界面（打包好的 AMLL，见 browser/amll；ttml.mjs 解析 TTML，panel.mjs 接入播放器，backdrop*.mjs 绘制封面动态背景，pulse.mjs 负责节拍律动）
     station.mjs        电台需要 media-user-token 的接口：token 的保存与填写、next-tracks、play assets、license 请求格式
     mv-radio.mjs       电台的 HLS 播放与下载（直播与广播单集，与 MV 共用媒体 Worker）
     mv-hls.mjs / mv-engine.mjs                            MV 清单解析与选轨、播放与下载

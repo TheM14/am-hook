@@ -21,6 +21,7 @@ self.onmessage=async({data})=>{
     case 'resize': scene.resize(data.width,data.height); break;
     case 'motion': scene.setReducedMotion(data.reducedMotion); break;
     case 'running': scene.setRunning(data.running); break;
+    case 'pulse': scene.setPulse(data.pulse); break;
     case 'clear': ++generation; scene.clear(); break;
     case 'image': {
       const current=++generation;

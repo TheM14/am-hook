@@ -538,8 +538,11 @@
       this.context = pcmContext(this.latencyHint);
       this.gain = this.context.createGain();
       this.gain.connect(this.context.destination);
-      /** 各 AudioBufferSourceNode 接到这里（JocEngine 在 gain 前面加一级淡入淡出） */
-      this.input = this.gain;
+      /** 音量调节前的整个混音；歌词背景的节拍律动从这里取样（见 AmPlayer.pulseSource） */
+      this.mix = this.context.createGain();
+      this.mix.connect(this.gain);
+      /** 各 AudioBufferSourceNode 接到这里（JocEngine 在 mix 前面加一级淡入淡出） */
+      this.input = this.mix;
       this.nodes = new Set();
       this.paused = true;
       this.anchorTime = 0;
@@ -746,7 +749,7 @@
       this.controls = options.controls || null;
       this.onClip = options.onClip || null;
       this.envelope = this.context.createGain();
-      this.envelope.connect(this.gain);
+      this.envelope.connect(this.mix);
       this.input = this.envelope;
       this.rate = 48000;
       this.channels = 2;
@@ -2063,6 +2066,15 @@
     }
 
     transport() { return this.current && isPcmMode(this.current.mode) && this.pcm ? this.pcm : this.clock; }
+
+    /**
+     * 歌词背景的节拍律动（lyrics/pulse.mjs）在哪里取样：PCM 播放为其上下文里音量调节前的混音节点，
+     * MSE 播放为 <audio>（只旁路截取，不改变它的输出）；没有曲目时为 null
+     */
+    pulseSource() {
+      if (!this.current) return null;
+      return isPcmMode(this.current.mode) ? (this.pcm && this.pcm.mix) || null : this.audio;
+    }
 
     updatePcm() {
       this.renderToggle();

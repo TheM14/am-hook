@@ -23,6 +23,7 @@ export class ArtworkBackdrop {
     this.running=false;
     this.requests=new Map();
     this.nextRequest=0;
+    this.pulse=0;
     const box=this.box();
     if(workerSupported(canvas)){
       const offscreen=canvas.transferControlToOffscreen();
@@ -117,6 +118,13 @@ export class ArtworkBackdrop {
   resume() {
     this.wanted=true;
     this.sync();
+  }
+
+  /** Beat strength 0..1, set every frame; the worker only hears about visible changes. */
+  setPulse(pulse) {
+    if(Math.abs(pulse-this.pulse)<.004&&(pulse>0||!this.pulse)) return;
+    this.pulse=pulse;
+    this.send({type:'pulse',pulse},scene=>scene.setPulse(pulse));
   }
 
   clear() {

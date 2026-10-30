@@ -215,7 +215,7 @@ Every page below is a route of the single-page app; the server returns `app.html
 
 - When the playing song has lyrics, a Lyrics button appears on the player bar (available on every page; it switches to the new song's lyrics when the track changes).
 - The view is rendered by [AMLL (Apple Music-like Lyrics)](https://github.com/amll-dev/applemusic-like-lyrics): word- and line-synced highlighting with spring scrolling, background vocals, duets, translation and pronunciation, interlude dots, and click-to-seek. Esc closes it.
-- Its flowing background is AMLL's mesh gradient generated from the artwork, or a dynamic artwork background ported from [YouLyPlus](https://github.com/ibratabian17/YouLyPlus) (three rotating, orbiting copies of the artwork, blurred and graded like Apple Music; rendered in a worker where the browser allows, and the fallback when AMLL's renderer is unavailable).
+- Its flowing background is AMLL's mesh gradient generated from the artwork, or a dynamic artwork background ported from [YouLyPlus](https://github.com/ibratabian17/YouLyPlus) (three rotating, orbiting copies of the artwork, blurred and graded like Apple Music; rendered in a worker where the browser allows, and the fallback when AMLL's renderer is unavailable). Both can pulse to the beat (off by default, turn it on in the lyrics options): the kick and bass onsets are picked up from what is playing, for every format — EC-3 and JOC are sampled before the volume control, AAC/ALAC through a capture of the `<audio>` element (Chromium browsers), so playback itself is never re-routed.
 - Clicking the artwork, title or empty space on the player bar opens the full-screen player (also for songs without lyrics, which show only the artwork and controls).
   - As on music.apple.com, the title has Favorite (☆) and More buttons (add to library, add to playlist, go to album, copy links), and the Lyrics button in the bottom-right corner (below the controls on phones) shows or hides the lyrics.
   - The buttons are laid out as on music.apple.com — Close at the top left, lyrics translation at the top right, and borderless playback buttons centered in one row, with title and artist on one line each, scrolling when too long.
@@ -520,7 +520,7 @@ src/
     ec3.wasm / ec3-runtime.mjs / ec3-decode-worker.js      EC-3 PCM fallback
     joc.wasm / joc-decode-worker.js / joc-hrtf-*.jochrtf   Dolby Atmos object rendering (JOC): build output of crates/joc-wasm and the SADIE II HRTF fields
     joc-output-worklet.js / joc-scene.mjs                  AudioWorklet output for low-latency JOC playback, and the spatial scene (virtual head and objects)
-    lyrics/            Lyrics view (bundled AMLL, see browser/amll; ttml.mjs parses TTML, panel.mjs wires it to the player, backdrop*.mjs draw the dynamic artwork background)
+    lyrics/            Lyrics view (bundled AMLL, see browser/amll; ttml.mjs parses TTML, panel.mjs wires it to the player, backdrop*.mjs draw the dynamic artwork background, pulse.mjs drives the beat pulse)
     station.mjs        Station endpoints needing a media-user-token: storing and asking for the token, next tracks, play assets, license request formats
     mv-radio.mjs       Station HLS playback and downloads (live radio and episodes, sharing the media Worker with MVs)
     mv-hls.mjs / mv-engine.mjs                            MV playlist parsing and track selection, playback, download
