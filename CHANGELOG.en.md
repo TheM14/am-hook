@@ -1,5 +1,15 @@
 # CHANGELOG
 
+## v0.6.5 (2026-10-30)
+
+### New
+- ✨ The full-screen player's backdrop can pulse to the beat (lyrics options → "Pulse to the Beat", off by default): kick and bass onsets are picked up from what is playing, the AMLL mesh gradient swells and turns with them, and the dynamic artwork's layers swell, twist and speed up their orbits as in YouLyPlus. Every playback mode is supported without re-routing playback: EC-3 and JOC are sampled before the volume control, AAC / ALAC through a capture of the `<audio>` element (Chromium browsers; Safari and Firefox get no pulse for these formats). The pulse does not depend on the volume and is delayed by the output latency so it lines up with what you hear
+- ✨ Downloaded covers have separate embedded and saved settings: the saved cover file has its own format and size, e.g. a high-quality PNG on disk with a regular JPEG embedded in each track; existing settings carry over to the saved cover
+
+### Changed
+- 💄 The full-screen player's classic backdrop (twisted copies of the artwork plus grain) is replaced by a dynamic artwork background ported from [YouLyPlus](https://github.com/ibratabian17/YouLyPlus): three rotating, orbiting copies of the artwork with a Gaussian blur and Apple Music's grading, rendered with WebGL, in a worker where the browser allows; artwork changes crossfade and reduced motion keeps it still. A saved classic choice switches to it
+- 🗑️ The "original" cover format is removed: the a5.mzstatic.com original-image links no longer resolve
+
 ## v0.6.4 (2026-10-29)
 
 ### Fixes
