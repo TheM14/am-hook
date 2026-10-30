@@ -93,7 +93,7 @@ export const OPTIONS = {
     alacMax: [192000, 96000, 48000, 44100],
     atmosMax: [2768, 2448],
     saveMode: ['zip', 'folder', 'files'],
-    coverFormat: ['jpg', 'png', 'original'],
+    coverFormat: ['jpg', 'png'],
     lyricsFormat: ['lrc', 'ttml'],
     // MV：最高分辨率（高度）与音轨（同参考实现的 mv-max / mv-audio-type）
     mvMax: [2160, 1440, 1080, 720, 480],
@@ -151,10 +151,12 @@ export const DEFAULTS = {
     playlistAlbumInfo: true,
     // 元数据（歌名、专辑名等）的语言；空为跟随曲库语言
     metaLang: '',
-    // 封面
+    // 封面：嵌入标签的与另存的 cover 文件分开设置
     coverFormat: 'jpg',
     coverSize: 3000,
     saveCover: true,
+    saveCoverFormat: 'jpg',
+    saveCoverSize: 3000,
     // 歌词
     saveLyrics: false,
     lyricsFormat: 'lrc',
@@ -234,6 +236,9 @@ function clean(section, raw) {
     coverFormat: oneOf(r.coverFormat, o.coverFormat, d.coverFormat),
     coverSize: int(r.coverSize, 100, 10000, d.coverSize),
     saveCover: bool(r.saveCover, d.saveCover),
+    // 旧版本只有一组封面设置，另存的封面沿用它
+    saveCoverFormat: oneOf(r.saveCoverFormat, o.coverFormat, oneOf(r.coverFormat, o.coverFormat, d.saveCoverFormat)),
+    saveCoverSize: int(r.saveCoverSize, 100, 10000, int(r.coverSize, 100, 10000, d.saveCoverSize)),
     saveLyrics: bool(r.saveLyrics, d.saveLyrics),
     lyricsFormat: oneOf(r.lyricsFormat, o.lyricsFormat, d.lyricsFormat),
     syllable: bool(r.syllable, d.syllable),

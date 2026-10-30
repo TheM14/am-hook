@@ -79,15 +79,11 @@ function qualityVars(v) {
 }
 
 /* ---------- 封面 ---------- */
-/** artwork.url 模板 → 下载地址：指定尺寸的 jpg / png，或 original（a5.mzstatic.com 上的原图，同参考实现） */
-export function coverUrl(template, { coverFormat, coverSize }) {
+/** artwork.url 模板 → 指定格式（jpg / png）与尺寸的下载地址 */
+export function coverUrl(template, format, size) {
   if (!template) return '';
-  if (coverFormat === 'original') {
-    const m = template.match(/^https:\/\/is\d+-ssl\.mzstatic\.com\/image\/thumb\/(.+)\/\{w\}x\{h\}/);
-    if (m) return `https://a5.mzstatic.com/us/r1000/0/${m[1]}`;
-  }
-  const f = coverFormat === 'png' ? 'png' : 'jpg';
-  return template.replace('{w}', coverSize).replace('{h}', coverSize).replace('{c}', 'bb').replace('{f}', f)
+  const f = format === 'png' ? 'png' : 'jpg';
+  return template.replace('{w}', size).replace('{h}', size).replace('{c}', 'bb').replace('{f}', f)
     .replace(/\{[a-z]+\}/g, '');
 }
 
@@ -564,7 +560,7 @@ async function exists(job, task) {
 /** 封面：拿不到时不影响下载，只是不写入 */
 function coverFor(job, info, signal, wanted) {
   return wanted
-    ? fetchCover(job.covers, coverUrl(info.artwork, job.options), signal).catch((err) => { console.warn('[am-hook] 封面获取失败', err); return null; })
+    ? fetchCover(job.covers, coverUrl(info.artwork, job.options.coverFormat, job.options.coverSize), signal).catch((err) => { console.warn('[am-hook] 封面获取失败', err); return null; })
     : Promise.resolve(null);
 }
 
@@ -595,7 +591,9 @@ async function downloadSong(job, task, info, signal) {
   // amp-api 明确标出没有歌词（hasLyrics: false）的歌曲不去 wrapper-lite 取；没有这个字段时照常获取
   const noLyrics = task.song && task.song.attributes && task.song.attributes.hasLyrics === false;
   const wantLyrics = (embed.has('lyrics') || o.saveLyrics) && !noLyrics;
-  const coverPromise = coverFor(job, info, signal, embed.has('cover') || (o.saveCover && job.kind !== 'playlist'));
+  const coverPromise = coverFor(job, info, signal, embed.has('cover'));
+  // 另存的封面也与音频同时获取，打包时直接用缓存
+  if (o.saveCover && job.kind !== 'playlist') fetchCover(job.covers, coverUrl(info.artwork, o.saveCoverFormat, o.saveCoverSize), signal).catch(() => {});
   const lyricsPromise = wantLyrics ? fetchLyrics(job, task, signal) : Promise.resolve(null);
   const finishCheck = o.alacCheckTag && classify(v).kind === 'alac' ? checkWhileDownloading(task, track, v, o) : null;
   // tags() 在全部分段下载完之后才调用，检测所需的数据这时已经齐了
@@ -828,7 +826,7 @@ async function extras(job) {
   if (o.saveCover && (!single(job) || (job.kind === 'song' && job.mode === 'folder'))) {
     const song = job.tasks.find((x) => !x.mv);
     const art = job.kind === 'playlist' || !song ? job.collection.artwork : trackInfo(job, song).artwork;
-    const cover = await fetchCover(job.covers, coverUrl(art, o), job.ctl.signal).catch(() => null);
+    const cover = await fetchCover(job.covers, coverUrl(art, o.saveCoverFormat, o.saveCoverSize), job.ctl.signal).catch(() => null);
     if (cover) out.push({ path: [`cover.${cover.type === 'png' ? 'png' : 'jpg'}`], data: cover.bytes });
   }
   if (job.kind === 'playlist' && o.m3u) out.push({ path: [`${fitFile(job.folder, [formatName(o.playlistFolder, { playlist: job.collection.name, playlist_id: job.cid, curator: job.collection.artist })])[0]}.m3u8`], data: m3u(job) });

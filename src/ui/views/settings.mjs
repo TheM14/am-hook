@@ -379,12 +379,15 @@ export function mount({ root, signal, onLangChange, toast }) {
       row(t('set.playlistAlbumInfo'), t('set.playlistAlbumInfoDesc'), toggle('playlistAlbumInfo', t('set.playlistAlbumInfo'))),
       row(t('set.metaLang'), t('set.metaLangDesc'), text('metaLang', t('set.followCatalog'), t('set.metaLang'), /^[A-Za-z0-9-]{1,35}$/)));
 
-    const sizeInput = number('coverSize', 100, 10000, t('set.coverSize'));
+    const formats = o.coverFormat.map((f) => [f, t(`set.coverFormat.${f}`)]);
+    const saveFormatRow = row(t('set.saveCoverFormat'), t('set.saveCoverFormatDesc'), select('saveCoverFormat', formats));
+    const saveSizeRow = row(t('set.saveCoverSize'), t('set.coverSizeDesc'), number('saveCoverSize', 100, 10000, t('set.saveCoverSize')));
     const cover = section('cover', 'set.cover',
-      row(t('set.coverFormat'), t('set.coverFormatDesc'), select('coverFormat', o.coverFormat.map((f) => [f, t(`set.coverFormat.${f}`)]))),
-      row(t('set.coverSize'), t('set.coverSizeDesc'), sizeInput),
-      row(t('set.saveCover'), t('set.saveCoverDesc'), toggle('saveCover', t('set.saveCover'))));
-    controls.push((v) => { sizeInput.disabled = v.coverFormat === 'original'; });
+      row(t('set.coverFormat'), t('set.coverFormatDesc'), select('coverFormat', formats)),
+      row(t('set.coverSize'), t('set.coverSizeDesc'), number('coverSize', 100, 10000, t('set.coverSize'))),
+      row(t('set.saveCover'), t('set.saveCoverDesc'), toggle('saveCover', t('set.saveCover'))),
+      saveFormatRow, saveSizeRow);
+    controls.push((v) => { saveFormatRow.hidden = !v.saveCover; saveSizeRow.hidden = !v.saveCover; });
 
     const lyrics = section('lyrics', 'set.lyrics',
       row(t('set.saveLyrics'), t('set.saveLyricsDesc'), toggle('saveLyrics', t('set.saveLyrics'))),
