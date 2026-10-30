@@ -215,7 +215,7 @@ Every page below is a route of the single-page app; the server returns `app.html
 
 - When the playing song has lyrics, a Lyrics button appears on the player bar (available on every page; it switches to the new song's lyrics when the track changes).
 - The view is rendered by [AMLL (Apple Music-like Lyrics)](https://github.com/amll-dev/applemusic-like-lyrics): word- and line-synced highlighting with spring scrolling, background vocals, duets, translation and pronunciation, interlude dots, and click-to-seek. Esc closes it.
-- Its flowing background is AMLL's mesh gradient generated from the artwork, or the classic background used before AMLL (rotating, twisted and blurred copies of the artwork, modeled on Apple Music Web; also the fallback without WebGL).
+- Its flowing background is AMLL's mesh gradient generated from the artwork, or a dynamic artwork background ported from [YouLyPlus](https://github.com/ibratabian17/YouLyPlus) (three rotating, orbiting copies of the artwork, blurred and graded like Apple Music; rendered in a worker where the browser allows, and the fallback when AMLL's renderer is unavailable).
 - Clicking the artwork, title or empty space on the player bar opens the full-screen player (also for songs without lyrics, which show only the artwork and controls).
   - As on music.apple.com, the title has Favorite (☆) and More buttons (add to library, add to playlist, go to album, copy links), and the Lyrics button in the bottom-right corner (below the controls on phones) shows or hides the lyrics.
   - The buttons are laid out as on music.apple.com — Close at the top left, lyrics translation at the top right, and borderless playback buttons centered in one row, with title and artist on one line each, scrolling when too long.
@@ -223,7 +223,7 @@ Every page below is a route of the single-page app; the server returns `app.html
 - The lyrics options button (top right; it used to be only the translation menu):
   - toggles translation and pronunciation, and adjusts text size (70%–150%) and font weight (Light to Heavy);
   - switches the lyrics source between Apple Music and the [AMLL TTML DB](https://amll.dev/reference/http-api/overview) (looked up by the Apple Music song ID straight from the browser; songs it doesn't have fall back to Apple Music, and nothing is sent to it unless chosen);
-  - switches the background between AMLL's and the classic one, and downloads the TTML being shown.
+  - switches the background between AMLL's and the dynamic artwork one, and downloads the TTML being shown.
   - Everything except translation and pronunciation is saved in the browser.
 
 ### Music Videos
@@ -520,7 +520,7 @@ src/
     ec3.wasm / ec3-runtime.mjs / ec3-decode-worker.js      EC-3 PCM fallback
     joc.wasm / joc-decode-worker.js / joc-hrtf-*.jochrtf   Dolby Atmos object rendering (JOC): build output of crates/joc-wasm and the SADIE II HRTF fields
     joc-output-worklet.js / joc-scene.mjs                  AudioWorklet output for low-latency JOC playback, and the spatial scene (virtual head and objects)
-    lyrics/            Lyrics view (bundled AMLL, see browser/amll; ttml.mjs parses TTML, panel.mjs wires it to the player, backdrop*.mjs draw the classic background)
+    lyrics/            Lyrics view (bundled AMLL, see browser/amll; ttml.mjs parses TTML, panel.mjs wires it to the player, backdrop*.mjs draw the dynamic artwork background)
     station.mjs        Station endpoints needing a media-user-token: storing and asking for the token, next tracks, play assets, license request formats
     mv-radio.mjs       Station HLS playback and downloads (live radio and episodes, sharing the media Worker with MVs)
     mv-hls.mjs / mv-engine.mjs                            MV playlist parsing and track selection, playback, download
@@ -558,4 +558,4 @@ Questions, feedback and discussion: the Telegram group [@apple_music_alac](https
 
 am-hook is licensed under the [GNU Affero General Public License v3.0 only](LICENSE) (AGPL-3.0-only), because the web UI embeds the AGPL-licensed [AMLL](https://github.com/amll-dev/applemusic-like-lyrics) lyric player. If you run a modified version as a network service, you must offer its users the corresponding source.
 
-Bundled third-party components keep their own licenses: `crates/temari` (MIT), the hls.js CEA-608 parser (Apache-2.0, `browser/cea608/LICENSE`), `@mediabunny/ac3` (MPL-2.0, `src/ui/EC3-LICENSE.txt`), AMLL with its dependencies (AGPL-3.0-only, `browser/amll`), the JOC renderer from am-hook-joc (AGPL-3.0-only or MIT, `crates/joc-core/LICENSE`) and the SADIE II HRTF fields (Apache-2.0, see `src/ui/JOC-NOTICE.md`).
+Bundled third-party components keep their own licenses: `crates/temari` (MIT), the hls.js CEA-608 parser (Apache-2.0, `browser/cea608/LICENSE`), `@mediabunny/ac3` (MPL-2.0, `src/ui/EC3-LICENSE.txt`), AMLL with its dependencies (AGPL-3.0-only, `browser/amll`), the JOC renderer from am-hook-joc (AGPL-3.0-only or MIT, `crates/joc-core/LICENSE`), the lyric artwork background from YouLyPlus (MIT, notice in `src/ui/lyrics/backdrop-render.mjs`) and the SADIE II HRTF fields (Apache-2.0, see `src/ui/JOC-NOTICE.md`).

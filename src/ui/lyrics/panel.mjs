@@ -8,8 +8,8 @@
  *            ttml.mjs 解析 TTML，toAmllLines() 转成 AMLL 的 LyricLine（对唱侧由 ttml.mjs 的 duetSides() 照 AMLL 逐行决定）
  *   选项     「歌词选项」按钮弹出的菜单：翻译 / 发音、字号、字重、歌词来源、背景、下载当前显示的 TTML；除翻译 / 发音外都保存在浏览器中
  *   时间     每帧把 player.transport().currentTime 交给 DomLyricPlayer，点击歌词行跳转并继续播放
- *   背景     歌曲页已有的专辑封面，交给 AMLL 的 MeshGradientRenderer 生成流动背景（浏览器不支持 WebGL 时改用经典背景），
- *            或在菜单里选经典背景：引入 AMLL 前的 ArtworkBackdrop（backdrop.mjs，仿 Apple Music 网页版的旋转封面）
+ *   背景     歌曲页已有的专辑封面，交给 AMLL 的 MeshGradientRenderer 生成流动背景（AMLL 不可用时改用封面动态背景），
+ *            或在菜单里选封面动态背景：移植自 YouLyPlus 的 ArtworkBackdrop（backdrop.mjs，三份旋转、环绕的封面经模糊与调色，WebGL 1 即可）
  *   布局     照 AMLL 的 react-full（PrebuiltLyricPlayer / AutoLyricLayout，AGPL-3.0-only）：宽大于高时为横向布局
  *            （左边封面、歌名与控件，右边歌词，底部一行开关；隐藏歌词时左边整体移到中间），否则为竖向布局（显示歌词时顶部为小封面与歌名，
  *            隐藏时为大封面，封面在两处之间以弹簧动画移动）。图标、按下动画、进度条与音量条、收起按钮也取自 react-full。
@@ -194,11 +194,14 @@ function saveShown(shown) {
   try { if (shown) localStorage.removeItem(SHOWN_KEY); else localStorage.setItem(SHOWN_KEY, '1'); } catch { /* 只在本次会话生效 */ }
 }
 
-/** 歌词选项：字号（AMLL 默认字号的倍数）、字重、歌词来源与背景（'amll' 流动背景 | 'classic' 经典背景），保存在浏览器中 */
+/**
+ * 歌词选项：字号（AMLL 默认字号的倍数）、字重、歌词来源与背景（'amll' 流动背景 | 'artwork' 封面动态背景），保存在浏览器中；
+ * 以前选的经典背景（'classic'，已移除）换成封面动态背景
+ */
 const PREFS_KEY = 'am-hook:lyrics-prefs';
 export const FONT_SCALES = [0.7, 0.8, 0.9, 1, 1.1, 1.2, 1.35, 1.5];
 export const FONT_WEIGHTS = [300, 400, 500, 600, 700, 800];
-export const BACKDROPS = ['amll', 'classic'];
+export const BACKDROPS = ['amll', 'artwork'];
 const DEFAULT_PREFS = { scale: 1, weight: 600, source: 'apple', backdrop: 'amll' };
 function loadPrefs() {
   try {
@@ -207,7 +210,7 @@ function loadPrefs() {
       scale: FONT_SCALES.includes(saved.scale) ? saved.scale : DEFAULT_PREFS.scale,
       weight: FONT_WEIGHTS.includes(saved.weight) ? saved.weight : DEFAULT_PREFS.weight,
       source: saved.source === 'amll' ? 'amll' : DEFAULT_PREFS.source,
-      backdrop: BACKDROPS.includes(saved.backdrop) ? saved.backdrop : DEFAULT_PREFS.backdrop,
+      backdrop: saved.backdrop === 'classic' ? 'artwork' : BACKDROPS.includes(saved.backdrop) ? saved.backdrop : DEFAULT_PREFS.backdrop,
     };
   } catch { return { ...DEFAULT_PREFS }; }
 }
@@ -316,11 +319,9 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
 
   /**
    * 按 prefs.backdrop 在 canvas 上创建背景，统一成 { setImage(blob) → 是否已显示, resume, pause, setHasLyric, setStaticMode, dispose }；
-   * 流动背景不可用（不支持 WebGL）时改用经典背景，都不可用时为 null（保留纯色背景）
+   * 流动背景不可用时改用封面动态背景，都不可用（不支持 WebGL）时为 null（保留纯色背景）
    */
   function createBackdrop() {
-    // 只有经典背景叠颗粒层（见 app.css .lyrics-grain）；AMLL 不可用时退回经典背景，也要加上
-    root.classList.remove('classic-backdrop');
     if (prefs.backdrop === 'amll') {
       try {
         if (MeshGradientRenderer.isSupported()) {
@@ -343,20 +344,19 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
           };
         }
       } catch (error) {
-        console.warn('[am-hook] AMLL 歌词背景不可用，改用经典背景', error);
+        console.warn('[am-hook] AMLL 歌词背景不可用，改用封面动态背景', error);
       }
     }
     try {
-      const classic = new ArtworkBackdrop(canvas);
-      root.classList.add('classic-backdrop');
+      const artwork = new ArtworkBackdrop(canvas);
       return {
-        setImage: (blob) => classic.setFile(blob),
-        resume: () => classic.resume(),
-        pause: () => classic.pause(),
-        // 经典背景不区分有无歌词，自己跟随「减少动态效果」
+        setImage: (blob) => artwork.setFile(blob),
+        resume: () => artwork.resume(),
+        pause: () => artwork.pause(),
+        // 封面动态背景不区分有无歌词，自己跟随「减少动态效果」
         setHasLyric() {},
         setStaticMode() {},
-        dispose: () => { classic.destroy(); classic.canvas.remove(); },
+        dispose: () => { artwork.destroy(); artwork.canvas.remove(); },
       };
     } catch (error) {
       console.warn('[am-hook] 歌词背景不可用', error);
@@ -374,7 +374,7 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
     artworkSource = '';
     root.classList.remove('has-backdrop');
     const old = canvas;
-    // 新建而不是 cloneNode：AMLL 会在画布上写内联样式（如 z-index），不能带给经典背景
+    // 新建而不是 cloneNode：AMLL 会在画布上写内联样式（如 z-index），不能带给封面动态背景
     canvas = document.createElement('canvas');
     canvas.className = old.className;
     canvas.setAttribute('aria-hidden', 'true');
@@ -952,7 +952,7 @@ export function mountLyrics({ root, toggle, bar, player, getMeta, t, notify, onL
       separator(),
       menuItem(menuNode('span', '', t('lyrics.backdrop')), 'presentation', 'lyrics-menu-heading'),
       ...BACKDROPS.map((kind) => menuItem(menuButton({
-        label: t(kind === 'amll' ? 'lyrics.backdropAmll' : 'lyrics.backdropClassic'),
+        label: t(kind === 'amll' ? 'lyrics.backdropAmll' : 'lyrics.backdropArtwork'),
         icon: prefs.backdrop === kind ? 'check' : '', action: 'backdrop', value: kind, checked: prefs.backdrop === kind,
       }))),
       separator(),

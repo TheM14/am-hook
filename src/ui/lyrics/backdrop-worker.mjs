@@ -1,19 +1,25 @@
 // Worker side of ArtworkBackdrop: owns the transferred OffscreenCanvas so the
-// per-pixel scene work never competes with lyric scrolling on the main thread.
+// WebGL scene and its frame loop never compete with lyric scrolling on the main thread.
 import { BackdropScene } from './backdrop-render.mjs';
 
 let scene=null;
 let generation=0;
 
 self.onmessage=async({data})=>{
+  if(!scene&&data.type!=='init') return;
   switch(data.type){
     case 'init':
-      scene=new BackdropScene(data.canvas,()=>new OffscreenCanvas(1,1));
-      scene.reducedMotion=data.reducedMotion;
+      try {
+        scene=new BackdropScene(data.canvas,()=>new OffscreenCanvas(1,1));
+      } catch(error) {
+        self.postMessage({type:'failed',error:String(error)});
+        return;
+      }
+      scene.setReducedMotion(data.reducedMotion);
       scene.resize(data.width,data.height);
       break;
     case 'resize': scene.resize(data.width,data.height); break;
-    case 'motion': scene.reducedMotion=data.reducedMotion; break;
+    case 'motion': scene.setReducedMotion(data.reducedMotion); break;
     case 'running': scene.setRunning(data.running); break;
     case 'clear': ++generation; scene.clear(); break;
     case 'image': {

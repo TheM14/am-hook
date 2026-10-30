@@ -1,11 +1,16 @@
-// Artwork backdrop for the lyric view. The scene itself lives in
-// backdrop-render.mjs; where the browser supports OffscreenCanvas it renders in
-// a worker, so its 15 fps pixel work cannot delay the lyric scroll frames.
+// Artwork backdrop for the lyric view (YouLyPlus's WebGL scene). The scene
+// itself lives in backdrop-render.mjs; where the browser supports WebGL on an
+// OffscreenCanvas it renders in a worker, so its frames cannot delay the lyric
+// scroll frames.
 import { BackdropScene } from './backdrop-render.mjs';
 
 const workerSupported=canvas=>{
   if(!('transferControlToOffscreen' in canvas)||typeof OffscreenCanvas==='undefined'||typeof Worker==='undefined') return false;
-  try {return !!new OffscreenCanvas(1,1).getContext('2d');} catch {return false;}
+  try {
+    const probe=new OffscreenCanvas(1,1).getContext('webgl');
+    probe?.getExtension('WEBGL_lose_context')?.loseContext();
+    return !!probe&&!!new OffscreenCanvas(1,1).getContext('2d');
+  } catch {return false;}
 };
 
 export class ArtworkBackdrop {
@@ -22,18 +27,21 @@ export class ArtworkBackdrop {
     if(workerSupported(canvas)){
       const offscreen=canvas.transferControlToOffscreen();
       this.worker=new Worker(new URL('./backdrop-worker.mjs',import.meta.url),{type:'module'});
-      this.worker.onmessage=({data})=>this.settle(data.id,data.shown,data.error);
+      this.worker.onmessage=({data})=>{
+        if(data.type==='failed') this.fail(data.error);
+        else this.settle(data.id,data.shown,data.error);
+      };
       this.worker.onerror=event=>{
         console.warn('[am-hook] 歌词背景 worker 出错',event.message);
-        for(const id of [...this.requests.keys()]) this.settle(id,false,event.message||'worker error');
+        this.fail(event.message||'worker error');
       };
       this.worker.postMessage({type:'init',canvas:offscreen,reducedMotion:this.motion.matches,...box},[offscreen]);
     } else {
       this.scene=new BackdropScene(canvas,()=>document.createElement('canvas'));
-      this.scene.reducedMotion=this.motion.matches;
+      this.scene.setReducedMotion(this.motion.matches);
       this.scene.resize(box.width,box.height);
     }
-    this.onMotion=()=>this.send({type:'motion',reducedMotion:this.motion.matches},scene=>scene.reducedMotion=this.motion.matches);
+    this.onMotion=()=>this.send({type:'motion',reducedMotion:this.motion.matches},scene=>scene.setReducedMotion(this.motion.matches));
     this.onVisibility=()=>this.sync();
     this.motion.addEventListener('change',this.onMotion);
     document.addEventListener('visibilitychange',this.onVisibility);
@@ -70,9 +78,16 @@ export class ArtworkBackdrop {
     else request.resolve(shown);
   }
 
+  /** The worker could not create its WebGL scene: every load from now on fails, so the lyric view keeps its plain color. */
+  fail(error) {
+    this.failed=error;
+    for(const id of [...this.requests.keys()]) this.settle(id,false,error);
+  }
+
   async setFile(file) {
     const generation=++this.generation;
     let shown;
+    if(this.failed) throw new Error(this.failed);
     if(this.worker){
       const id=++this.nextRequest;
       shown=await new Promise((resolve,reject)=>{

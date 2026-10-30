@@ -296,19 +296,19 @@ const duetTtml = `<tt xmlns="http://www.w3.org/ns/ttml" xmlns:ttm="http://www.w3
         assert.equal((await prefs()).source, 'apple');
         assert(!(await page.locator('.lyrics-credits').textContent()).includes('@lyricist'));
 
-        // 背景：经典背景（引入 AMLL 前的 ArtworkBackdrop）与 AMLL 流动背景来回切换，每次换一块新画布
+        // 背景：封面动态背景（移植自 YouLyPlus 的 ArtworkBackdrop）与 AMLL 流动背景来回切换，每次换一块新画布
         await openMenu();
         assert.equal(await page.locator('[data-action="backdrop"][aria-checked="true"]').getAttribute('data-value'), 'amll');
-        await page.locator('[data-action="backdrop"][data-value="classic"]').click();
-        assert.equal((await prefs()).backdrop, 'classic');
+        await page.locator('[data-action="backdrop"][data-value="artwork"]').click();
+        assert.equal((await prefs()).backdrop, 'artwork');
         assert.equal(await page.locator('.lyrics-backdrop').count(), 1, 'the old canvas is replaced');
-        // 经典背景下隐藏再显示歌词（applyVisibility 会调用背景的 setHasLyric），歌词照常显示
+        // 封面动态背景下隐藏再显示歌词（applyVisibility 会调用背景的 setHasLyric），歌词照常显示
         await page.locator('.player-lyrics').click();
         await page.locator('.player-lyrics').click();
         await page.locator(lineSel).filter({ hasText: 'Second line' }).waitFor({ state: 'visible', timeout: 2000 });
-        assert.deepEqual(errors, [], 'no page errors with the classic backdrop');
+        assert.deepEqual(errors, [], 'no page errors with the artwork backdrop');
         await openMenu();
-        assert.equal(await page.locator('[data-action="backdrop"][aria-checked="true"]').getAttribute('data-value'), 'classic');
+        assert.equal(await page.locator('[data-action="backdrop"][aria-checked="true"]').getAttribute('data-value'), 'artwork');
         await page.locator('[data-action="backdrop"][data-value="amll"]').click();
         assert.equal((await prefs()).backdrop, 'amll');
         assert.equal(await page.locator('.lyrics-backdrop').count(), 1, 'the old canvas is replaced');

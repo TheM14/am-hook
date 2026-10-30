@@ -1,199 +1,385 @@
-// Artwork backdrop modeled from the live Apple Music Web scene. It draws four
-// moving copies of the image, then applies a radial twist, blur, color grade,
-// and dark overlay. The browser does all image processing locally.
+// Artwork backdrop ported from YouLyPlus (src/modules/lyrics/dynamicBkg.js,
+// https://github.com/ibratabian17/YouLyPlus). Three rotating copies of the
+// artwork orbit on a small WebGL surface, then a separable Gaussian blur,
+// Apple Music's saturation and scrims, and a dither finish the frame. Audio
+// beat sync is left out: it would route the <audio> through an AudioContext.
 //
 // The scene only touches canvases handed to it, so it runs unchanged inside a
 // worker (OffscreenCanvas) or on the main thread as a fallback.
-const BLUR_RADIUS=90;
-const FRAME_INTERVAL=1000/15;
-// Portrait screens size the copies by the long side, so they are magnified by
-// height/width against the screen width, only a narrow strip shows and the
-// colors seem to drift slower. Rotation is sped up by that ratio raised to
-// PORTRAIT_SPEEDUP there (about 1.47x on a 390x844 phone; the full ratio felt
-// too fast); landscape keeps the original speed.
-const PORTRAIT_SPEEDUP=.5;
-const colorChannel=(value,luminance)=>{
-  const saturated=luminance+(value-luminance)*2.75;
-  const contrasted=.5+(saturated-.5)*1.9;
-  return Math.max(0,Math.min(1,contrasted*.7));
-};
-// The scene sits on white, then under a 50% black and a 5% white layer:
-// (graded*alpha+1-alpha)*.5*.95+.05. Folding them into the grade keeps the
-// color in floating point until one final rounding; separate fills rounded
-// to 8 bits after every step and made the gradient steps uneven.
-const DIM=.5*.95,LIFT=.05;
+//
+// The YouLyPlus code is used under the MIT License:
+//
+//   Copyright (c) 2025 Ibra Al Tabian
+//
+//   Permission is hereby granted, free of charge, to any person obtaining a copy
+//   of this software and associated documentation files (the "Software"), to deal
+//   in the Software without restriction, including without limitation the rights
+//   to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+//   copies of the Software, and to permit persons to whom the Software is
+//   furnished to do so, subject to the following conditions:
+//
+//   The above copyright notice and this permission notice shall be included in all
+//   copies or substantial portions of the Software.
+//
+//   THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+//   IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+//   FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+//   AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+//   LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+//   OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+//   SOFTWARE.
+
+// The output is heavily blurred, so the layers render at about 128 px and the
+// visible canvas at about 256 px (both shaped to the screen); CSS stretches it.
+const RENDER_SIZE=128;
+const CANVAS_SIZE=256;
+const ARTWORK_SIZE=128;
+const MIN_ASPECT=.4,MAX_ASPECT=3.5;
+const BLUR_SIGMA=.08*RENDER_SIZE,BLUR_SIGMAS=3;
+const FRAME_INTERVAL=1000/40;
+// Seconds for the crossfade to a new artwork
+const TRANSITION=.8;
+// Apple Music draws a 50% black and a 13/255 white scrim over the saturated artwork
+const SATURATE=2.5,BLACK_SCRIM=.5,WHITE_SCRIM=13/255;
+// Per layer: spin (rad/s), orbit speed (turns/s, signed), orbit phase, orbit radius (x, y), base scale
+const ROTATION_SPEEDS=[-.08,.08,.2];
+const INITIAL_ROTATIONS=[.3,-2.1,2.4];
+const ORBIT_SPEEDS=[-.09,.006,.01];
+const ORBIT_PHASES=[0,.33,.66];
+const ORBIT_X=[0,.75,.75],ORBIT_Y=[0,.75,.75];
+const LAYER_SCALES=[1.4,1.26,1.26];
+const QUAD=new Float32Array([-1,-1,1,-1,-1,1,-1,1,1,-1,1,1]);
+
+const LAYER_VERTEX=`
+attribute vec2 a_position;
+uniform vec4 u_layer; // rotation, scale, offset x, offset y
+uniform float u_aspect;
+uniform float u_height;
+varying vec2 v_uv;
+varying float v_edge;
+void main() {
+  gl_Position=vec4(a_position,0.,1.);
+  vec2 p=vec2(a_position.x*.5*u_aspect,-a_position.y*.5)-u_layer.zw*vec2(u_aspect,1.);
+  float s=sin(-u_layer.x),c=cos(-u_layer.x);
+  p=vec2(p.x*c-p.y*s,p.x*s+p.y*c);
+  v_uv=p/u_layer.y+.5;
+  v_edge=u_layer.y*u_height;
+}`;
+// Each copy keeps an antialiased square edge, as the sprites of Apple's scene do
+const LAYER_FRAGMENT=`
+precision mediump float;
+varying vec2 v_uv;
+varying float v_edge;
+uniform sampler2D u_artwork;
+uniform float u_alpha;
+void main() {
+  vec2 e=min(v_uv,1.-v_uv);
+  float aa=clamp(min(e.x,e.y)*v_edge+.5,0.,1.);
+  if(aa<=0.) discard;
+  vec4 color=texture2D(u_artwork,v_uv);
+  gl_FragColor=vec4(color.rgb,color.a*u_alpha*aa);
+}`;
+const QUAD_VERTEX=`
+attribute vec2 a_position;
+varying vec2 v_uv;
+void main() {
+  gl_Position=vec4(a_position,0.,1.);
+  v_uv=a_position*.5+.5;
+}`;
+
+/** One-sided Gaussian weights with neighbouring taps merged into single bilinear fetches. */
+function gaussianTaps(sigma,sigmas) {
+  const radius=Math.max(1,Math.ceil(sigma*sigmas));
+  const weights=[];
+  let sum=0;
+  for(let k=0;k<=radius;k++){
+    weights[k]=Math.exp(-k*k/(2*sigma*sigma));
+    sum+=k?2*weights[k]:weights[k];
+  }
+  const g=weights.map(weight=>weight/sum),taps=[];
+  for(let k=1;k<=radius;k+=2){
+    if(k+1>radius){taps.push([k,g[k]]);continue;}
+    const weight=g[k]+g[k+1];
+    taps.push([(k*g[k]+(k+1)*g[k+1])/weight,weight]);
+  }
+  return {center:g[0],taps};
+}
+
+function blurFragment(kernel,post) {
+  const f=value=>value.toFixed(8);
+  const taps=kernel.taps.map(([offset,weight])=>
+    `  c+=(texture2D(u_image,v_uv+u_step*${f(offset)}).rgb+texture2D(u_image,v_uv-u_step*${f(offset)}).rgb)*${f(weight)};`).join('\n');
+  // The vertical pass also grades the color and dithers it, so the stretched
+  // 8-bit canvas shows no banding
+  const finish=post?`
+  c=clamp(mix(vec3(dot(c,vec3(.2126,.7152,.0722))),c,${f(SATURATE)}),0.,1.);
+  c=mix(c,vec3(0.),${f(BLACK_SCRIM)});
+  c=mix(c,vec3(1.),${f(WHITE_SCRIM)});
+  HP vec2 fc=gl_FragCoord.xy;
+  c+=(noise(fc)+noise(fc+vec2(5.588238))-1.)/255.;
+  c=clamp(c,0.,1.);`:'';
+  return `
+precision mediump float;
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+#define HP highp
+#else
+#define HP mediump
+#endif
+varying vec2 v_uv;
+uniform sampler2D u_image;
+uniform vec2 u_step;
+float noise(HP vec2 p) { return fract(52.9829189*fract(dot(p,vec2(.06711056,.00583715)))); }
+void main() {
+  vec3 c=texture2D(u_image,v_uv).rgb*${f(kernel.center)};
+${taps}${finish}
+  gl_FragColor=vec4(c,1.);
+}`;
+}
 
 export class BackdropScene {
-  /** canvas: the visible output; makeCanvas(): creates an offscreen work surface. */
+  /** canvas: the visible output; makeCanvas(): creates a 2D work surface. Throws without WebGL. */
   constructor(canvas,makeCanvas) {
     this.canvas=canvas;
-    this.output=canvas.getContext('2d',{alpha:false});
-    this.layers=makeCanvas();
-    this.layerContext=this.layers.getContext('2d',{willReadFrequently:true});
-    this.twisted=makeCanvas();
-    this.twistContext=this.twisted.getContext('2d');
-    this.blurred=makeCanvas();
-    this.blurContext=this.blurred.getContext('2d',{willReadFrequently:true});
+    this.makeCanvas=makeCanvas;
     this.reducedMotion=false;
-    this.angles=[0,0,0,0];
     this.running=false;
     this.timer=0;
-    this.lastMotion=0;
+    this.frame=0;
+    this.time=0;
+    this.lastFrame=0;
+    this.transition=1;
+    this.aspect=1;
     this.boxWidth=this.boxHeight=0;
-    this.speed=1;
+    canvas.addEventListener?.('webglcontextlost',event=>{event.preventDefault();this.lost=true;this.stop();});
+    canvas.addEventListener?.('webglcontextrestored',()=>{
+      this.lost=false;
+      this.setup();
+      // The crossfade cannot resume without the old texture; show the current artwork
+      if(this.artwork){this.current=this.upload(this.artwork);this.transition=1;}
+      this.resize(this.boxWidth,this.boxHeight);
+      this.schedule();
+    });
+    this.setup();
+  }
+
+  setup() {
+    const gl=this.canvas.getContext('webgl',{alpha:false,depth:false,stencil:false,antialias:false,preserveDrawingBuffer:false,powerPreference:'low-power'});
+    if(!gl) throw new Error('WebGL unavailable');
+    this.gl=gl;
+    this.layerProgram=this.program(LAYER_VERTEX,LAYER_FRAGMENT,['u_layer','u_aspect','u_height','u_alpha']);
+    const kernel=gaussianTaps(BLUR_SIGMA,BLUR_SIGMAS);
+    this.blurH=this.program(QUAD_VERTEX,blurFragment(kernel,false),['u_step']);
+    this.blurV=this.program(QUAD_VERTEX,blurFragment(kernel,true),['u_step']);
+    // Every program binds a_position to location 0, so the quad stays bound once
+    gl.bindBuffer(gl.ARRAY_BUFFER,gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER,QUAD,gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0,2,gl.FLOAT,false,0,0);
+    this.targets=[0,1].map(()=>{
+      const texture=this.texture(),framebuffer=gl.createFramebuffer();
+      gl.bindFramebuffer(gl.FRAMEBUFFER,framebuffer);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER,gl.COLOR_ATTACHMENT0,gl.TEXTURE_2D,texture,0);
+      return {texture,framebuffer};
+    });
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+    gl.activeTexture(gl.TEXTURE0);
+    gl.blendFunc(gl.SRC_ALPHA,gl.ONE_MINUS_SRC_ALPHA);
+    this.renderWidth=this.renderHeight=0;
+    this.current=this.previous=null;
+  }
+
+  program(vertex,fragment,uniforms) {
+    const gl=this.gl,program=gl.createProgram();
+    for(const [type,source] of [[gl.VERTEX_SHADER,vertex],[gl.FRAGMENT_SHADER,fragment]]){
+      const shader=gl.createShader(type);
+      gl.shaderSource(shader,source);
+      gl.compileShader(shader);
+      if(!gl.getShaderParameter(shader,gl.COMPILE_STATUS)&&!gl.isContextLost()) throw new Error(gl.getShaderInfoLog(shader));
+      gl.attachShader(program,shader);
+      gl.deleteShader(shader);
+    }
+    gl.bindAttribLocation(program,0,'a_position');
+    gl.linkProgram(program);
+    if(!gl.getProgramParameter(program,gl.LINK_STATUS)&&!gl.isContextLost()) throw new Error(gl.getProgramInfoLog(program));
+    const result={program};
+    for(const name of uniforms) result[name]=gl.getUniformLocation(program,name);
+    return result;
+  }
+
+  texture() {
+    const gl=this.gl,texture=gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D,texture);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+    return texture;
   }
 
   resize(boxWidth,boxHeight) {
     if(!boxWidth||!boxHeight) return;
     this.boxWidth=boxWidth;
     this.boxHeight=boxHeight;
-    this.speed=boxHeight>boxWidth?(boxHeight/boxWidth)**PORTRAIT_SPEEDUP:1;
-    // The scene is heavily blurred; a quarter-size buffer keeps its 15 fps
-    // motion inexpensive without changing the visible color fields.
-    this.scale=Math.max(1,Math.ceil(Math.max(boxWidth,boxHeight)/400));
-    const width=Math.max(1,Math.ceil(boxWidth/this.scale));
-    const height=Math.max(1,Math.ceil(boxHeight/this.scale));
-    for(const surface of [this.canvas,this.blurred]){
-      surface.width=width;
-      surface.height=height;
+    if(this.lost) return;
+    const gl=this.gl;
+    this.aspect=Math.min(MAX_ASPECT,Math.max(MIN_ASPECT,boxWidth/boxHeight));
+    const root=Math.sqrt(this.aspect);
+    this.canvas.width=Math.max(8,Math.round(CANVAS_SIZE*root));
+    this.canvas.height=Math.max(8,Math.round(CANVAS_SIZE/root));
+    const width=Math.max(8,Math.round(RENDER_SIZE*root)),height=Math.max(8,Math.round(RENDER_SIZE/root));
+    if(width!==this.renderWidth||height!==this.renderHeight){
+      this.renderWidth=width;
+      this.renderHeight=height;
+      for(const {texture} of this.targets){
+        gl.bindTexture(gl.TEXTURE_2D,texture);
+        gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,width,height,0,gl.RGBA,gl.UNSIGNED_BYTE,null);
+      }
     }
-    this.sourcePad=Math.ceil(500/this.scale);
-    this.blurPad=Math.ceil(BLUR_RADIUS*3/this.scale);
-    this.layers.width=width+2*this.sourcePad;
-    this.layers.height=height+2*this.sourcePad;
-    this.twisted.width=width+2*this.blurPad;
-    this.twisted.height=height+2*this.blurPad;
-    this.pixels=this.twistContext.createImageData(this.twisted.width,this.twisted.height);
-    this.buildTwistMap();
-    if(this.current) this.draw(performance.now());
+    // The big layer covers the diagonal, the orbiting ones the shorter side
+    this.sizeFactors=[Math.sqrt(this.aspect*this.aspect+1)*Math.SQRT1_2,root,root];
+    // Resizing clears the drawing buffer; redraw even while paused
+    this.draw();
   }
 
-  /** The twist only depends on the surface size, so every pixel's source index is computed once per resize. */
-  buildTwistMap() {
-    const width=this.twisted.width,height=this.twisted.height;
-    const sourceWidth=this.layers.width,sourceHeight=this.layers.height;
-    const centerX=this.canvas.width/2,centerY=this.canvas.height/2,radius=900/this.scale;
-    const map=new Int32Array(width*height);
-    for(let y=0;y<height;y++) for(let x=0;x<width;x++) {
-      const dx=x-this.blurPad-centerX,dy=y-this.blurPad-centerY,dist=Math.hypot(dx,dy);
-      const angle=dist<radius?-3.25*((radius-dist)/radius)**2:0;
-      const cos=Math.cos(angle),sin=Math.sin(angle);
-      const sampleX=Math.round(this.sourcePad+centerX+dx*cos-dy*sin);
-      const sampleY=Math.round(this.sourcePad+centerY+dx*sin+dy*cos);
-      map[y*width+x]=sampleX<0||sampleX>=sourceWidth||sampleY<0||sampleY>=sourceHeight?-1:sampleY*sourceWidth+sampleX;
+  /** Downscales by halves to ARTWORK_SIZE (bilinear steps keep detail that one big step would alias away). */
+  downscale(bitmap) {
+    let source=bitmap,width=bitmap.width,height=bitmap.height;
+    while(width>ARTWORK_SIZE*2||height>ARTWORK_SIZE*2){
+      width=Math.max(ARTWORK_SIZE,width+1>>1);
+      height=Math.max(ARTWORK_SIZE,height+1>>1);
+      source=this.drawScaled(source,width,height);
     }
-    this.twistMap=map;
+    return this.drawScaled(source,ARTWORK_SIZE,ARTWORK_SIZE);
   }
 
+  drawScaled(source,width,height) {
+    const surface=this.makeCanvas();
+    surface.width=width;
+    surface.height=height;
+    const context=surface.getContext('2d');
+    context.imageSmoothingQuality='high';
+    context.drawImage(source,0,0,width,height);
+    return surface;
+  }
+
+  upload(artwork) {
+    const gl=this.gl,texture=this.texture();
+    gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,artwork);
+    gl.generateMipmap(gl.TEXTURE_2D);
+    gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR_MIPMAP_LINEAR);
+    return texture;
+  }
+
+  /** Crossfades to the bitmap while running; a paused scene switches at once so it never resumes mid-fade. */
   setImage(bitmap) {
-    this.previous?.close();
+    this.artwork=this.downscale(bitmap);
+    bitmap.close();
+    if(this.lost) return;
+    const gl=this.gl;
+    if(this.previous) gl.deleteTexture(this.previous);
     this.previous=this.current;
-    this.current=bitmap;
-    this.fadeStart=performance.now();
-    this.lastMotion=this.fadeStart;
-    this.draw(this.fadeStart);
+    this.current=this.upload(this.artwork);
+    this.transition=this.previous&&this.running?0:1;
+    if(this.transition===1&&this.previous){gl.deleteTexture(this.previous);this.previous=null;}
+    this.draw();
     this.schedule();
   }
 
   clear() {
-    this.current?.close();
-    this.previous?.close();
-    this.current=this.previous=undefined;
-    clearTimeout(this.timer);
-    this.timer=0;
+    this.stop();
+    this.artwork=undefined;
+    if(!this.lost) for(const texture of [this.current,this.previous]) if(texture) this.gl.deleteTexture(texture);
+    this.current=this.previous=null;
+    this.transition=1;
   }
 
   /** Runs the motion loop while the lyric view is open and the page is visible; the last frame stays drawn. */
   setRunning(running) {
     if(running===this.running) return;
     this.running=running;
-    if(running) this.lastMotion=performance.now();
-    clearTimeout(this.timer);
-    this.timer=0;
+    this.stop();
     this.schedule();
+  }
+
+  setReducedMotion(reduced) {
+    this.reducedMotion=reduced;
+    this.schedule();
+  }
+
+  /** Reduced motion freezes the layers where they are; only crossfades still animate. */
+  get animating() {
+    return this.running&&this.current&&!this.lost&&(!this.reducedMotion||this.transition<1);
   }
 
   schedule() {
-    if(this.running&&this.current&&!this.timer) this.timer=setTimeout(this.tick,FRAME_INTERVAL);
+    if(!this.animating||this.timer||this.frame) return;
+    this.lastFrame||=performance.now();
+    if(typeof requestAnimationFrame==='function') this.frame=requestAnimationFrame(this.tick);
+    else this.timer=setTimeout(()=>this.tick(performance.now()),FRAME_INTERVAL);
   }
 
-  tick=()=>{
-    this.timer=0;
-    if(!this.running||!this.current) return;
-    const now=performance.now();
-    const delta=Math.min(100,now-this.lastMotion)/1000;
-    this.lastMotion=now;
-    // Reduced motion keeps its slow drift on every screen
-    const rate=this.reducedMotion?[.03,.03,.03,.03]:[.09,-.24,-.18,.12].map(value=>value*this.speed);
-    this.angles.forEach((angle,index)=>this.angles[index]=angle+rate[index]*delta);
-    this.draw(now);
+  stop() {
+    if(this.frame) cancelAnimationFrame(this.frame);
+    clearTimeout(this.timer);
+    this.frame=this.timer=0;
+    this.lastFrame=0;
+  }
+
+  tick=now=>{
+    this.frame=this.timer=0;
+    if(!this.animating) return;
+    const elapsed=now-this.lastFrame;
+    // Requested frames arrive at the display rate; draw at about 40 fps
+    if(elapsed<FRAME_INTERVAL-1){this.schedule();return;}
+    this.lastFrame=now;
+    const delta=Math.min(.1,elapsed/1000);
+    if(!this.reducedMotion) this.time+=delta;
+    if(this.transition<1){
+      this.transition=Math.min(1,this.transition+delta/TRANSITION);
+      if(this.transition===1&&this.previous){this.gl.deleteTexture(this.previous);this.previous=null;}
+    }
+    this.draw();
     this.schedule();
   };
 
-  drawSprite(image,x,y,size,angle,alpha) {
-    const context=this.layerContext;
-    context.save();
-    context.globalAlpha=alpha;
-    context.translate(x,y);
-    context.rotate(angle);
-    context.drawImage(image,-size/2,-size/2,size,size);
-    context.restore();
-  }
-
-  drawImageCopies(image,alpha) {
-    if(!image||alpha<=0) return;
-    const {width,height}=this.canvas,offset=this.sourcePad;
-    const [a,b,c,d]=this.angles;
-    const msize = Math.max(width,height);
-    // The two small copies orbit by the long side too, matching their size, so
-    // they still travel on portrait screens instead of wobbling in place
-    const orbit=msize/4;
-    this.drawSprite(image,offset+width/2,offset+height/2,msize*1.25,a,alpha);
-    this.drawSprite(image,offset+width/2.5,offset+height/2.5,msize*.8,b,alpha);
-    this.drawSprite(image,offset+width/2+orbit*Math.cos(c*.75),offset+height/2+orbit*Math.sin(c*.75),msize*.5,-c,alpha);
-    this.drawSprite(image,offset+width/2+width*.1+orbit*Math.cos(d*.75),offset+height/2+width*.1+orbit*Math.sin(d*.75),msize*.25,-d,alpha);
-  }
-
-  twistPixels() {
-    const source=new Uint32Array(this.layerContext.getImageData(0,0,this.layers.width,this.layers.height).data.buffer);
-    const target=new Uint32Array(this.pixels.data.buffer),map=this.twistMap;
-    for(let i=0;i<map.length;i++){
-      const origin=map[i];
-      target[i]=origin<0?0:source[origin];
+  drawLayers(texture,alpha) {
+    if(!texture||alpha<=.001) return;
+    const gl=this.gl,{u_layer,u_alpha}=this.layerProgram,t=this.time;
+    gl.bindTexture(gl.TEXTURE_2D,texture);
+    gl.uniform1f(u_alpha,alpha);
+    for(let i=0;i<3;i++){
+      const orbit=((ORBIT_PHASES[i]+ORBIT_SPEEDS[i]*t)%1)*Math.PI*2;
+      gl.uniform4f(u_layer,INITIAL_ROTATIONS[i]+ROTATION_SPEEDS[i]*t,LAYER_SCALES[i]*this.sizeFactors[i],ORBIT_X[i]*Math.cos(orbit),ORBIT_Y[i]*Math.sin(orbit));
+      gl.drawArrays(gl.TRIANGLES,0,6);
     }
-    this.twistContext.putImageData(this.pixels,0,0);
   }
 
-  /** Blurs and grades the twisted layers straight into the visible canvas. */
-  colorGrade() {
-    const {width,height}=this.blurred;
-    const context=this.blurContext;
-    context.clearRect(0,0,width,height);
-    context.filter=`blur(${BLUR_RADIUS/this.scale}px)`;
-    context.drawImage(this.twisted,-this.blurPad,-this.blurPad);
-    context.filter='none';
-    const frame=context.getImageData(0,0,width,height),data=frame.data;
-    // Apple's color matrix combines saturation, contrast and brightness before
-    // clamping. Separate CSS filters clip after each step and lose vivid colors.
-    for(let i=0;i<data.length;i+=4){
-      const red=data[i]/255,green=data[i+1]/255,blue=data[i+2]/255,alpha=data[i+3]/255;
-      const luminance=.2125*red+.7154*green+.0721*blue,white=1-alpha;
-      data[i]=Math.round(((colorChannel(red,luminance)*alpha+white)*DIM+LIFT)*255);
-      data[i+1]=Math.round(((colorChannel(green,luminance)*alpha+white)*DIM+LIFT)*255);
-      data[i+2]=Math.round(((colorChannel(blue,luminance)*alpha+white)*DIM+LIFT)*255);
-      data[i+3]=255;
-    }
-    this.output.putImageData(frame,0,0);
-  }
-
-  draw(now) {
-    if(!this.current||!this.twistMap) return;
-    const fade=Math.min(1,(now-this.fadeStart)/1667);
-    this.layerContext.clearRect(0,0,this.layers.width,this.layers.height);
-    this.drawImageCopies(this.previous,1-fade);
-    this.drawImageCopies(this.current,fade);
-    if(fade===1&&this.previous){this.previous.close();this.previous=undefined;}
-    this.twistPixels();
-    this.colorGrade();
+  draw() {
+    if(!this.current||this.lost||!this.renderWidth) return;
+    const gl=this.gl,[layers,blurred]=this.targets;
+    // Pass 1: the layered artwork copies
+    gl.bindFramebuffer(gl.FRAMEBUFFER,layers.framebuffer);
+    gl.viewport(0,0,this.renderWidth,this.renderHeight);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.useProgram(this.layerProgram.program);
+    gl.uniform1f(this.layerProgram.u_aspect,this.aspect);
+    gl.uniform1f(this.layerProgram.u_height,this.renderHeight);
+    gl.enable(gl.BLEND);
+    if(this.transition<1) this.drawLayers(this.previous,1-this.transition);
+    this.drawLayers(this.current,this.transition);
+    gl.disable(gl.BLEND);
+    // Pass 2: horizontal blur
+    gl.bindFramebuffer(gl.FRAMEBUFFER,blurred.framebuffer);
+    gl.useProgram(this.blurH.program);
+    gl.uniform2f(this.blurH.u_step,1/this.renderWidth,0);
+    gl.bindTexture(gl.TEXTURE_2D,layers.texture);
+    gl.drawArrays(gl.TRIANGLES,0,6);
+    // Pass 3: vertical blur, grade and dither onto the visible canvas
+    gl.bindFramebuffer(gl.FRAMEBUFFER,null);
+    gl.viewport(0,0,this.canvas.width,this.canvas.height);
+    gl.useProgram(this.blurV.program);
+    gl.uniform2f(this.blurV.u_step,0,1/this.renderHeight);
+    gl.bindTexture(gl.TEXTURE_2D,blurred.texture);
+    gl.drawArrays(gl.TRIANGLES,0,6);
   }
 }

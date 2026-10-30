@@ -112,7 +112,7 @@ pub static ASSETS: &[Asset] = &[
     // 电台：直播电台与广播单集的 HLS 播放与下载（与 MV 共用媒体 Worker），以及需要 media-user-token 的接口
     asset!("/assets/mv/radio.mjs", JS, "mv-radio.mjs"),
     asset!("/assets/station.mjs", JS, "station.mjs"),
-    // 歌词界面：TTML 解析、接入播放器的 panel.mjs、打包好的 AMLL（见 browser/amll）与原来的封面背景（backdrop*.mjs）
+    // 歌词界面：TTML 解析、接入播放器的 panel.mjs、打包好的 AMLL（见 browser/amll）与封面动态背景（backdrop*.mjs，移植自 YouLyPlus）
     asset!("/assets/lyrics/panel.mjs", JS, "lyrics/panel.mjs"),
     asset!("/assets/lyrics/ttml.mjs", JS, "lyrics/ttml.mjs"),
     asset!("/assets/lyrics/amll-core.mjs", JS, "lyrics/amll-core.mjs"),
